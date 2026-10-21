@@ -18,9 +18,8 @@ prod items arrive only by `fabric-cicd` from `main`, as a service principal, beh
 Actions with `azure/login@v2` (OIDC).
 
 **Spec:** `docs/superpowers/specs/2026-10-21-fabric-lakehouse-design.md` (approved 21 Oct 2026).
-**Research this plan relies on (22 Oct 2026, sources inline):**
-`C:\Users\DMITRY~1.LYU\AppData\Local\Temp\claude\E--Projects\cd98b399-ec1a-4984-b29a-b25f8aed07d1\scratchpad\fabric-research-2026-10-22.md` — copied into the repo as
-`docs/research/2026-10-22-fabric-facts.md` in Task 1.
+**Research this plan relies on (22 Oct 2026, sources inline):** a local research file, copied into
+the repo as `docs/research/2026-10-22-fabric-facts.md` in Task 1 (the controller gives its path).
 
 **Plan 3** (written after this merges) is the live runbook, one owner yes per outward step.
 
