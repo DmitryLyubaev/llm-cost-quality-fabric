@@ -1,0 +1,8 @@
+project,start_date,end_date,evidence
+p1,2026-09-24,2026-10-02,"tracker table: project 1 started 2026-09-24 and done 2026-10-02; log 2026-09-30 bootstrap applied; log 2026-10-02 study ran"
+p2,2026-10-03,2026-10-04,"tracker log 2026-10-03 bootstrap gained the embedding deployments; log 2026-10-04 search service lived about 14 minutes and project 2 done (table: started 2026-10-02 for brainstorming only)"
+p4,2026-10-06,2026-10-09,"tracker table: project 4 started 2026-10-06 and done 2026-10-09; log 2026-10-09 live gateway session"
+p5,2026-10-10,2026-10-11,"tracker log 2026-10-10 project 5 started; log 2026-10-11 live session over two days and done"
+p6,2026-10-12,2026-10-14,"tracker table: project 6 started 2026-10-12 and done 2026-10-14; log 2026-10-14 live acceptance and cleanup"
+p7,2026-10-15,2026-10-15,"tracker log 2026-10-15 project 7 started, live attempts, cleanup and done the same day"
+p8,2026-10-16,2026-10-21,"tracker table: project 8 started 2026-10-16 and done 2026-10-21; log 2026-10-17 first paid applies; log 2026-10-21 final run and teardown"

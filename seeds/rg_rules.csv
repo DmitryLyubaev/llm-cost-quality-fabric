@@ -1,0 +1,10 @@
+pattern,project,shared,valid_from,valid_to,evidence
+rg-releaselens,p1,false,,,app stack (spec 3.6)
+rg-releaselens-gateway,p4,false,,,APIM gateway stack (spec 3.6)
+rg-releaselens-functions,p5,false,,,Functions stack (project 5)
+rg-releaselens-webapp,p6,false,,,App Service front end (project 6)
+rg-p7-*,p7,false,,,Container Apps build agents (project 7)
+rg-p8-*,p8,false,,,Azure Pipelines delivery (project 8)
+rg-fwa-*,p3,false,,,foundry-workshop-agent stacks (project 3)
+rg-releaselens-bootstrap,,true,,,shared bootstrap (OpenAI accounts and storage); split by session window (spec 3.6)
+rg-releaselens-search,,true,,,shared AI Search group; split by session window (spec 3.6)
