@@ -349,3 +349,53 @@ cost fact, the Type 2 dimension and CI/CD are never cut; they are the skill bein
 - **Fabric changes monthly.** The brief's Fabric details come from knowledge to mid-2026; check
   each against current docs as it's used.
 - **Commit time is a proxy for apply time** in the Type 2 dimension. Stated in the README.
+
+## 11. Amendments, 22 October 2026
+
+Plan 2 checked the Fabric details against current Microsoft documentation and the Terraform
+provider docs. The findings are in `docs/research/2026-10-22-fabric-facts.md`. They change the
+decisions below; earlier sections are left as approved.
+
+**1. Terraform creates the workspaces, not the capacity link.** The Terraform provider cannot
+assign a trial capacity. Terraform creates the two workspaces (with workspace identity) and their
+role assignments without `capacity_id`, and the owner assigns the trial capacity once, in the UI.
+Rejected: dropping Terraform. Workspaces and roles as code is still the skill being shown, and the
+manual step is one click per workspace.
+
+**2. Lakehouse shortcut tracking is off** (`alm.settings.json`). A shortcut in git serialises the
+storage URL, which section 6 rules out, and "Update from Git" deletes shortcuts that git does not
+track. The deploy creates the cost-export shortcut through the REST API, with the storage address
+read from a secret. Rejected: committing the shortcut definition, which puts the storage address
+in the repo.
+
+**3. The wheel goes to `Files/wheels/`, not into an Environment item.** Publishing an Environment
+with a custom wheel can take 20 minutes or more in `fabric-cicd`, and the wheel would have to be
+committed to git for dev. Notebooks set `_inlineInstallationEnabled` so `%pip` works in pipeline
+runs. Rejected: the Environment item, because it is slower and puts a binary in git. The README
+states the trade-off.
+
+**4. The lakehouse is schema-enabled, and the layers are schemas.** A non-schema lakehouse allows
+only top-level tables under `Tables/`, so `Tables/silver/x` needs schemas. It also reads naturally
+as medallion. Rejected: one flat namespace with a `silver_` prefix, which hides the layers in
+table names.
+
+**5. The cost export is CSV with gzip, read through its `manifest.json`.** Each run's manifest
+lists its part files and `dataRowCount`, so silver can prove no row was dropped against the source
+and not against itself. Rejected: reading the part files by glob, which cannot tell a missing file
+from a short export.
+
+**6. Cost-export storage uses public network access, with Entra-only auth.** The account has
+hierarchical namespace on and shared keys off, and access is by Entra identity only. Public network
+access stays enabled because the trial cannot use trusted workspace access to a firewalled account.
+This is the owner's decision at plan 3's storage step, and plan 3 stops there if the owner refuses.
+Rejected: a firewalled account, which the trial cannot reach.
+
+**7. Cost-export columns follow the pay-as-you-go 2019-11-01 schema:** `UsageDateTime`,
+`InstanceId`, `ResourceGroup`, `MeterId`, `MeterName`, `PreTaxCost`, `Currency` and `Tags`. Silver
+aliases them to the newer column names (for example `CostInBillingCurrency` and `ResourceId`).
+Rejected: assuming the newer names, which belong to the Enterprise Agreement and MCA schema and do
+not match this subscription's offer.
+
+**8. September may not export.** Cost Management can lack costs from before an offer change, so
+the one-time export may not reach back to 1 September. Section 3.5 already covers this: the
+window starts where the data starts, and the README says so.
