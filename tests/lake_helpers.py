@@ -31,5 +31,5 @@ def make_lake(root: Path) -> tuple[LakePaths, str, str]:
     return paths, str(private), str(seeds)
 
 
-def run(spark, paths, private, seeds, export=COST_FIXTURE):
-    return run_load(spark, paths, seeds, private, str(export), LOAD_DATE)
+def run(spark, paths, private, seeds, export=COST_FIXTURE, load_date=LOAD_DATE):
+    return run_load(spark, paths, seeds, private, str(export), load_date)

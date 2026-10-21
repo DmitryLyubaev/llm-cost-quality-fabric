@@ -4,15 +4,22 @@ Bronze ingest is not called here: plan 2's pipeline runs `fetch_manifest` as its
 and this reads what it landed for `load_date`. Nothing is written before the cost export has
 been found and read, so a missing or empty export can never replace a full month with nothing.
 
-The re-run check proves the claim on every run: the silver and gold build runs twice in a row on
-the same inputs, and the two gold fingerprints must be equal.
+Every run builds once. The re-run check compares this run's gold fingerprint with the one the
+last successful run of the same load date recorded in `silver/run_log`; a first run for a date
+has nothing to compare and passes. An entry is appended only after every check has passed, so a
+failed run never becomes the baseline.
 """
 
+import json
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
+
+from delta.tables import DeltaTable
 
 from pyspark.errors import AnalysisException
 from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
+from pyspark.sql.types import DateType, StringType, StructField, StructType, TimestampType
 
 from lakehouse.attribution import load_rg_rules, load_session_windows
 from lakehouse.checks import (
@@ -29,6 +36,16 @@ from lakehouse.paths import LakePaths
 from lakehouse.silver.costs import normalise_costs, read_cost_export, replace_month
 from lakehouse.silver.deployments import apply_scd2, read_deployment_changes
 from lakehouse.silver.eval_attempts import build_eval_attempts, merge_eval_attempts
+
+
+RUN_LOG = "run_log"
+_RUN_LOG_SCHEMA = StructType(
+    [
+        StructField("load_date", DateType()),
+        StructField("fingerprint", StringType()),  # JSON object: gold table -> content hash
+        StructField("recorded_at", TimestampType()),
+    ]
+)
 
 
 @dataclass
@@ -60,14 +77,22 @@ def _build(
     export: DataFrame,
     load_date: date,
 ) -> dict[str, int]:
-    """Silver (cost month replace, attempts MERGE, deployments MERGE), then gold; the row counts."""
+    """Silver (cost months replace, attempts MERGE, deployments MERGE), then gold; the row counts.
+
+    Every billing month in the export is replaced, one `replace_month` each; months silver holds
+    that the export lacks are untouched.
+    """
     costs = normalise_costs(
         spark,
         export,
         load_rg_rules(f"{seeds_dir}/rg_rules.csv"),
         load_session_windows(f"{seeds_dir}/session_windows.csv"),
     )
-    replace_month(spark, costs, paths.table("silver", "daily_cost"), f"{load_date:%Y-%m}")
+    months = [r["billing_month"] for r in costs.select("billing_month").distinct().collect()]
+    if None in months:
+        raise ValueError("cost export has a row whose date could not be read; nothing was written")
+    for month in sorted(months):
+        replace_month(spark, costs.where(F.col("billing_month") == month), paths.table("silver", "daily_cost"), month)
 
     attempts = build_eval_attempts(spark, paths.bronze, private_root, seeds_dir, load_date)
     merge_eval_attempts(spark, attempts, paths.table("silver", "eval_attempts"))
@@ -76,6 +101,24 @@ def _build(
     apply_scd2(spark, changes, paths.table("silver", "model_deployment"), seeds_dir)
 
     return build_gold(spark, paths, seeds_dir)
+
+
+def _previous_fingerprint(spark: SparkSession, log_path: str, load_date: date) -> dict[str, str] | None:
+    """The fingerprint the latest logged run of `load_date` recorded, or None for a first run."""
+    if not DeltaTable.isDeltaTable(spark, log_path):
+        return None
+    latest = (
+        spark.read.format("delta").load(log_path)
+        .where(F.col("load_date") == F.lit(load_date))
+        .orderBy(F.col("recorded_at").desc())
+        .first()
+    )
+    return json.loads(latest["fingerprint"]) if latest else None
+
+
+def _append_log(spark: SparkSession, log_path: str, load_date: date, fingerprint: dict[str, str]) -> None:
+    row = (load_date, json.dumps(fingerprint, sort_keys=True), datetime.now(UTC))
+    spark.createDataFrame([row], _RUN_LOG_SCHEMA).write.format("delta").mode("append").save(log_path)
 
 
 def run_load(
@@ -90,22 +133,28 @@ def run_load(
 
     Raises FileNotFoundError, before writing anything, if the cost export is missing or has no
     data rows. Raises QualityCheckFailed, after everything has been written and every check has
-    run, if any check fails; the reject table and gold stay in place as the record of the run.
+    run, if any check fails; the reject table and gold stay in place as the record of the run,
+    but the run is not logged, so it is never the baseline for a later re-run.
     """
     export = _read_export(spark, cost_export_path)
 
-    _build(spark, paths, seeds_dir, private_root, export, load_date)
-    before = gold_fingerprint(spark, paths)
     row_counts = _build(spark, paths, seeds_dir, private_root, export, load_date)
-    after = gold_fingerprint(spark, paths)
+    fingerprint = gold_fingerprint(spark, paths)
+    log_path = paths.table("silver", RUN_LOG)
+    previous = _previous_fingerprint(spark, log_path, load_date)
 
+    if previous is None:
+        rerun = CheckResult("rerun_unchanged", True, "first run for this load date; nothing to compare")
+    else:
+        rerun = check_rerun_unchanged(previous, fingerprint)
     checks = [
         check_deployment_resolution(spark, paths),
         check_cost_totals(spark, paths, export),
         check_published_figures(spark, paths, f"{seeds_dir}/published_figures.csv"),
-        check_rerun_unchanged(before, after),
+        rerun,
     ]
     failed = [c for c in checks if not c.passed]
     if failed:
         raise QualityCheckFailed(failed)
-    return RunSummary(load_date=load_date, row_counts=row_counts, checks=checks, fingerprint=after)
+    _append_log(spark, log_path, load_date, fingerprint)
+    return RunSummary(load_date=load_date, row_counts=row_counts, checks=checks, fingerprint=fingerprint)

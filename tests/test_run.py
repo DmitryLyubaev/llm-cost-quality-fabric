@@ -1,9 +1,13 @@
+import csv
+import json
 import os
 import shutil
+from datetime import date
 from pathlib import Path
 
 import pytest
 from delta.tables import DeltaTable
+from pyspark.sql import functions as F
 
 from lake_helpers import COST_FIXTURE, make_lake, run
 from lakehouse.checks import QualityCheckFailed
@@ -20,6 +24,11 @@ def lake(tmp_path):
 
 def _listing(folder):
     return sorted(str(p) for p in Path(folder).rglob("*"))
+
+
+def _log(spark, paths):
+    rows = spark.read.format("delta").load(paths.table("silver", "run_log")).orderBy("recorded_at").collect()
+    return [(r["load_date"], json.loads(r["fingerprint"])) for r in rows]
 
 
 def _versions(spark, paths):
@@ -43,6 +52,9 @@ def test_run_load_twice_is_identical(spark, loaded_lake, tmp_path):
 
     second = run(spark, paths, private, seeds)
 
+    assert [c for c in second.checks if c.name == "rerun_unchanged"][0].passed
+    assert "first run" in [c for c in first.checks if c.name == "rerun_unchanged"][0].detail
+    assert "identical" in [c for c in second.checks if c.name == "rerun_unchanged"][0].detail
     assert isinstance(first, RunSummary)
     assert first.fingerprint == second.fingerprint == gold_fingerprint(spark, paths)
     assert first.row_counts == second.row_counts
@@ -58,6 +70,65 @@ def test_run_load_twice_is_identical(spark, loaded_lake, tmp_path):
         "deployment_resolution", "cost_totals", "published_figures", "rerun_unchanged",
     }
     assert second.load_date.isoformat() == "2026-10-21"
+    assert _log(spark, paths) == [(date(2026, 10, 21), first.fingerprint)] * 2
+
+
+def test_rerun_check_fails_when_the_rebuilt_gold_differs(spark, loaded_lake, tmp_path):
+    """Between two runs of one date an extra row appears in silver (silver is only merged into,
+    never pruned), so the rebuilt gold differs from the logged one: the re-run check fails."""
+    paths, private, seeds, first = _copy(loaded_lake, tmp_path)
+    silver = paths.table("silver", "eval_attempts")
+    extra = (
+        spark.read.format("delta").load(silver)
+        .where("attempt_kind = 'determinism_repeat'").limit(1)
+        .withColumn("pass_index", F.lit(7))
+    )
+    extra.write.format("delta").mode("append").save(silver)
+
+    with pytest.raises(QualityCheckFailed) as error:
+        run(spark, paths, private, seeds)
+
+    assert [r.name for r in error.value.failed] == ["rerun_unchanged"]
+    assert "fact_eval_attempt" in str(error.value)
+    # the failed run did not become the baseline
+    assert _log(spark, paths) == [(date(2026, 10, 21), first.fingerprint)]
+
+
+def test_first_run_for_a_new_date_passes(spark, loaded_lake, tmp_path):
+    paths, private, seeds, first = _copy(loaded_lake, tmp_path)
+    bronze = Path(paths.bronze) / "public"
+    shutil.copytree(bronze / "load_date=2026-10-21", bronze / "load_date=2026-10-22")
+
+    second = run(spark, paths, private, seeds, load_date=date(2026, 10, 22))
+
+    detail = [c for c in second.checks if c.name == "rerun_unchanged"][0]
+    assert detail.passed and "first run" in detail.detail
+    assert [d for d, _ in _log(spark, paths)] == [date(2026, 10, 21), date(2026, 10, 22)]
+
+
+def test_export_spanning_two_months_loads_both(spark, lake, tmp_path):
+    """Every month in the export is replaced, and each month's silver total matches the export's."""
+    paths, private, seeds = lake
+    text = COST_FIXTURE.read_text(encoding="utf-8")
+    two_months = tmp_path / "two_months.csv"
+    two_months.write_text(text.replace("2026-10-02,", "2026-09-28,").replace("2026-10-03,", "2026-09-30,"),
+                          encoding="utf-8", newline="\n")
+    expected: dict[str, float] = {}
+    with open(two_months, encoding="utf-8", newline="") as f:
+        for row in csv.DictReader(f):
+            expected[row["Date"][:7]] = expected.get(row["Date"][:7], 0.0) + float(row["Cost"])
+    assert set(expected) == {"2026-09", "2026-10"}
+
+    summary = run(spark, paths, private, seeds, export=two_months)
+
+    totals = {
+        r["billing_month"]: r["total"]
+        for r in spark.read.format("delta").load(paths.table("silver", "daily_cost"))
+        .groupBy("billing_month").agg(F.sum("cost").alias("total")).collect()
+    }
+    assert totals == pytest.approx(expected)
+    assert [c.passed for c in summary.checks] == [True] * 4
+    assert "2 month(s)" in [c for c in summary.checks if c.name == "cost_totals"][0].detail
 
 
 def test_run_load_raises_on_failed_check(spark, lake):
@@ -108,14 +179,3 @@ def test_missing_cost_export_writes_nothing_on_a_fresh_lake(spark, lake, tmp_pat
 
     assert not os.path.exists(paths.silver) and not os.path.exists(paths.gold)
     assert not os.path.exists(paths.reject)
-
-
-def test_export_with_another_month_is_refused_without_writing(spark, lake, tmp_path):
-    paths, private, seeds = lake
-    other = tmp_path / "september.csv"
-    other.write_text(COST_FIXTURE.read_text(encoding="utf-8").replace("2026-10-", "2026-09-"), encoding="utf-8", newline="\n")
-
-    with pytest.raises(ValueError, match="2026-10"):
-        run(spark, paths, private, seeds, export=other)
-
-    assert not os.path.exists(paths.gold)

@@ -19,6 +19,12 @@ def get_spark(app_name: str = "lakehouse-tests") -> SparkSession:
         .config("spark.sql.shuffle.partitions", "2")
         .config("spark.sql.warehouse.dir", tempfile.mkdtemp(prefix="lakehouse-warehouse-"))
         .config("spark.ui.enabled", "false")
+        # The status store keeps per-job and per-query records in the driver heap; a long run
+        # of builds (the test suite) exhausted the default 1 GB heap, so keep fewer records.
+        .config("spark.driver.memory", "2g")
+        .config("spark.ui.retainedJobs", "50")
+        .config("spark.ui.retainedStages", "50")
+        .config("spark.sql.ui.retainedExecutions", "50")
     )
     spark = configure_spark_with_delta_pip(builder).getOrCreate()
     spark.sparkContext.setLogLevel("ERROR")
