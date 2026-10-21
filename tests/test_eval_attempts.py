@@ -296,3 +296,38 @@ def test_merge_inserts_new_rows(spark, silver_df, tmp_path):
     metrics = _merge_metrics(spark, table)
     assert int(metrics["numTargetRowsInserted"]) == 5
     assert int(metrics["numTargetRowsUpdated"]) == 0
+
+
+def test_merge_keeps_first_seen_load_date(spark, silver_df, tmp_path):
+    table = str(tmp_path / "silver" / "eval_attempts")
+    merge_eval_attempts(spark, silver_df, table)
+
+    later = silver_df.withColumn("load_date", F.lit(date(2026, 10, 22)).cast("date"))
+    merge_eval_attempts(spark, later, table)
+
+    metrics = _merge_metrics(spark, table)
+    assert int(metrics["numTargetRowsInserted"]) == 0
+    assert int(metrics["numTargetRowsUpdated"]) == 0
+    stored = spark.read.format("delta").load(table)
+    assert [r["load_date"] for r in stored.select("load_date").distinct().collect()] == [LOAD_DATE]
+
+
+def test_merge_changed_row_takes_new_load_date(spark, silver_df, tmp_path):
+    table = str(tmp_path / "silver" / "eval_attempts")
+    merge_eval_attempts(spark, silver_df, table)
+    new_date = date(2026, 10, 22)
+
+    changed = (
+        silver_df.withColumn("load_date", F.lit(new_date).cast("date"))
+        .withColumn(
+            "latency_ms",
+            F.when((F.col("study") == "p2-retrieval") & (F.col("arm") == "E1"), F.lit(999.0))
+            .otherwise(F.col("latency_ms")),
+        )
+    )
+    merge_eval_attempts(spark, changed, table)
+
+    assert int(_merge_metrics(spark, table)["numTargetRowsUpdated"]) == 1
+    stored = spark.read.format("delta").load(table)
+    assert _by_key(stored, study="p2-retrieval", arm="E1")["load_date"] == new_date
+    assert stored.filter(F.col("load_date") == F.lit(LOAD_DATE)).count() == 9

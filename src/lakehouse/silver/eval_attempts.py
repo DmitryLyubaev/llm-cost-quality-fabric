@@ -299,15 +299,16 @@ def build_eval_attempts(
 def merge_eval_attempts(spark: SparkSession, df: DataFrame, table_path: str) -> None:
     """MERGE df into the Delta table on EVAL_KEY; create the table if it does not exist.
 
-    A matched row is updated only when some non-key column differs (null-safe); an unmatched
+    A matched row is updated only when some non-key column other than load_date differs (null-safe); an unmatched
     row is inserted. Rerunning the same df therefore writes no row.
     """
     if not DeltaTable.isDeltaTable(spark, table_path):
         df.write.format("delta").save(table_path)
         return
-    non_key = [c for c in EVAL_COLUMNS if c not in EVAL_KEY]
+    # load_date is bookkeeping: it keeps the first-seen date and only moves when a real column changes.
+    compared = [c for c in EVAL_COLUMNS if c not in EVAL_KEY and c != "load_date"]
     on = " AND ".join(f"t.{c} <=> s.{c}" for c in EVAL_KEY)
-    changed = " OR ".join(f"NOT (t.{c} <=> s.{c})" for c in non_key)
+    changed = " OR ".join(f"NOT (t.{c} <=> s.{c})" for c in compared)
     (
         DeltaTable.forPath(spark, table_path).alias("t")
         .merge(df.alias("s"), on)
