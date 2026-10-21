@@ -1,4 +1,6 @@
 import csv
+import gzip
+import shutil
 from pathlib import Path
 from datetime import UTC, date, datetime
 
@@ -19,9 +21,10 @@ from lakehouse.checks import (
 )
 from lakehouse.gold.fingerprint import gold_fingerprint, table_fingerprint
 from lakehouse.paths import LakePaths
-from lakehouse.silver.costs import read_cost_export
+from lakehouse.attribution import load_rg_rules, load_session_windows
+from lakehouse.silver.costs import normalise_costs, read_cost_export, replace_month
 
-from lake_helpers import COST_FIXTURE, FIGURES, FIGURES_DIR, SEEDS, copy_lake
+from lake_helpers import COST_EXPORT_ROOT, FIGURES, FIGURES_DIR, SEEDS, copy_lake, cost_export_maker
 
 
 @pytest.fixture
@@ -33,17 +36,18 @@ def _copy_lake(good, tmp_path) -> LakePaths:
     return copy_lake(good[0], tmp_path / "lake")
 
 
-def _export(spark):
-    return read_cost_export(spark, str(COST_FIXTURE))
+def _export(spark, root=COST_EXPORT_ROOT):
+    """(export rows, manifest row counts per month folder) of an export tree."""
+    return read_cost_export(spark, str(root))
 
 
 def test_each_check_passes_on_good_data(spark, good):
     paths, _, summary = good
-    export = _export(spark)
+    export, expected = _export(spark)
 
     results = [
         check_deployment_resolution(spark, paths),
-        check_cost_totals(spark, paths, export),
+        check_cost_totals(spark, paths, export, expected),
         check_published_figures(spark, paths, FIGURES_DIR),
         check_rerun_unchanged(summary.fingerprint, gold_fingerprint(spark, paths)),
     ]
@@ -77,17 +81,18 @@ def test_cost_totals_fails(spark, good, tmp_path):
         F.col("meter_id") == "meter-apim"
     )
 
-    result = check_cost_totals(spark, paths, _export(spark))
+    result = check_cost_totals(spark, paths, *_export(spark))
 
     assert not result.passed
     assert "2026-10" in result.detail
+    assert "20261001-20261031" in result.detail  # the row count is checked too
 
 
 def test_cost_totals_fails_when_month_missing_from_silver(spark, good, tmp_path):
     paths = _copy_lake(good, tmp_path)
     DeltaTable.forPath(spark, paths.table("silver", "daily_cost")).delete("billing_month = '2026-10'")
 
-    assert not check_cost_totals(spark, paths, _export(spark)).passed
+    assert not check_cost_totals(spark, paths, *_export(spark)).passed
 
 
 def test_cost_totals_ignores_months_not_in_the_export(spark, good, tmp_path):
@@ -96,12 +101,49 @@ def test_cost_totals_ignores_months_not_in_the_export(spark, good, tmp_path):
     silver = paths.table("silver", "daily_cost")
     other = (
         spark.read.format("delta").load(silver).limit(1)
-        .withColumn("billing_month", F.lit("2026-09"))
-        .withColumn("cost_date", F.lit(date(2026, 9, 5)))
+        .withColumn("billing_month", F.lit("2026-08"))
+        .withColumn("cost_date", F.lit(date(2026, 8, 5)))
     )
     other.write.format("delta").mode("append").save(silver)
 
-    assert check_cost_totals(spark, paths, _export(spark)).passed
+    assert check_cost_totals(spark, paths, *_export(spark)).passed
+
+
+def _silver_from(spark, paths, export):
+    """Silver costs built from an export frame, month by month, as run_load does."""
+    costs = normalise_costs(spark, export, load_rg_rules(SEEDS), load_session_windows(SEEDS))
+    for month in sorted(r[0] for r in costs.select("billing_month").distinct().collect()):
+        replace_month(spark, costs.where(F.col("billing_month") == month), paths.table("silver", "daily_cost"), month)
+
+
+def test_manifest_row_count_mismatch_fails_check(spark, tmp_lake, tmp_path):
+    """A part file that lost a row after the manifest counted it: the totals still agree between
+    the export and silver, but silver holds fewer rows than the manifest says the run wrote."""
+    root = tmp_path / "export"
+    shutil.copytree(COST_EXPORT_ROOT, root)
+    part = root / "portfolio-daily" / cost_export_maker.OCT / cost_export_maker.RUN_B / "part1.csv.gz"
+    lines = gzip.decompress(part.read_bytes()).decode("utf-8").splitlines(keepends=True)
+    part.write_bytes(gzip.compress("".join(lines[:-1]).encode("utf-8"), mtime=0))  # drop the last row
+    export, expected = _export(spark, root)
+    assert expected["20261001-20261031"] == 11 and export.count() == 14
+    _silver_from(spark, tmp_lake, export)
+
+    result = check_cost_totals(spark, tmp_lake, export, expected)
+
+    assert not result.passed
+    assert "20261001-20261031" in result.detail
+    assert "11" in result.detail and "10" in result.detail
+    assert "20260901-20260930" not in result.detail  # September agrees
+
+
+def test_manifest_row_counts_agree_when_silver_is_complete(spark, tmp_lake):
+    export, expected = _export(spark)
+    _silver_from(spark, tmp_lake, export)
+
+    result = check_cost_totals(spark, tmp_lake, export, expected)
+
+    assert result.passed, result.detail
+    assert "2 month(s)" in result.detail
 
 
 def _figures(tmp_path, **changes):

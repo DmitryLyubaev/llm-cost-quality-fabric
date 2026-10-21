@@ -16,7 +16,6 @@ from datetime import UTC, date, datetime
 
 from delta.tables import DeltaTable
 
-from pyspark.errors import AnalysisException
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import DateType, StringType, StructField, StructType, TimestampType
@@ -56,17 +55,15 @@ class RunSummary:
     fingerprint: dict[str, str]
 
 
-def _read_export(spark: SparkSession, path: str) -> DataFrame:
-    """The raw cost export; FileNotFoundError naming `path` if it is missing or has no data rows."""
-    try:
-        export = read_cost_export(spark, path)
-    except AnalysisException as error:
-        if "PATH_NOT_FOUND" in str(error) or "does not exist" in str(error):
-            raise FileNotFoundError(f"cost export not found: {path}") from error
-        raise
-    if export.limit(1).count() == 0:
-        raise FileNotFoundError(f"cost export has no data rows: {path}")
-    return export
+def _read_export(spark: SparkSession, root: str) -> tuple[DataFrame, dict[str, int]]:
+    """The cost export's rows and manifest row counts per month folder.
+
+    FileNotFoundError naming `root` if it holds no manifest, or its latest manifests list no rows.
+    """
+    export, expected_rows = read_cost_export(spark, root)
+    if sum(expected_rows.values()) == 0 or export.limit(1).count() == 0:
+        raise FileNotFoundError(f"cost export lists no data rows: {root}")
+    return export, expected_rows
 
 
 def _build(
@@ -131,7 +128,7 @@ def run_load(
     spark: SparkSession,
     paths: LakePaths,
     seeds_dir: str,
-    cost_export_path: str,
+    cost_export_root: str,
     load_date: date,
     *,
     allow_earlier: bool = False,
@@ -144,8 +141,9 @@ def run_load(
     Raises ValueError, before reading or writing anything, if `load_date` is earlier than the
     latest load date in the run log, because rebuilding an earlier export would roll the
     published costs back; pass `allow_earlier=True` to do it on purpose. Re-running the latest
-    date is always allowed. Raises FileNotFoundError, before writing anything, if the cost export
-    is missing or has no data rows. Raises QualityCheckFailed, after everything has been written and every check has
+    date is always allowed. Raises FileNotFoundError, before writing anything, if
+    `cost_export_root` holds no manifest or its latest manifests list no rows. Raises
+    QualityCheckFailed, after everything has been written and every check has
     run, if any check fails; the reject table and gold stay in place as the record of the run,
     but the run is not logged, so it is never the baseline for a later re-run.
     """
@@ -159,7 +157,7 @@ def run_load(
             f"{latest.isoformat()}; rebuilding it would roll published costs back "
             "(pass allow_earlier=True to do so on purpose)"
         )
-    export = _read_export(spark, cost_export_path)
+    export, expected_rows = _read_export(spark, cost_export_root)
 
     row_counts = _build(spark, paths, seeds_dir, export, load_date)
     fingerprint = gold_fingerprint(spark, paths)
@@ -171,7 +169,7 @@ def run_load(
         rerun = check_rerun_unchanged(previous, fingerprint)
     checks = [
         check_deployment_resolution(spark, paths),
-        check_cost_totals(spark, paths, export),
+        check_cost_totals(spark, paths, export, expected_rows),
         check_published_figures(spark, paths, seeds_dir),
         rerun,
     ]

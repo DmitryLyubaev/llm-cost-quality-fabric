@@ -13,7 +13,7 @@ from pyspark.sql import functions as F
 
 from lakehouse.paths import LakePaths
 from lakehouse.seeding import read_seed_rows
-from lakehouse.silver.costs import normalise_costs
+from lakehouse.silver.costs import month_range, normalise_costs
 
 COST_TOLERANCE = 0.01  # in the billing currency (spec 3.7)
 SCORED = "scored"
@@ -60,23 +60,42 @@ def _month_totals(df: DataFrame) -> dict[str, float]:
     return {r["billing_month"]: r["total"] or 0.0 for r in rows}
 
 
-def check_cost_totals(spark: SparkSession, paths: LakePaths, export_df: DataFrame) -> CheckResult:
-    """Per billing month in the export, silver's total must equal the export's within 0.01.
+def check_cost_totals(
+    spark: SparkSession,
+    paths: LakePaths,
+    export_df: DataFrame,
+    expected_rows: dict[str, int],
+) -> CheckResult:
+    """Per billing month in the export, silver's total must equal the export's within 0.01; and
+    per month folder, silver's row count must equal the manifest's `dataRowCount`.
 
-    Months silver holds from earlier loads but the export lacks are not compared. A month the
-    export has and silver lacks fails (silver total 0).
+    `expected_rows` is `{YYYYMMDD-YYYYMMDD folder: dataRowCount}` from `read_cost_export`; silver
+    rows are counted by `cost_date` falling in the folder's range. Months silver holds from earlier
+    loads but the export lacks are not compared. A month the export has and silver lacks fails
+    (silver total 0, row count 0).
     """
     # no rules: only the date and cost parsing are used, attribution is irrelevant here
     exported = _month_totals(normalise_costs(spark, export_df, [], []))
-    silver = _month_totals(spark.read.format("delta").load(paths.table("silver", "daily_cost")))
+    silver_df = spark.read.format("delta").load(paths.table("silver", "daily_cost"))
+    silver = _month_totals(silver_df)
     differing = [
         f"{month}: export {total:.4f}, silver {silver.get(month, 0.0):.4f}"
         for month, total in sorted(exported.items(), key=lambda item: str(item[0]))
         if abs(total - silver.get(month, 0.0)) > COST_TOLERANCE
     ]
+    for folder, manifest_rows in sorted(expected_rows.items()):
+        first, last = month_range(folder)
+        silver_rows = silver_df.where(F.col("cost_date").between(F.lit(first), F.lit(last))).count()
+        if silver_rows != manifest_rows:
+            differing.append(f"month folder {folder}: manifest {manifest_rows} row(s), silver {silver_rows}")
     if differing:
         return CheckResult("cost_totals", False, "; ".join(differing))
-    return CheckResult("cost_totals", True, f"{len(exported)} month(s) agree within {COST_TOLERANCE}")
+    return CheckResult(
+        "cost_totals",
+        True,
+        f"{len(exported)} month(s) agree within {COST_TOLERANCE}; "
+        f"{len(expected_rows)} manifest row count(s) match",
+    )
 
 
 # --- 3. gold reproduces the published figures -------------------------------------------------

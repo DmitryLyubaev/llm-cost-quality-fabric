@@ -1,0 +1,42 @@
+{
+  "manifestVersion": "2024-04-01",
+  "byteCount": 923,
+  "blobCount": 2,
+  "dataRowCount": 11,
+  "exportConfig": {
+    "exportName": "portfolio-daily",
+    "resourceId": "/subscriptions/synthetic-sub",
+    "dataVersion": "1.0",
+    "apiVersion": "2023-07-01-preview",
+    "type": "ActualCost",
+    "timeFrame": "Custom",
+    "granularity": "Daily"
+  },
+  "deliveryConfig": {
+    "partitionData": true,
+    "dataOverwriteBehavior": "OverwritePreviousReport",
+    "fileFormat": "Csv",
+    "compressionMode": "Gzip",
+    "containerUri": "synthetic-container",
+    "rootFolderPath": "synthetic-prefix"
+  },
+  "runInfo": {
+    "executionType": "OnDemand",
+    "submittedTime": "2026-10-21T03:30:09.1230000Z",
+    "runId": "0a1b2c3d-0000-4000-8000-00000000000b",
+    "startDate": "2026-10-01T00:00:00",
+    "endDate": "2026-10-31T00:00:00"
+  },
+  "blobs": [
+    {
+      "blobName": "synthetic-prefix/portfolio-daily/20261001-20261031/0a1b2c3d-0000-4000-8000-00000000000b/part0.csv.gz",
+      "byteCount": 513,
+      "dataRowCount": 6
+    },
+    {
+      "blobName": "synthetic-prefix/portfolio-daily/20261001-20261031/0a1b2c3d-0000-4000-8000-00000000000b/part1.csv.gz",
+      "byteCount": 410,
+      "dataRowCount": 5
+    }
+  ]
+}

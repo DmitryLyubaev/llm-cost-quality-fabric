@@ -1,4 +1,3 @@
-import csv
 import json
 import os
 import shutil
@@ -9,7 +8,7 @@ import pytest
 from delta.tables import DeltaTable
 from pyspark.sql import functions as F
 
-from lake_helpers import COST_FIXTURE, copy_lake, make_lake, run
+from lake_helpers import copy_lake, cost_export_maker, make_lake, run
 from lakehouse.checks import QualityCheckFailed
 from lakehouse.gold.build import GOLD_TABLES, REJECT_NAME
 from lakehouse.gold.fingerprint import gold_fingerprint
@@ -57,9 +56,10 @@ def test_run_load_twice_is_identical(spark, loaded_lake, tmp_path):
     assert first.row_counts == second.row_counts
     assert set(first.row_counts) == set(GOLD_TABLES) | {REJECT_NAME}
     assert first.row_counts[REJECT_NAME] == 0
-    # 6 P1 + 13 P2 (12 scored, 1 repeat) + 5 P3 (4 scored, 1 superseded); 11 cost lines
+    # 6 P1 + 13 P2 (12 scored, 1 repeat) + 5 P3 (4 scored, 1 superseded); 15 cost lines
+    # (11 in October from the latest run, 4 in September)
     assert first.row_counts["fact_eval_attempt"] == 6 + 13 + 5
-    assert first.row_counts["fact_daily_cost"] == 11
+    assert first.row_counts["fact_daily_cost"] == 15
     # bronze and the private extracts are only read
     assert _listing(paths.bronze) == bronze_before and sorted(os.listdir(paths.private)) == private_before
     assert [c.passed for c in second.checks] == [True] * 4
@@ -146,26 +146,22 @@ def test_run_load_turns_ansi_on(spark, lake):
     spark.conf.set("spark.sql.ansi.enabled", "false")
     try:
         with pytest.raises(FileNotFoundError):  # the settings are made before the export is read
-            run(spark, paths, seeds, export=paths.files_root + "/nope.csv")
+            run(spark, paths, seeds, export=paths.files_root + "/nope")
         assert spark.conf.get("spark.sql.ansi.enabled") == "true"
     finally:
         spark.conf.set("spark.sql.ansi.enabled", original)
 
 
-def test_export_spanning_two_months_loads_both(spark, lake, tmp_path):
-    """Every month in the export is replaced, and each month's silver total matches the export's."""
+def test_export_spanning_two_months_loads_both(spark, lake):
+    """Every month's latest run is replaced, and each month's silver total matches the export's."""
     paths, seeds = lake
-    text = COST_FIXTURE.read_text(encoding="utf-8")
-    two_months = tmp_path / "two_months.csv"
-    two_months.write_text(text.replace("2026-10-02,", "2026-09-28,").replace("2026-10-03,", "2026-09-30,"),
-                          encoding="utf-8", newline="\n")
-    expected: dict[str, float] = {}
-    with open(two_months, encoding="utf-8", newline="") as f:
-        for row in csv.DictReader(f):
-            expected[row["Date"][:7]] = expected.get(row["Date"][:7], 0.0) + float(row["Cost"])
-    assert set(expected) == {"2026-09", "2026-10"}
+    maker = cost_export_maker
+    expected = {
+        "2026-10": sum(float(r["cost"]) for r in maker.OCTOBER_ROWS),  # the latest run, not the stale one
+        "2026-09": sum(float(r["cost"]) for r in maker.SEPTEMBER_ROWS),
+    }
 
-    summary = run(spark, paths, seeds, export=two_months)
+    summary = run(spark, paths, seeds)
 
     totals = {
         r["billing_month"]: r["total"]
@@ -197,19 +193,21 @@ def test_run_load_raises_on_failed_check(spark, lake):
 
 
 def test_missing_cost_export_fails_before_writing(spark, loaded_lake, tmp_path):
-    """An empty or missing export raises FileNotFoundError and leaves gold untouched (Review Focus 5)."""
+    """No manifest, or manifests that list no rows, raise FileNotFoundError and leave gold untouched
+    (Review Focus 5)."""
     paths, seeds, _ = _copy(loaded_lake, tmp_path)
     versions = _versions(spark, paths)
     silver_cost = spark.read.format("delta").load(paths.table("silver", "daily_cost")).count()
 
-    header = COST_FIXTURE.read_text(encoding="utf-8").splitlines()[0]
-    header_only = tmp_path / "header_only.csv"
-    header_only.write_text(header + "\n", encoding="utf-8", newline="\n")
-    zero_bytes = tmp_path / "zero_bytes.csv"
-    zero_bytes.write_bytes(b"")
-    missing = tmp_path / "does_not_exist.csv"
+    no_rows = tmp_path / "no_rows"
+    cost_export_maker.write_run(no_rows, cost_export_maker.OCT, cost_export_maker.RUN_B,
+                                "2026-10-21T03:30:09Z", [])
+    no_manifest = tmp_path / "no_manifest"
+    no_manifest.mkdir()
+    (no_manifest / "part0.csv.gz").write_bytes(b"")
+    missing = tmp_path / "does_not_exist"
 
-    for export in (header_only, zero_bytes, missing):
+    for export in (no_rows, no_manifest, missing):
         with pytest.raises(FileNotFoundError, match=export.name):
             run(spark, paths, seeds, export=export)
 
@@ -220,7 +218,7 @@ def test_missing_cost_export_fails_before_writing(spark, loaded_lake, tmp_path):
 def test_missing_cost_export_writes_nothing_on_a_fresh_lake(spark, lake, tmp_path):
     paths, seeds = lake
 
-    with pytest.raises(FileNotFoundError, match="nope.csv"):
-        run(spark, paths, seeds, export=tmp_path / "nope.csv")
+    with pytest.raises(FileNotFoundError, match="nope"):
+        run(spark, paths, seeds, export=tmp_path / "nope")
 
     assert not os.path.exists(paths.tables_root)

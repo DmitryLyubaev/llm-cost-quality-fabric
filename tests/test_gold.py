@@ -8,6 +8,7 @@ import pytest
 from delta.tables import DeltaTable
 from pyspark.sql import functions as F
 
+from lake_helpers import cost_export_maker
 from lakehouse.attribution import load_rg_rules, load_session_windows
 from lakehouse.gold.build import GOLD_TABLES, GRAINS, build_gold
 from lakehouse.gold.fingerprint import gold_fingerprint
@@ -19,9 +20,7 @@ from lakehouse.silver.deployments import (
 )
 from lakehouse.silver.eval_attempts import EVAL_SCHEMA, merge_eval_attempts
 
-ROOT = Path(__file__).resolve().parent.parent
 SEEDS = SEEDS_DIR
-COST_FIXTURE = ROOT / "tests" / "fixtures" / "cost_export_2026-10.csv"
 REJECT = "reject.eval_unresolved"
 
 CHAT = ("rl-primary", "releaselens-chat")
@@ -83,9 +82,12 @@ def _silver_attempts(spark, paths, attempts):
 def _silver_costs(spark, paths, tmp_path):
     rules = load_rg_rules(SEEDS)
     windows = load_session_windows(SEEDS)
-    export = tmp_path / "export.csv"
-    export.write_text(COST_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
-    frame = normalise_costs(spark, read_cost_export(spark, str(export)), rules, windows)
+    export = tmp_path / "export"  # one run: the 11 October rows
+    cost_export_maker.write_run(
+        export, cost_export_maker.OCT, cost_export_maker.RUN_B, "2026-10-21T03:30:09Z",
+        [cost_export_maker.OCTOBER_ROWS],
+    )
+    frame = normalise_costs(spark, read_cost_export(spark, str(export))[0], rules, windows)
     replace_month(spark, frame, paths.table("silver", "daily_cost"), "2026-10")
     return frame.count()
 
