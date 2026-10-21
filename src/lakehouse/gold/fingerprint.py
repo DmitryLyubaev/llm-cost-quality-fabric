@@ -9,10 +9,19 @@ from lakehouse.gold.build import GOLD_TABLES, REJECT_NAME
 from lakehouse.paths import LakePaths
 
 
+# Timestamps are written at microsecond precision (Delta's own) in UTC, whatever the session
+# time zone, so a 1-microsecond change in a gold timestamp changes the fingerprint (R21).
+_JSON_OPTIONS = {"timestampFormat": "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX", "timeZone": "UTC"}
+
+
 def table_fingerprint(spark: SparkSession, path: str) -> str:
-    """sha256 over the table's rows, sorted by all columns, as JSON lines (UTC session)."""
+    """sha256 over the table's rows, sorted by all columns, as JSON lines (timestamps in UTC)."""
     df = spark.read.format("delta").load(path)
-    lines = df.orderBy(*df.columns).select(F.to_json(F.struct(*df.columns)).alias("line")).collect()
+    lines = (
+        df.orderBy(*df.columns)
+        .select(F.to_json(F.struct(*df.columns), _JSON_OPTIONS).alias("line"))
+        .collect()
+    )
     digest = hashlib.sha256()
     for row in lines:
         digest.update(row["line"].encode("utf-8"))

@@ -1,0 +1,24 @@
+{
+  "scenarioId": "s02",
+  "pass": 1,
+  "engine": "claude",
+  "model": "claude-haiku-4-5",
+  "deployment": "claude-haiku-4-5",
+  "outcome": "infra-error",
+  "infraError": true,
+  "infraMessage": null,
+  "calls": [],
+  "tools": [],
+  "finalReply": "synthetic",
+  "gateViolations": 0,
+  "check": {
+    "passed": false,
+    "failures": [
+      "synthetic failure"
+    ]
+  },
+  "success": false,
+  "ms": 120.0,
+  "startedAt": "2026-10-06T00:50:00.5+00:00",
+  "error": null
+}

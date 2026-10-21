@@ -1,0 +1,6 @@
+figure_id,study,query,expected,tolerance,source
+p1_total_cost_usd,p1-three-arm,total_cost_usd,0.1,0.0001,synthetic fixture
+p3_gpt_success,p3-agent,success_count_gpt,1,0,synthetic fixture
+p3_claude_success,p3-agent,success_count_claude,1,0,synthetic fixture
+p2_n_per_arm,p2-retrieval,n_per_arm,2,0,synthetic fixture
+p2_e3_minus_e1_top1,p2-retrieval,top1_e3_minus_e1,0.5,0.0005,synthetic fixture

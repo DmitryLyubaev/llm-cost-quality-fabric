@@ -1,5 +1,5 @@
 # Private data and local state
-private/
+/private/
 .local/
 .env
 *.tfstate*

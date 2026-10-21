@@ -1,0 +1,6 @@
+figure_id,study,query,expected,tolerance,source
+p1_total_cost_usd,p1-three-arm,total_cost_usd,2.7055,0.0001,ReleaseLens eval/baseline.md
+p3_gpt_success,p3-agent,success_count_gpt,59,0,Foundry workshop agent P3 report.md
+p3_claude_success,p3-agent,success_count_claude,57,0,Foundry workshop agent P3 report.md
+p2_n_per_arm,p2-retrieval,n_per_arm,229,0,ReleaseLens P2 run file (229 questions x 6 arms)
+p2_e3_minus_e1_top1,p2-retrieval,top1_e3_minus_e1,0.271,0.0005,ReleaseLens README
