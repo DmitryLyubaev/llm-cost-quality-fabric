@@ -116,6 +116,13 @@ def _previous_fingerprint(spark: SparkSession, log_path: str, load_date: date) -
     return json.loads(latest["fingerprint"]) if latest else None
 
 
+def _latest_logged_date(spark: SparkSession, log_path: str) -> date | None:
+    """The latest `load_date` in the run log, or None when nothing has been logged."""
+    if not DeltaTable.isDeltaTable(spark, log_path):
+        return None
+    return spark.read.format("delta").load(log_path).agg(F.max("load_date")).first()[0]
+
+
 def _append_log(spark: SparkSession, log_path: str, load_date: date, fingerprint: dict[str, str]) -> None:
     row = (load_date, json.dumps(fingerprint, sort_keys=True), datetime.now(UTC))
     spark.createDataFrame([row], _RUN_LOG_SCHEMA).write.format("delta").mode("append").save(log_path)
@@ -128,19 +135,36 @@ def run_load(
     private_root: str,
     cost_export_path: str,
     load_date: date,
+    *,
+    allow_earlier: bool = False,
 ) -> RunSummary:
     """Build silver and gold for `load_date`, run the four checks and return the summary.
 
-    Raises FileNotFoundError, before writing anything, if the cost export is missing or has no
-    data rows. Raises QualityCheckFailed, after everything has been written and every check has
+    Sets the session to ANSI SQL and UTC first: Fabric's session is not built by `get_spark`, and
+    both are part of the lake's contract (unreadable text fails, timestamps are UTC).
+
+    Raises ValueError, before reading or writing anything, if `load_date` is earlier than the
+    latest load date in the run log, because rebuilding an earlier export would roll the
+    published costs back; pass `allow_earlier=True` to do it on purpose. Re-running the latest
+    date is always allowed. Raises FileNotFoundError, before writing anything, if the cost export
+    is missing or has no data rows. Raises QualityCheckFailed, after everything has been written and every check has
     run, if any check fails; the reject table and gold stay in place as the record of the run,
     but the run is not logged, so it is never the baseline for a later re-run.
     """
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    spark.conf.set("spark.sql.session.timeZone", "UTC")
+    log_path = paths.table("silver", RUN_LOG)
+    latest = _latest_logged_date(spark, log_path)
+    if latest is not None and load_date < latest and not allow_earlier:
+        raise ValueError(
+            f"load date {load_date.isoformat()} is earlier than the latest logged load date "
+            f"{latest.isoformat()}; rebuilding it would roll published costs back "
+            "(pass allow_earlier=True to do so on purpose)"
+        )
     export = _read_export(spark, cost_export_path)
 
     row_counts = _build(spark, paths, seeds_dir, private_root, export, load_date)
     fingerprint = gold_fingerprint(spark, paths)
-    log_path = paths.table("silver", RUN_LOG)
     previous = _previous_fingerprint(spark, log_path, load_date)
 
     if previous is None:

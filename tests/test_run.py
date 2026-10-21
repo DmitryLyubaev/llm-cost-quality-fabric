@@ -106,6 +106,55 @@ def test_first_run_for_a_new_date_passes(spark, loaded_lake, tmp_path):
     assert [d for d, _ in _log(spark, paths)] == [date(2026, 10, 21), date(2026, 10, 22)]
 
 
+def test_earlier_load_date_is_refused_unless_allowed(spark, loaded_lake, tmp_path):
+    """Re-running D1 after D2 would restate the published costs back to D1's export."""
+    paths, private, seeds, _ = _copy(loaded_lake, tmp_path)
+    bronze = Path(paths.bronze) / "public"
+    shutil.copytree(bronze / "load_date=2026-10-21", bronze / "load_date=2026-10-22")
+    run(spark, paths, private, seeds, load_date=date(2026, 10, 22))
+    versions = _versions(spark, paths)
+    logged = _log(spark, paths)
+
+    with pytest.raises(ValueError, match=r"2026-10-21.*2026-10-22|2026-10-22.*2026-10-21"):
+        run(spark, paths, private, seeds, load_date=date(2026, 10, 21))
+
+    assert _versions(spark, paths) == versions and _log(spark, paths) == logged
+    # the latest date may still be re-run
+    run(spark, paths, private, seeds, load_date=date(2026, 10, 22))
+
+    allowed = run(spark, paths, private, seeds, load_date=date(2026, 10, 21), allow_earlier=True)
+
+    assert allowed.load_date == date(2026, 10, 21)
+    assert [d for d, _ in _log(spark, paths)] == [
+        date(2026, 10, 21), date(2026, 10, 22), date(2026, 10, 22), date(2026, 10, 21),
+    ]
+
+
+def test_run_load_is_the_same_whatever_the_session_time_zone(spark, loaded_lake, lake):
+    """Fabric's session is not built by get_spark; run_load pins UTC itself."""
+    paths, private, seeds = lake
+    original = spark.conf.get("spark.sql.session.timeZone")
+    spark.conf.set("spark.sql.session.timeZone", "Australia/Brisbane")
+    try:
+        summary = run(spark, paths, private, seeds)
+    finally:
+        spark.conf.set("spark.sql.session.timeZone", original)
+
+    assert summary.fingerprint == loaded_lake[3].fingerprint
+
+
+def test_run_load_turns_ansi_on(spark, lake):
+    paths, private, seeds = lake
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "false")
+    try:
+        with pytest.raises(FileNotFoundError):  # the settings are made before the export is read
+            run(spark, paths, private, seeds, export=paths.root + "/nope.csv")
+        assert spark.conf.get("spark.sql.ansi.enabled") == "true"
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)
+
+
 def test_export_spanning_two_months_loads_both(spark, lake, tmp_path):
     """Every month in the export is replaced, and each month's silver total matches the export's."""
     paths, private, seeds = lake

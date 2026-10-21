@@ -6,7 +6,7 @@ Exports restate the month to date, so silver replaces a whole billing month at a
 
 import re
 
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import MapType, StringType, StructField, StructType
 
@@ -89,6 +89,35 @@ def _select_silver_inputs(export_df: DataFrame) -> DataFrame:
     )
 
 
+def _parsed_date(column: str) -> Column:
+    """The date in `column` (ISO or US month-first), null where it cannot be read; never raises."""
+    dated = F.trim(column)
+    text = F.substring(dated, 1, 10)
+    return F.when(dated.rlike(_ISO_DATE), F.try_to_date(text, "yyyy-MM-dd")).otherwise(
+        F.try_to_date(text, "MM/dd/yyyy")
+    )
+
+
+def _require_readable(raw: DataFrame) -> None:
+    """ValueError if a row's Cost is empty or unreadable, or its Date text is unreadable.
+
+    Done with non-raising casts so the answer does not depend on the session's ANSI setting.
+    """
+    counts = raw.agg(
+        F.count(F.when(F.trim("cost").try_cast("double").isNull(), 1)).alias("cost"),
+        F.count(
+            F.when((F.trim("cost_date") != "") & _parsed_date("cost_date").isNull(), 1)
+        ).alias("cost_date"),
+    ).first()
+    problems = []
+    if counts["cost"]:
+        problems.append(f"{counts['cost']} row(s) have a cost that is empty or not a number")
+    if counts["cost_date"]:
+        problems.append(f"{counts['cost_date']} row(s) have a cost_date that is not a date")
+    if problems:
+        raise ValueError("cost export is not readable: " + "; ".join(problems))
+
+
 def normalise_costs(
     spark: SparkSession,
     export_df: DataFrame,
@@ -97,8 +126,10 @@ def normalise_costs(
 ) -> DataFrame:
     """Silver rows (COST_COLUMNS) from a raw export frame: typed, month-stamped, attributed.
 
-    Every export row is kept. Text that cannot be read as a date or a number raises, because
-    ANSI casting is on; an unattributable row gets project `untagged`.
+    Every export row is kept. A row whose Cost is empty or not a number, or whose Date has text
+    that is not a date, raises ValueError naming the count and the column (whatever the session's
+    ANSI setting, so a total can never lose a row without a word); an unattributable row gets
+    project `untagged`.
     """
     # plain lambda: Spark warns when it cannot infer an eval type from parse_tags's type hints
     parse_tags_udf = F.udf(lambda raw: parse_tags(raw), MapType(StringType(), StringType()))
@@ -110,6 +141,7 @@ def normalise_costs(
     attribute_udf = F.udf(_attribute, _ATTRIBUTION)
 
     raw = _select_silver_inputs(export_df)
+    _require_readable(raw)
     dated = F.trim("cost_date")
     return (
         raw.withColumn(

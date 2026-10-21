@@ -355,3 +355,24 @@ def test_p3_integer_json_numbers_build(spark, lake_inputs):
     row = _by_key(df, study="p3-agent", item_id="s01", arm="gpt", attempt_kind="scored")
     assert row["latency_ms"] == 3000.0
     assert row["tool_call_accuracy"] == 5.0
+
+
+def _append(path, text):
+    with open(path, "a", encoding="utf-8", newline="") as f:
+        f.write(text)
+
+
+def test_malformed_p1_line_fails_loudly(spark, lake_inputs):
+    bronze, private = lake_inputs
+    _append(Path(private) / "p1_outcomes.jsonl", "{not json\n")
+
+    with pytest.raises(Exception):
+        build_eval_attempts(spark, bronze, private, SEEDS, LOAD_DATE).collect()
+
+
+def test_mistyped_p2_field_fails_loudly(spark, lake_inputs):
+    bronze, private = lake_inputs
+    _append(Path(private) / "p2_results.jsonl", json.dumps(_p2_row(item_id="q-009", latency_ms="fast")) + "\n")
+
+    with pytest.raises(Exception):
+        build_eval_attempts(spark, bronze, private, SEEDS, LOAD_DATE).collect()

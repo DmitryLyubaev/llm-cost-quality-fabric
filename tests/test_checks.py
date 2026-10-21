@@ -145,6 +145,16 @@ def test_published_figures_fails_when_gold_row_changes(spark, good, tmp_path):
     assert "p3_gpt_success" in result.detail
 
 
+def test_published_figures_p3_denominator_is_checked(spark, good, tmp_path):
+    """The fixture's P3 arms each hold two scored rows; a published 3 fails the check."""
+    paths = good[0]
+    assert check_published_figures(spark, paths, FIGURES).passed
+
+    result = check_published_figures(spark, paths, _figures(tmp_path, p3_n_per_arm={"expected": "3"}))
+
+    assert not result.passed and "p3_n_per_arm" in result.detail
+
+
 def test_published_figures_unknown_query_is_an_error(spark, good, tmp_path):
     figures = _figures(tmp_path, p3_gpt_success={"query": "select 1"})
 
@@ -158,7 +168,8 @@ def test_published_figures_seed_is_well_formed():
         rows = {r["figure_id"]: r for r in reader}
         assert reader.fieldnames == ["figure_id", "study", "query", "expected", "tolerance", "source"]
     assert set(rows) == {
-        "p1_total_cost_usd", "p3_gpt_success", "p3_claude_success", "p2_n_per_arm", "p2_e3_minus_e1_top1",
+        "p1_total_cost_usd", "p3_gpt_success", "p3_claude_success", "p3_n_per_arm", "p2_n_per_arm",
+        "p2_e3_minus_e1_top1",
     }
     assert all(r["query"] in QUERIES for r in rows.values())
     assert all(r["source"] for r in rows.values())
@@ -166,6 +177,8 @@ def test_published_figures_seed_is_well_formed():
     assert float(rows["p3_gpt_success"]["expected"]) == 59
     assert float(rows["p3_claude_success"]["expected"]) == 57
     assert float(rows["p2_n_per_arm"]["expected"]) == 229
+    assert (rows["p3_n_per_arm"]["study"], float(rows["p3_n_per_arm"]["expected"])) == ("p3-agent", 60)
+    assert float(rows["p3_n_per_arm"]["tolerance"]) == 0
     assert (float(rows["p2_e3_minus_e1_top1"]["expected"]), float(rows["p2_e3_minus_e1_top1"]["tolerance"])) == (0.271, 0.0005)
     # the fixture's figures use the same ids and queries
     with open(FIGURES, encoding="utf-8", newline="") as f:
@@ -286,6 +299,32 @@ def test_cost_per_result_never_mixes_currencies(spark, good):
     assert rows["p1"]["actual_per_result"] == pytest.approx(rows["p1"]["actual_total"] / 6)
     # nothing converts one into the other
     assert rows["p1"]["actual_per_result"] != pytest.approx(rows["p1"]["estimated_usd_per_result"])
+
+
+def test_cost_per_result_counts_unpriced_results_and_withholds_the_estimate(spark, good, tmp_path):
+    """A scored result with no price (rate_missing) makes the estimate unknown, not a partial sum."""
+    before = {r["project"]: r for r in cost_per_result(spark, good[0]).collect()}
+    assert all(r["unpriced_results"] == 0 for r in before.values())  # no_model rows are not unpriced
+    assert before["p3"]["estimated_usd_total"] is not None
+
+    paths = _copy_lake(good, tmp_path)
+    facts = spark.read.format("delta").load(paths.table("gold", "fact_eval_attempt"))
+    victim = facts.where((F.col("study") == "p3-agent") & (F.col("attempt_kind") == "scored")).first()
+    DeltaTable.forPath(spark, paths.table("gold", "fact_eval_attempt")).update(
+        (F.col("study") == "p3-agent") & (F.col("attempt_kind") == "scored")
+        & (F.col("arm") == victim["arm"]) & (F.col("item_id") == victim["item_id"]),
+        {"cost_usd": F.lit(None).cast("double"), "cost_basis": F.lit("rate_missing")},
+    )
+
+    rows = {r["project"]: r for r in cost_per_result(spark, paths).collect()}
+
+    assert rows["p3"]["unpriced_results"] == 1
+    assert rows["p3"]["estimated_usd_total"] is None and rows["p3"]["estimated_usd_per_result"] is None
+    assert rows["p3"]["results"] == before["p3"]["results"]
+    assert rows["p3"]["actual_total"] == before["p3"]["actual_total"]
+    # other projects keep their estimates
+    assert rows["p1"]["estimated_usd_total"] == before["p1"]["estimated_usd_total"]
+    assert rows["p1"]["unpriced_results"] == 0
 
 
 def test_quality_across_models_scored_rows_only(spark, good):

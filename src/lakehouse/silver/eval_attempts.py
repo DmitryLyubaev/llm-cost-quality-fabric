@@ -242,7 +242,7 @@ def build_eval_attempts(
 ) -> DataFrame:
     """P1, P2 and P3 attempts in one schema (EVAL_COLUMNS), costs filled, UTC timestamps."""
     p1 = (
-        spark.read.schema(_P1_SOURCE).json(f"{private_root}/p1_outcomes.jsonl")
+        spark.read.schema(_P1_SOURCE).option("mode", "FAILFAST").json(f"{private_root}/p1_outcomes.jsonl")
         .withColumn("started_at", F.to_timestamp("started_at"))
         .withColumn("model_version", F.col("model"))  # R1: the outcome's own model string
         .withColumn("model", F.lit(None).cast("string"))  # filled from dim_arm below
@@ -256,7 +256,7 @@ def build_eval_attempts(
         .drop("judge_cost_usd")
     )
     p2 = (
-        spark.read.schema(_P2_SOURCE).json(f"{private_root}/p2_results.jsonl")
+        spark.read.schema(_P2_SOURCE).option("mode", "FAILFAST").json(f"{private_root}/p2_results.jsonl")
         .withColumn("started_at", F.to_timestamp("started_at"))
     )
     p3 = spark.createDataFrame(

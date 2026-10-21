@@ -13,6 +13,7 @@ from lakehouse.paths import LakePaths
 
 SCORED = "scored"
 ESTIMATE_CURRENCY = "USD"
+NO_MODEL_BASIS = "no_model"  # cost_basis of an arm with no model: its cost is a true zero
 ALWAYS_PRESENT = [UNTAGGED, SHARED_PROJECT]
 # The project each study measured (dim_study has no project column; the tracker's names).
 STUDY_PROJECT = {"p1-three-arm": "p1", "p2-retrieval": "p2", "p3-agent": "p3"}
@@ -88,13 +89,27 @@ def cost_per_result(spark: SparkSession, paths: LakePaths) -> DataFrame:
     actual: the project's attributed Cost Management total in its billing currency
     (`actual_currency`); a project billed in two currencies gets one row per currency. The
     two are never added, converted or divided into one another.
+
+    `unpriced_results` counts the scored results with no cost and a basis other than `no_model`
+    (a model without a rate). When it is above zero the estimate is unknown, so the estimated
+    total and per-result values are null rather than a sum that leaves those results out.
     """
     project = F.create_map(*[x for pair in STUDY_PROJECT.items() for x in (F.lit(pair[0]), F.lit(pair[1]))])
     facts = _gold(spark, paths, "fact_eval_attempt").where(F.col("attempt_kind") == SCORED)
     estimated = (
         facts.withColumn("project", project[F.col("study")])
         .groupBy("project")
-        .agg(F.count("*").alias("results"), F.sum("cost_usd").alias("estimated_usd_total"))
+        .agg(
+            F.count("*").alias("results"),
+            F.count(F.when(F.col("cost_usd").isNull() & (F.col("cost_basis") != NO_MODEL_BASIS), 1)).alias(
+                "unpriced_results"
+            ),
+            F.sum("cost_usd").alias("estimated_usd_total"),
+        )
+        .withColumn(
+            "estimated_usd_total",
+            F.when(F.col("unpriced_results") == 0, F.col("estimated_usd_total")),
+        )
         .withColumn("estimated_usd_per_result", F.col("estimated_usd_total") / F.col("results"))
         .withColumn("estimated_currency", F.lit(ESTIMATE_CURRENCY))
     )
@@ -109,6 +124,7 @@ def cost_per_result(spark: SparkSession, paths: LakePaths) -> DataFrame:
         .select(
             "project",
             "results",
+            "unpriced_results",
             "estimated_usd_total",
             "estimated_usd_per_result",
             "estimated_currency",

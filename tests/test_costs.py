@@ -121,6 +121,30 @@ def test_non_numeric_cost_fails_loudly(spark, tmp_path):
         normalise_costs(spark, export, RULES, WINDOWS).collect()
 
 
+def test_empty_cost_is_an_error(spark, tmp_path):
+    export = _export(spark, tmp_path).withColumn(
+        "Cost", F.when(F.col("MeterId") == "meter-blob", F.lit(None)).otherwise(F.col("Cost"))
+    )
+    with pytest.raises(ValueError, match=r"1 row.*cost"):
+        normalise_costs(spark, export, RULES, WINDOWS)
+
+
+def test_unreadable_cost_is_an_error_even_without_ansi(spark, tmp_path):
+    export = _export(spark, tmp_path).withColumn(
+        "Cost", F.when(F.col("MeterId") == "meter-blob", F.lit("abc")).otherwise(F.col("Cost"))
+    )
+    with pytest.raises(ValueError, match=r"1 row.*cost"):
+        normalise_costs(spark, export, RULES, WINDOWS)
+
+
+def test_unreadable_date_is_an_error(spark, tmp_path):
+    export = _export(spark, tmp_path).withColumn(
+        "Date", F.when(F.col("MeterId") == "meter-blob", F.lit("someday")).otherwise(F.col("Date"))
+    )
+    with pytest.raises(ValueError, match=r"1 row.*cost_date"):
+        normalise_costs(spark, export, RULES, WINDOWS)
+
+
 def _months(spark, path):
     frame = spark.read.format("delta").load(path)
     return {r["billing_month"]: r["n"] for r in frame.groupBy("billing_month").agg(F.count("*").alias("n")).collect()}
