@@ -1,0 +1,12 @@
+study,arm,label,account_alias,deployment_name,model
+p1-three-arm,Z,Azure OpenAI gpt-4.1-mini,rl-primary,releaselens-chat,gpt-4.1-mini
+p1-three-arm,A,Claude Sonnet 5 (external),external,claude-sonnet-5,claude-sonnet-5
+p1-three-arm,O,OpenAI gpt-4.1-mini (external),external,gpt-4.1-mini@openai,gpt-4.1-mini
+p2-retrieval,E1,Retrieval without a model (E1),none,no-model,no-model
+p2-retrieval,E2,Retrieval with embed-small (E2),rl-primary,releaselens-embed-small,text-embedding-3-small
+p2-retrieval,E3,Retrieval with embed-large (E3),rl-primary,releaselens-embed-large,text-embedding-3-large
+p2-retrieval,S1,Retrieval without a model (S1),none,no-model,no-model
+p2-retrieval,S2,Retrieval with embed-small (S2),rl-primary,releaselens-embed-small,text-embedding-3-small
+p2-retrieval,S3,Retrieval with embed-small (S3),rl-primary,releaselens-embed-small,text-embedding-3-small
+p3-agent,gpt,Foundry workshop agent on gpt-5.6-luna,fwa,gpt-5.6-luna,gpt-5.6-luna
+p3-agent,claude,Foundry workshop agent on claude-haiku-4-5,fwa,claude-haiku-4-5,claude-haiku-4-5

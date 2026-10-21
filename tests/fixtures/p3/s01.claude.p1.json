@@ -1,0 +1,31 @@
+{
+  "scenarioId": "s01",
+  "pass": 1,
+  "engine": "claude",
+  "model": "claude-haiku-4-5",
+  "deployment": "claude-haiku-4-5",
+  "outcome": "completed",
+  "infraError": false,
+  "infraMessage": null,
+  "calls": [
+    {
+      "index": 1,
+      "inputTokens": 2000,
+      "outputTokens": 100,
+      "ms": 100.0,
+      "finishReason": null,
+      "modelId": "claude-haiku-4-5-20251001"
+    }
+  ],
+  "tools": [],
+  "finalReply": "synthetic",
+  "gateViolations": 0,
+  "check": {
+    "passed": true,
+    "failures": []
+  },
+  "success": true,
+  "ms": 5000.25,
+  "startedAt": "2026-10-06T00:40:00.1234567+00:00",
+  "error": null
+}

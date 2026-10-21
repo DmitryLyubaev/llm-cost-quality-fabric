@@ -1,0 +1,5 @@
+model,input_per_m_usd,output_per_m_usd,rate_date,source
+gpt-5.6-luna,0.20,1.20,2026-10-04,P3 report.md
+claude-haiku-4-5,1.00,5.00,2026-10-04,P3 report.md
+text-embedding-3-small,0.02,0,2026-10-02,P2 run file rates
+text-embedding-3-large,0.13,0,2026-10-02,P2 run file rates

@@ -1,0 +1,93 @@
+{
+  "status": "complete",
+  "judge": "synthetic",
+  "evaluators": [
+    "tool_call_accuracy",
+    "task_adherence",
+    "intent_resolution"
+  ],
+  "rows": [
+    {
+      "scenario_id": "s01",
+      "engine": "gpt",
+      "pass": 1,
+      "scores": {
+        "tool_call_accuracy": {
+          "score": 5.0,
+          "passed": true
+        },
+        "task_adherence": {
+          "score": 1.0,
+          "passed": true
+        },
+        "intent_resolution": {
+          "score": 5.0,
+          "passed": true
+        }
+      }
+    },
+    {
+      "scenario_id": "s01",
+      "engine": "claude",
+      "pass": 1,
+      "scores": {
+        "tool_call_accuracy": {
+          "score": 4.0,
+          "passed": true
+        },
+        "task_adherence": {
+          "score": 1.0,
+          "passed": true
+        },
+        "intent_resolution": {
+          "score": 4.0,
+          "passed": true
+        }
+      }
+    },
+    {
+      "scenario_id": "s02",
+      "engine": "gpt",
+      "pass": 1,
+      "scores": {
+        "tool_call_accuracy": {
+          "score": 2.0,
+          "passed": false
+        },
+        "task_adherence": {
+          "score": 0.0,
+          "passed": false
+        },
+        "intent_resolution": {
+          "score": 3.0,
+          "passed": true
+        }
+      }
+    },
+    {
+      "scenario_id": "s02",
+      "engine": "claude",
+      "pass": 1,
+      "scores": {
+        "tool_call_accuracy": {
+          "score": 1.0,
+          "passed": false
+        },
+        "task_adherence": {
+          "score": 0.0,
+          "passed": false
+        },
+        "intent_resolution": {
+          "score": 1.0,
+          "passed": false
+        }
+      }
+    }
+  ],
+  "result_counts": {
+    "total": 4,
+    "passed": 2,
+    "failed": 2,
+    "errored": 0
+  }
+}
