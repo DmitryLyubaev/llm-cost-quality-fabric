@@ -74,6 +74,7 @@ _LIVE_CHECK_SCHEMA = StructType(
     [
         StructField("project", StringType()),
         StructField("session_date", DateType()),
+        StructField("session", StringType()),
         StructField("check_id", StringType()),
         StructField("verdict", StringType()),
         StructField("measured_value", DoubleType()),
@@ -94,13 +95,10 @@ def _read_seed(spark: SparkSession, path: str, schema: StructType) -> DataFrame:
     )
 
 
-_EMPTY_COSTS = (
-    "cost_date date, resource_id string, resource_group string, meter_id string, meter_name string, "
-    "cost double, billing_currency string, billing_month string, project string, attribution_rule string"
-)
-
-
-def _delta(spark: SparkSession, path: str) -> DataFrame:
+def _silver(spark: SparkSession, path: str) -> DataFrame:
+    """A silver Delta table; a missing one is an error that names the path."""
+    if not DeltaTable.isDeltaTable(spark, path):
+        raise ValueError(f"silver table not found at {path}: build silver before gold")
     return spark.read.format("delta").load(path)
 
 
@@ -178,14 +176,9 @@ def build_gold(spark: SparkSession, paths: LakePaths, seeds_dir: str) -> dict[st
 
     Gold tables are keyed by plain name, the reject table by `reject.eval_unresolved`.
     """
-    attempts = _delta(spark, paths.table("silver", "eval_attempts"))
-    cost_path = paths.table("silver", "daily_cost")
-    # No cost export has landed yet on a fresh lake: gold then has an empty cost fact.
-    if DeltaTable.isDeltaTable(spark, cost_path):
-        costs = _delta(spark, cost_path)
-    else:
-        costs = spark.createDataFrame([], _EMPTY_COSTS)
-    deployments = _delta(spark, paths.table("silver", "model_deployment"))
+    attempts = _silver(spark, paths.table("silver", "eval_attempts"))
+    costs = _silver(spark, paths.table("silver", "daily_cost"))
+    deployments = _silver(spark, paths.table("silver", "model_deployment"))
     dim_arm = _read_seed(spark, f"{seeds_dir}/dim_arm.csv", _DIM_ARM_SCHEMA)
     checks = _read_seed(spark, f"{seeds_dir}/live_checks.csv", _LIVE_CHECK_SCHEMA)
 

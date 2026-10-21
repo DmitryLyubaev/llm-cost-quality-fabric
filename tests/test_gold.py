@@ -143,9 +143,10 @@ def test_boundary_joins_new_version(spark, silver):
     assert v1 != resolved["at-v2"]
 
 
-def test_mixed_offsets(spark, tmp_lake):
+def test_mixed_offsets(spark, tmp_lake, tmp_path):
     """A +10:00 commit time and a +00:00 result time for one instant join as equal."""
     _silver_deployments(spark, tmp_lake)
+    _silver_costs(spark, tmp_lake, tmp_path)
     result_time = datetime.fromisoformat("2026-10-02T03:00:09+00:00")
     assert result_time == datetime.fromisoformat(V2_COMMIT)
     _silver_attempts(spark, tmp_lake, [_attempt("p1-three-arm", "Z", result_time, item="same-instant")])
@@ -171,8 +172,9 @@ def test_external_and_no_model_arms_resolve(spark, silver):
     assert None not in resolved.values()
 
 
-def test_before_first_version_rejected(spark, tmp_lake):
+def test_before_first_version_rejected(spark, tmp_lake, tmp_path):
     _silver_deployments(spark, tmp_lake)
+    cost_rows = _silver_costs(spark, tmp_lake, tmp_path)
     attempts = [
         _attempt("p1-three-arm", "Z", _utc(2026, 9, 1), item="too-early"),
         _attempt("p1-three-arm", "Z", _utc(2026, 10, 3), item="fine"),
@@ -186,13 +188,14 @@ def test_before_first_version_rejected(spark, tmp_lake):
     assert [(r["item_id"], r["reason"]) for r in rejected.collect()] == [("too-early", "no_version")]
     assert set(_resolved(spark, tmp_lake)) == {"fine", "external-early"}
     assert counts["fact_eval_attempt"] + counts[REJECT] == len(attempts)
-    assert counts["fact_daily_cost"] == 0  # no cost export has landed: an empty fact, not a failure
+    assert counts["fact_daily_cost"] == cost_rows
     assert "deployment_sk" not in rejected.columns
 
 
-def test_overlapping_versions_rejected(spark, tmp_lake):
+def test_overlapping_versions_rejected(spark, tmp_lake, tmp_path):
     """Two versions covering one instant: not guessed between, sent to the reject table."""
     _silver_deployments(spark, tmp_lake)
+    _silver_costs(spark, tmp_lake, tmp_path)
     path = tmp_lake.table("silver", "model_deployment")
     table = DeltaTable.forPath(spark, path)
     table.update(
@@ -207,6 +210,17 @@ def test_overlapping_versions_rejected(spark, tmp_lake):
     assert [(r["item_id"], r["reason"]) for r in rejected] == [("two-versions", "multiple_versions")]
     assert counts["fact_eval_attempt"] == 0
     assert counts[REJECT] == 1
+
+
+def test_missing_silver_costs_raises_naming_the_path(spark, tmp_lake):
+    _silver_deployments(spark, tmp_lake)
+    _silver_attempts(spark, tmp_lake, [_attempt("p1-three-arm", "Z", _utc(2026, 10, 3))])
+
+    with pytest.raises(ValueError, match="daily_cost") as error:
+        build_gold(spark, tmp_lake, SEEDS)
+
+    assert tmp_lake.table("silver", "daily_cost") in str(error.value)
+    assert not DeltaTable.isDeltaTable(spark, tmp_lake.table("gold", "fact_daily_cost"))
 
 
 def test_fact_carries_silver_measures(spark, silver):
@@ -336,9 +350,11 @@ def test_live_checks_seed_valid():
         rows = list(reader)
         header = reader.fieldnames
     assert header == [
-        "project", "session_date", "check_id", "verdict", "measured_value", "unit",
+        "project", "session_date", "session", "check_id", "verdict", "measured_value", "unit",
         "source_report", "source_sha",
     ]
+    keys = [(r["project"], r["session"], r["check_id"]) for r in rows]
+    assert len(keys) == len(set(keys)), "(project, session, check_id) must be unique"
     assert rows
     for row in rows:
         assert row["verdict"] in {"pass", "fail", "not-run"}
@@ -346,7 +362,7 @@ def test_live_checks_seed_valid():
         assert row["project"] in {"p4", "p5", "p6", "p7", "p8"}
         assert date.fromisoformat(row["session_date"])
         assert re.fullmatch(r"[0-9a-f]{40}", row["source_sha"])
-        assert row["check_id"]
+        assert row["check_id"] and row["session"]
         assert bool(row["measured_value"]) == bool(row["unit"])
         if row["measured_value"]:
             float(row["measured_value"])
