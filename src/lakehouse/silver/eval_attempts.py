@@ -218,6 +218,17 @@ def _read_p3_rows(spark: SparkSession, bronze_root: str, load_date: date) -> lis
     return rows
 
 
+def _to_schema_tuple(row: dict) -> tuple:
+    """Row values in EVAL_SCHEMA order; JSON integers bound for DoubleType become floats."""
+    values = []
+    for field in EVAL_SCHEMA.fields:
+        value = row.get(field.name)
+        if value is not None and isinstance(field.dataType, DoubleType):
+            value = float(value)
+        values.append(value)
+    return tuple(values)
+
+
 def _stage(df: DataFrame) -> DataFrame:
     """Add the columns a study lacks as typed nulls and order them as EVAL_COLUMNS."""
     for field in EVAL_SCHEMA.fields:
@@ -250,7 +261,7 @@ def build_eval_attempts(
     )
     p3 = spark.createDataFrame(
         [
-            tuple(row.get(f.name) for f in EVAL_SCHEMA.fields)
+            _to_schema_tuple(row)
             for row in _read_p3_rows(spark, bronze_root, load_date)
         ],
         schema=EVAL_SCHEMA,

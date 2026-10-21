@@ -331,3 +331,27 @@ def test_merge_changed_row_takes_new_load_date(spark, silver_df, tmp_path):
     stored = spark.read.format("delta").load(table)
     assert _by_key(stored, study="p2-retrieval", arm="E1")["load_date"] == new_date
     assert stored.filter(F.col("load_date") == F.lit(LOAD_DATE)).count() == 9
+
+
+def test_p3_integer_json_numbers_build(spark, lake_inputs):
+    bronze, private = lake_inputs
+    results = (
+        Path(bronze) / "public" / f"load_date={LOAD_DATE.isoformat()}"
+        / "foundry-workshop-agent" / "results" / STUDY_DIR
+    )
+    run_file = results / "s01.gpt.p1.json"
+    run = json.loads(run_file.read_text(encoding="utf-8"))
+    run["ms"] = 3000  # JSON integer, not 3000.0
+    run_file.write_text(json.dumps(run), encoding="utf-8")
+    scores_file = results / "eval-scores.json"
+    scores = json.loads(scores_file.read_text(encoding="utf-8"))
+    for row in scores["rows"]:
+        if (row["scenario_id"], row["engine"]) == ("s01", "gpt"):
+            row["scores"]["tool_call_accuracy"]["score"] = 5  # JSON integer
+    scores_file.write_text(json.dumps(scores), encoding="utf-8")
+
+    df = build_eval_attempts(spark, bronze, private, SEEDS, LOAD_DATE)
+
+    row = _by_key(df, study="p3-agent", item_id="s01", arm="gpt", attempt_kind="scored")
+    assert row["latency_ms"] == 3000.0
+    assert row["tool_call_accuracy"] == 5.0
