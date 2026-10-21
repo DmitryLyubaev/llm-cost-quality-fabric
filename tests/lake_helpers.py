@@ -15,21 +15,28 @@ FIGURES = str(LAKE_FIXTURE / "published_figures.csv")
 LOAD_DATE = date(2026, 10, 21)
 
 
-def make_lake(root: Path) -> tuple[LakePaths, str, str]:
-    """A lake under `root` with the fixture bronze tree; return (paths, private_root, seeds_dir).
+def make_lake(root: Path) -> tuple[LakePaths, str]:
+    """A lake under `root` with the fixture bronze tree and private extracts; return (paths, seeds_dir).
 
     The seeds are a copy of the real ones, except that published_figures.csv holds the fixture's
     own figures (the real figures describe the real data).
     """
-    paths = LakePaths(str(root / "lake"))
+    paths = LakePaths.local(str(root / "lake"))
     shutil.copytree(LAKE_FIXTURE / "bronze", paths.bronze)
-    private = root / "private_in"
-    shutil.copytree(LAKE_FIXTURE / "private", private)
+    shutil.copytree(LAKE_FIXTURE / "private", paths.private)
     seeds = root / "seeds"
     shutil.copytree(ROOT / "seeds", seeds)
     shutil.copyfile(FIGURES, seeds / "published_figures.csv")
-    return paths, str(private), str(seeds)
+    return paths, str(seeds)
 
 
-def run(spark, paths, private, seeds, export=COST_FIXTURE, load_date=LOAD_DATE, **options):
-    return run_load(spark, paths, seeds, private, str(export), load_date, **options)
+def copy_lake(paths: LakePaths, target: Path) -> LakePaths:
+    """A copy of a local lake's tables and files under `target`, to run against again."""
+    copy = LakePaths.local(str(target))
+    shutil.copytree(paths.tables_root, copy.tables_root)
+    shutil.copytree(paths.files_root, copy.files_root)
+    return copy
+
+
+def run(spark, paths, seeds, export=COST_FIXTURE, load_date=LOAD_DATE, **options):
+    return run_load(spark, paths, seeds, str(export), load_date, **options)

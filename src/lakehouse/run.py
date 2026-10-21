@@ -73,7 +73,6 @@ def _build(
     spark: SparkSession,
     paths: LakePaths,
     seeds_dir: str,
-    private_root: str,
     export: DataFrame,
     load_date: date,
 ) -> dict[str, int]:
@@ -94,7 +93,7 @@ def _build(
     for month in sorted(months):
         replace_month(spark, costs.where(F.col("billing_month") == month), paths.table("silver", "daily_cost"), month)
 
-    attempts = build_eval_attempts(spark, paths.bronze, private_root, seeds_dir, load_date)
+    attempts = build_eval_attempts(spark, paths.bronze, paths.private, seeds_dir, load_date)
     merge_eval_attempts(spark, attempts, paths.table("silver", "eval_attempts"))
 
     changes = read_deployment_changes(spark, f"{seeds_dir}/deployment_changes.csv")
@@ -132,7 +131,6 @@ def run_load(
     spark: SparkSession,
     paths: LakePaths,
     seeds_dir: str,
-    private_root: str,
     cost_export_path: str,
     load_date: date,
     *,
@@ -163,7 +161,7 @@ def run_load(
         )
     export = _read_export(spark, cost_export_path)
 
-    row_counts = _build(spark, paths, seeds_dir, private_root, export, load_date)
+    row_counts = _build(spark, paths, seeds_dir, export, load_date)
     fingerprint = gold_fingerprint(spark, paths)
     previous = _previous_fingerprint(spark, log_path, load_date)
 

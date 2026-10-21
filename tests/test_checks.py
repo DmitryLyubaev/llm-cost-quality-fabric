@@ -1,5 +1,4 @@
 import csv
-import shutil
 from datetime import UTC, date, datetime
 
 import pytest
@@ -21,7 +20,7 @@ from lakehouse.gold.fingerprint import gold_fingerprint, table_fingerprint
 from lakehouse.paths import LakePaths
 from lakehouse.silver.costs import read_cost_export
 
-from lake_helpers import COST_FIXTURE, FIGURES, ROOT, SEEDS
+from lake_helpers import COST_FIXTURE, FIGURES, ROOT, SEEDS, copy_lake
 
 
 @pytest.fixture
@@ -30,10 +29,7 @@ def good(loaded_lake):
 
 
 def _copy_lake(good, tmp_path) -> LakePaths:
-    paths = good[0]
-    target = tmp_path / "lake"
-    shutil.copytree(paths.root, target)
-    return LakePaths(str(target))
+    return copy_lake(good[0], tmp_path / "lake")
 
 
 def _export(spark):
@@ -41,7 +37,7 @@ def _export(spark):
 
 
 def test_each_check_passes_on_good_data(spark, good):
-    paths, _, _, summary = good
+    paths, _, summary = good
     export = _export(spark)
 
     results = [
