@@ -1,0 +1,451 @@
+{
+  "run_id": "p1-run-0001",
+  "started_at": "2026-01-01T00:00:00Z",
+  "arms": [
+    {
+      "name": "arm-a",
+      "base_url": "https://api.example.invalid/a",
+      "expected_provider": "prov-a"
+    },
+    {
+      "name": "arm-b",
+      "base_url": "https://api.example.invalid/b",
+      "expected_provider": "prov-b"
+    },
+    {
+      "name": "arm-c",
+      "base_url": "https://api.example.invalid/c",
+      "expected_provider": "prov-c"
+    }
+  ],
+  "arm_summaries": [
+    {
+      "arm": "arm-a",
+      "models_seen": [
+        "model-arm-a"
+      ]
+    },
+    {
+      "arm": "arm-b",
+      "models_seen": [
+        "model-arm-b"
+      ]
+    },
+    {
+      "arm": "arm-c",
+      "models_seen": [
+        "model-arm-c"
+      ]
+    }
+  ],
+  "outcomes": [
+    {
+      "id": "q-001",
+      "arm": "arm-a",
+      "pass_index": 1,
+      "category": "cat-x",
+      "question": "Synthetic question q-001?",
+      "answer": "Synthetic answer 1.",
+      "citations": [
+        "doc-1"
+      ],
+      "citation_recall": 0.5,
+      "citation_precision": 0.5,
+      "groundedness": 0.612,
+      "groundedness_reason": "Synthetic reason text.",
+      "must_contain_satisfied": false,
+      "must_not_contain_satisfied": true,
+      "unanswerable_handled": null,
+      "latency_ms": 1010,
+      "cost_usd": 0.001,
+      "judge_cost_usd": 0.0005,
+      "tokens_in": 101,
+      "tokens_out": 51,
+      "cache_read_input_tokens": 10,
+      "degraded": false,
+      "unresolved_citation_markers": [],
+      "provider": "prov-a",
+      "providers": [
+        "prov-a"
+      ],
+      "model": "model-arm-a",
+      "filtered_stage": null,
+      "error": null,
+      "no_reply": false
+    },
+    {
+      "id": "q-001",
+      "arm": "arm-a",
+      "pass_index": 2,
+      "category": "cat-x",
+      "question": "Synthetic question q-001?",
+      "answer": "Synthetic answer 2.",
+      "citations": [
+        "doc-2"
+      ],
+      "citation_recall": 0.5,
+      "citation_precision": 0.6,
+      "groundedness": 0.625,
+      "groundedness_reason": "Synthetic reason text.",
+      "must_contain_satisfied": true,
+      "must_not_contain_satisfied": true,
+      "unanswerable_handled": null,
+      "latency_ms": 1020,
+      "cost_usd": 0.002,
+      "judge_cost_usd": 0.001,
+      "tokens_in": 102,
+      "tokens_out": 52,
+      "cache_read_input_tokens": 20,
+      "degraded": false,
+      "unresolved_citation_markers": [],
+      "provider": "prov-a",
+      "providers": [
+        "prov-a"
+      ],
+      "model": "model-arm-a",
+      "filtered_stage": null,
+      "error": null,
+      "no_reply": false
+    },
+    {
+      "id": "q-001",
+      "arm": "arm-b",
+      "pass_index": 1,
+      "category": "cat-x",
+      "question": "Synthetic question q-001?",
+      "answer": "Synthetic answer 3.",
+      "citations": [
+        "doc-3"
+      ],
+      "citation_recall": 0.6,
+      "citation_precision": 0.5,
+      "groundedness": 0.637,
+      "groundedness_reason": "Synthetic reason text.",
+      "must_contain_satisfied": false,
+      "must_not_contain_satisfied": true,
+      "unanswerable_handled": null,
+      "latency_ms": 1030,
+      "cost_usd": 0.003,
+      "judge_cost_usd": 0.0015,
+      "tokens_in": 103,
+      "tokens_out": 53,
+      "cache_read_input_tokens": 30,
+      "degraded": false,
+      "unresolved_citation_markers": [],
+      "provider": "prov-b",
+      "providers": [
+        "prov-b"
+      ],
+      "model": "model-arm-b",
+      "filtered_stage": null,
+      "error": null,
+      "no_reply": false
+    },
+    {
+      "id": "q-001",
+      "arm": "arm-b",
+      "pass_index": 2,
+      "category": "cat-x",
+      "question": "Synthetic question q-001?",
+      "answer": "Synthetic answer 4.",
+      "citations": [
+        "doc-4"
+      ],
+      "citation_recall": 0.6,
+      "citation_precision": 0.6,
+      "groundedness": 0.65,
+      "groundedness_reason": "Synthetic reason text.",
+      "must_contain_satisfied": true,
+      "must_not_contain_satisfied": true,
+      "unanswerable_handled": null,
+      "latency_ms": 1040,
+      "cost_usd": 0.004,
+      "judge_cost_usd": 0.002,
+      "tokens_in": 104,
+      "tokens_out": 54,
+      "cache_read_input_tokens": 40,
+      "degraded": false,
+      "unresolved_citation_markers": [],
+      "provider": "prov-b",
+      "providers": [
+        "prov-b"
+      ],
+      "model": "model-arm-b",
+      "filtered_stage": null,
+      "error": null,
+      "no_reply": false
+    },
+    {
+      "id": "q-001",
+      "arm": "arm-c",
+      "pass_index": 1,
+      "category": "cat-x",
+      "question": "Synthetic question q-001?",
+      "answer": "Synthetic answer 5.",
+      "citations": [
+        "doc-5"
+      ],
+      "citation_recall": 0.7,
+      "citation_precision": 0.5,
+      "groundedness": 0.662,
+      "groundedness_reason": "Synthetic reason text.",
+      "must_contain_satisfied": false,
+      "must_not_contain_satisfied": true,
+      "unanswerable_handled": null,
+      "latency_ms": 1050,
+      "cost_usd": 0.005,
+      "judge_cost_usd": 0.0025,
+      "tokens_in": 105,
+      "tokens_out": 55,
+      "cache_read_input_tokens": 50,
+      "degraded": false,
+      "unresolved_citation_markers": [],
+      "provider": "prov-c",
+      "providers": [
+        "prov-c"
+      ],
+      "model": "model-arm-c",
+      "filtered_stage": null,
+      "error": null,
+      "no_reply": false
+    },
+    {
+      "id": "q-001",
+      "arm": "arm-c",
+      "pass_index": 2,
+      "category": "cat-x",
+      "question": "Synthetic question q-001?",
+      "answer": "Synthetic answer 6.",
+      "citations": [
+        "doc-6"
+      ],
+      "citation_recall": 0.7,
+      "citation_precision": 0.6,
+      "groundedness": 0.675,
+      "groundedness_reason": "Synthetic reason text.",
+      "must_contain_satisfied": true,
+      "must_not_contain_satisfied": true,
+      "unanswerable_handled": null,
+      "latency_ms": 1060,
+      "cost_usd": 0.006,
+      "judge_cost_usd": 0.003,
+      "tokens_in": 106,
+      "tokens_out": 56,
+      "cache_read_input_tokens": 60,
+      "degraded": false,
+      "unresolved_citation_markers": [],
+      "provider": "prov-c",
+      "providers": [
+        "prov-c"
+      ],
+      "model": "model-arm-c",
+      "filtered_stage": null,
+      "error": null,
+      "no_reply": false
+    },
+    {
+      "id": "q-002",
+      "arm": "arm-a",
+      "pass_index": 1,
+      "category": "cat-x",
+      "question": "Synthetic question q-002?",
+      "answer": "Synthetic answer 7.",
+      "citations": [
+        "doc-7"
+      ],
+      "citation_recall": 0.5,
+      "citation_precision": 0.5,
+      "groundedness": 0.688,
+      "groundedness_reason": "Synthetic reason text.",
+      "must_contain_satisfied": false,
+      "must_not_contain_satisfied": true,
+      "unanswerable_handled": null,
+      "latency_ms": 1070,
+      "cost_usd": 0.007,
+      "judge_cost_usd": 0.0035,
+      "tokens_in": 107,
+      "tokens_out": 57,
+      "cache_read_input_tokens": 70,
+      "degraded": false,
+      "unresolved_citation_markers": [],
+      "provider": "prov-a",
+      "providers": [
+        "prov-a"
+      ],
+      "model": "model-arm-a",
+      "filtered_stage": null,
+      "error": null,
+      "no_reply": false
+    },
+    {
+      "id": "q-002",
+      "arm": "arm-a",
+      "pass_index": 2,
+      "category": "cat-x",
+      "question": "Synthetic question q-002?",
+      "answer": "Synthetic answer 8.",
+      "citations": [
+        "doc-8"
+      ],
+      "citation_recall": 0.5,
+      "citation_precision": 0.6,
+      "groundedness": 0.7,
+      "groundedness_reason": "Synthetic reason text.",
+      "must_contain_satisfied": true,
+      "must_not_contain_satisfied": true,
+      "unanswerable_handled": null,
+      "latency_ms": 1080,
+      "cost_usd": 0.008,
+      "judge_cost_usd": 0.004,
+      "tokens_in": 108,
+      "tokens_out": 58,
+      "cache_read_input_tokens": 80,
+      "degraded": false,
+      "unresolved_citation_markers": [],
+      "provider": "prov-a",
+      "providers": [
+        "prov-a"
+      ],
+      "model": "model-arm-a",
+      "filtered_stage": null,
+      "error": null,
+      "no_reply": false
+    },
+    {
+      "id": "q-002",
+      "arm": "arm-b",
+      "pass_index": 1,
+      "category": "cat-x",
+      "question": "Synthetic question q-002?",
+      "answer": "Synthetic answer 9.",
+      "citations": [
+        "doc-9"
+      ],
+      "citation_recall": 0.6,
+      "citation_precision": 0.5,
+      "groundedness": 0.713,
+      "groundedness_reason": "Synthetic reason text.",
+      "must_contain_satisfied": false,
+      "must_not_contain_satisfied": true,
+      "unanswerable_handled": null,
+      "latency_ms": 1090,
+      "cost_usd": 0.009,
+      "judge_cost_usd": 0.0045,
+      "tokens_in": 109,
+      "tokens_out": 59,
+      "cache_read_input_tokens": 90,
+      "degraded": false,
+      "unresolved_citation_markers": [],
+      "provider": "prov-b",
+      "providers": [
+        "prov-b"
+      ],
+      "model": "model-arm-b",
+      "filtered_stage": null,
+      "error": null,
+      "no_reply": false
+    },
+    {
+      "id": "q-002",
+      "arm": "arm-b",
+      "pass_index": 2,
+      "category": "cat-x",
+      "question": "Synthetic question q-002?",
+      "answer": "Synthetic answer 10.",
+      "citations": [
+        "doc-10"
+      ],
+      "citation_recall": 0.6,
+      "citation_precision": 0.6,
+      "groundedness": 0.725,
+      "groundedness_reason": "Synthetic reason text.",
+      "must_contain_satisfied": true,
+      "must_not_contain_satisfied": true,
+      "unanswerable_handled": null,
+      "latency_ms": 1100,
+      "cost_usd": 0.01,
+      "judge_cost_usd": 0.005,
+      "tokens_in": 110,
+      "tokens_out": 60,
+      "cache_read_input_tokens": 100,
+      "degraded": false,
+      "unresolved_citation_markers": [],
+      "provider": "prov-b",
+      "providers": [
+        "prov-b"
+      ],
+      "model": "model-arm-b",
+      "filtered_stage": null,
+      "error": null,
+      "no_reply": false
+    },
+    {
+      "id": "q-002",
+      "arm": "arm-c",
+      "pass_index": 1,
+      "category": "cat-x",
+      "question": "Synthetic question q-002?",
+      "answer": "Synthetic answer 11.",
+      "citations": [
+        "doc-11"
+      ],
+      "citation_recall": 0.7,
+      "citation_precision": 0.5,
+      "groundedness": 0.738,
+      "groundedness_reason": "Synthetic reason text.",
+      "must_contain_satisfied": false,
+      "must_not_contain_satisfied": true,
+      "unanswerable_handled": null,
+      "latency_ms": 1110,
+      "cost_usd": 0.011,
+      "judge_cost_usd": 0.0055,
+      "tokens_in": 111,
+      "tokens_out": 61,
+      "cache_read_input_tokens": 110,
+      "degraded": false,
+      "unresolved_citation_markers": [],
+      "provider": "prov-c",
+      "providers": [
+        "prov-c"
+      ],
+      "model": "model-arm-c",
+      "filtered_stage": null,
+      "error": null,
+      "no_reply": false
+    },
+    {
+      "id": "q-002",
+      "arm": "arm-c",
+      "pass_index": 2,
+      "category": "cat-x",
+      "question": "Synthetic question q-002?",
+      "answer": null,
+      "citations": [
+        "doc-12"
+      ],
+      "citation_recall": 0.7,
+      "citation_precision": 0.6,
+      "groundedness": 0.75,
+      "groundedness_reason": "Synthetic reason text.",
+      "must_contain_satisfied": true,
+      "must_not_contain_satisfied": true,
+      "unanswerable_handled": null,
+      "latency_ms": 1120,
+      "cost_usd": 0.012,
+      "judge_cost_usd": 0.006,
+      "tokens_in": 112,
+      "tokens_out": 62,
+      "cache_read_input_tokens": 120,
+      "degraded": false,
+      "unresolved_citation_markers": [],
+      "provider": "prov-c",
+      "providers": [
+        "prov-c"
+      ],
+      "model": "model-arm-c",
+      "filtered_stage": null,
+      "error": null,
+      "no_reply": true
+    }
+  ]
+}

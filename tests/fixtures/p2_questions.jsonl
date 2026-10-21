@@ -1,0 +1,3 @@
+{"qid": "r-001", "question": "Synthetic retrieval question one?", "target": "art-t1", "entity_type": "type-a"}
+{"qid": "r-002", "question": "Synthetic retrieval question two?", "target": "art-t2", "entity_type": "type-b"}
+{"qid": "r-003", "question": "Synthetic retrieval question three?", "target": "art-t3", "entity_type": "type-a"}

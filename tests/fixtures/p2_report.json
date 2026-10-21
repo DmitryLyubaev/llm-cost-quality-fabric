@@ -1,0 +1,274 @@
+{
+  "run_id": "p2-run-0001",
+  "started_at": "2026-01-02T00:00:00Z",
+  "finished_at": "2026-01-02T00:05:00Z",
+  "questions": {
+    "count": 3,
+    "file": "synthetic"
+  },
+  "deployments": {
+    "embed": "synthetic-deployment"
+  },
+  "search": {
+    "index": "synthetic-index",
+    "api_version": "0000-00-00",
+    "endpoint": "https://search.example.invalid"
+  },
+  "results": [
+    {
+      "qid": "r-001",
+      "arm": "E1",
+      "hits": [
+        {
+          "chunk_id": "c-x1-0-0000-0000-0000-000000000000",
+          "artefact": "art-x1",
+          "score": 1.0
+        },
+        {
+          "chunk_id": "c-x2-1-0000-0000-0000-000000000000",
+          "artefact": "art-x2",
+          "score": 0.9
+        },
+        {
+          "chunk_id": "c-t1-2-0000-0000-0000-000000000000",
+          "artefact": "art-t1",
+          "score": 0.8
+        },
+        {
+          "chunk_id": "c-x3-3-0000-0000-0000-000000000000",
+          "artefact": "art-x3",
+          "score": 0.7
+        },
+        {
+          "chunk_id": "c-x4-4-0000-0000-0000-000000000000",
+          "artefact": "art-x4",
+          "score": 0.6
+        }
+      ],
+      "ms": 110,
+      "error": null,
+      "query_tokens": 12
+    },
+    {
+      "qid": "r-001",
+      "arm": "S1",
+      "hits": [
+        {
+          "chunk_id": "c-t1-0-0000-0000-0000-000000000000",
+          "artefact": "art-t1",
+          "score": 1.0
+        },
+        {
+          "chunk_id": "c-x2-1-0000-0000-0000-000000000000",
+          "artefact": "art-x2",
+          "score": 0.9
+        },
+        {
+          "chunk_id": "c-x3-2-0000-0000-0000-000000000000",
+          "artefact": "art-x3",
+          "score": 0.8
+        },
+        {
+          "chunk_id": "c-x4-3-0000-0000-0000-000000000000",
+          "artefact": "art-x4",
+          "score": 0.7
+        },
+        {
+          "chunk_id": "c-x5-4-0000-0000-0000-000000000000",
+          "artefact": "art-x5",
+          "score": 0.6
+        }
+      ],
+      "ms": 120,
+      "error": null,
+      "query_tokens": 12
+    },
+    {
+      "qid": "r-002",
+      "arm": "E1",
+      "hits": [
+        {
+          "chunk_id": "c-t2-0-0000-0000-0000-000000000000",
+          "artefact": "art-t2",
+          "score": 1.0
+        },
+        {
+          "chunk_id": "c-x2-1-0000-0000-0000-000000000000",
+          "artefact": "art-x2",
+          "score": 0.9
+        },
+        {
+          "chunk_id": "c-x3-2-0000-0000-0000-000000000000",
+          "artefact": "art-x3",
+          "score": 0.8
+        },
+        {
+          "chunk_id": "c-x4-3-0000-0000-0000-000000000000",
+          "artefact": "art-x4",
+          "score": 0.7
+        },
+        {
+          "chunk_id": "c-x5-4-0000-0000-0000-000000000000",
+          "artefact": "art-x5",
+          "score": 0.6
+        }
+      ],
+      "ms": 130,
+      "error": null,
+      "query_tokens": 12
+    },
+    {
+      "qid": "r-002",
+      "arm": "S1",
+      "hits": [
+        {
+          "chunk_id": "c-x1-0-0000-0000-0000-000000000000",
+          "artefact": "art-x1",
+          "score": 1.0
+        },
+        {
+          "chunk_id": "c-t2-1-0000-0000-0000-000000000000",
+          "artefact": "art-t2",
+          "score": 0.9
+        },
+        {
+          "chunk_id": "c-x3-2-0000-0000-0000-000000000000",
+          "artefact": "art-x3",
+          "score": 0.8
+        },
+        {
+          "chunk_id": "c-x4-3-0000-0000-0000-000000000000",
+          "artefact": "art-x4",
+          "score": 0.7
+        },
+        {
+          "chunk_id": "c-x5-4-0000-0000-0000-000000000000",
+          "artefact": "art-x5",
+          "score": 0.6
+        }
+      ],
+      "ms": 140,
+      "error": null,
+      "query_tokens": 12
+    },
+    {
+      "qid": "r-003",
+      "arm": "E1",
+      "hits": [
+        {
+          "chunk_id": "c-x1-0-0000-0000-0000-000000000000",
+          "artefact": "art-x1",
+          "score": 1.0
+        },
+        {
+          "chunk_id": "c-x2-1-0000-0000-0000-000000000000",
+          "artefact": "art-x2",
+          "score": 0.9
+        },
+        {
+          "chunk_id": "c-x3-2-0000-0000-0000-000000000000",
+          "artefact": "art-x3",
+          "score": 0.8
+        },
+        {
+          "chunk_id": "c-x4-3-0000-0000-0000-000000000000",
+          "artefact": "art-x4",
+          "score": 0.7
+        },
+        {
+          "chunk_id": "c-x5-4-0000-0000-0000-000000000000",
+          "artefact": "art-x5",
+          "score": 0.6
+        }
+      ],
+      "ms": 150,
+      "error": null,
+      "query_tokens": 12
+    },
+    {
+      "qid": "r-003",
+      "arm": "S1",
+      "hits": [
+        {
+          "chunk_id": "c-x1-0-0000-0000-0000-000000000000",
+          "artefact": "art-x1",
+          "score": 1.0
+        },
+        {
+          "chunk_id": "c-x2-1-0000-0000-0000-000000000000",
+          "artefact": "art-x2",
+          "score": 0.9
+        },
+        {
+          "chunk_id": "c-x3-2-0000-0000-0000-000000000000",
+          "artefact": "art-x3",
+          "score": 0.8
+        },
+        {
+          "chunk_id": "c-x4-3-0000-0000-0000-000000000000",
+          "artefact": "art-x4",
+          "score": 0.7
+        },
+        {
+          "chunk_id": "c-x5-4-0000-0000-0000-000000000000",
+          "artefact": "art-x5",
+          "score": 0.6
+        }
+      ],
+      "ms": 160,
+      "error": null,
+      "query_tokens": 15
+    }
+  ],
+  "repeat": [
+    {
+      "qid": "r-001",
+      "arm": "E1",
+      "hits": [
+        {
+          "chunk_id": "c-x1-0-0000-0000-0000-000000000000",
+          "artefact": "art-x1",
+          "score": 1.0
+        },
+        {
+          "chunk_id": "c-x2-1-0000-0000-0000-000000000000",
+          "artefact": "art-x2",
+          "score": 0.9
+        },
+        {
+          "chunk_id": "c-t1-2-0000-0000-0000-000000000000",
+          "artefact": "art-t1",
+          "score": 0.8
+        },
+        {
+          "chunk_id": "c-x3-3-0000-0000-0000-000000000000",
+          "artefact": "art-x3",
+          "score": 0.7
+        },
+        {
+          "chunk_id": "c-x4-4-0000-0000-0000-000000000000",
+          "artefact": "art-x4",
+          "score": 0.6
+        }
+      ],
+      "ms": 115,
+      "error": null,
+      "query_tokens": 12
+    }
+  ],
+  "analysis": {
+    "arms": {
+      "E1": {
+        "n": 3,
+        "top1": 0.3333,
+        "mrr": 0.4444
+      },
+      "S1": {
+        "n": 3,
+        "top1": 0.3333,
+        "mrr": 0.3889
+      }
+    },
+    "rates": {}
+  }
+}
