@@ -1,0 +1,1 @@
+"""Offline-testable lakehouse package."""
