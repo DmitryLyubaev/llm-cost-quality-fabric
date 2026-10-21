@@ -188,6 +188,7 @@ def test_reapply_is_noop(spark, tmp_path):
     metrics = _merge_metrics(spark, table)
     assert int(metrics["numTargetRowsInserted"]) == 0
     assert int(metrics["numTargetRowsUpdated"]) == 0
+    assert int(metrics["numTargetRowsDeleted"]) == 0
     assert spark.read.format("delta").load(table).count() == 5
 
 
@@ -240,3 +241,45 @@ def test_committed_seed_resolves_every_dim_arm_deployment(spark):
     assert current[("fwa", "claude-haiku-4-5")]["model_version"] == "2"
     assert current[("rl-primary", "releaselens-chat")]["capacity"] == 300
     assert current[("rl-primary", "releaselens-chat-failover-test")]["capacity"] == 1
+
+
+def _table_equals_computed(spark, table, changes):
+    stored = _text(spark.read.format("delta").load(table)).orderBy("deployment_sk").collect()
+    computed = _text(scd2_rows(changes, SEEDS)).orderBy("deployment_sk").collect()
+    assert stored == computed
+
+
+def test_changed_override_replaces_the_old_version(spark, tmp_path):
+    table = str(tmp_path / "silver" / "dim_model_deployment")
+    first = _change("2026-09-27T00:00:00+00:00", 100)
+    second = _change("2026-10-02T00:00:00+00:00", 300)
+    apply_scd2(spark, _changes(spark, first, second), table, SEEDS)
+
+    moved = _change("2026-10-02T00:00:00+00:00", 300, override="2026-09-30T00:00:00+00:00")
+    changes = _changes(spark, first, moved)
+    apply_scd2(spark, changes, table, SEEDS)
+
+    metrics = _merge_metrics(spark, table)
+    assert int(metrics["numTargetRowsInserted"]) == 1
+    assert int(metrics["numTargetRowsUpdated"]) == 1  # the first version now ends earlier
+    assert int(metrics["numTargetRowsDeleted"]) == 1  # the version at the old time
+    rows = _azure(spark.read.format("delta").load(table))
+    assert [r["valid_from"] for r in rows] == [_utc(2026, 9, 27), _utc(2026, 9, 30)]
+    assert rows[0]["valid_to"] == _utc(2026, 9, 30)
+    _table_equals_computed(spark, table, changes)
+
+
+def test_corrected_attribute_updates_the_row_in_place(spark, tmp_path):
+    table = str(tmp_path / "silver" / "dim_model_deployment")
+    first = _change("2026-09-27T00:00:00+00:00", 100)
+    apply_scd2(spark, _changes(spark, first, _change("2026-10-02T00:00:00+00:00", 300)), table, SEEDS)
+
+    changes = _changes(spark, first, _change("2026-10-02T00:00:00+00:00", 350))
+    apply_scd2(spark, changes, table, SEEDS)
+
+    metrics = _merge_metrics(spark, table)
+    assert int(metrics["numTargetRowsUpdated"]) == 1
+    assert int(metrics["numTargetRowsInserted"]) == 0
+    assert int(metrics["numTargetRowsDeleted"]) == 0
+    assert [r["capacity"] for r in _azure(spark.read.format("delta").load(table))] == [100, 350]
+    _table_equals_computed(spark, table, changes)

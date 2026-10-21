@@ -156,24 +156,24 @@ def _check(df: DataFrame) -> None:
 
 
 def apply_scd2(spark: SparkSession, changes: DataFrame, table_path: str, seeds_dir: str = SEEDS_DIR) -> None:
-    """MERGE the versions of `changes` into the Delta table at `table_path` (created if absent).
+    """Make the Delta table at `table_path` exactly equal to `scd2_rows(changes)` (created if absent).
 
-    A matched version only ever changes `valid_to` and `is_current` (a later change closed it);
-    an unmatched one is inserted. Re-applying the same changes therefore writes no row.
+    One MERGE on `deployment_sk`: a matched version is updated (every column) only when some
+    column differs, null-safe; an unmatched one is inserted; a table row the changes no longer
+    produce (an override moved its `valid_from`, so its sk changed) is deleted. Re-applying the
+    same changes therefore inserts, updates and deletes nothing.
     """
     df = scd2_rows(changes, seeds_dir)
     _check(df)
     if not DeltaTable.isDeltaTable(spark, table_path):
         df.write.format("delta").save(table_path)
         return
-    changed = "NOT (t.valid_to <=> s.valid_to) OR NOT (t.is_current <=> s.is_current)"
+    changed = " OR ".join(f"NOT (t.{c} <=> s.{c})" for c in DIM_COLUMNS if c != "deployment_sk")
     (
         DeltaTable.forPath(spark, table_path).alias("t")
         .merge(df.alias("s"), "t.deployment_sk <=> s.deployment_sk")
-        .whenMatchedUpdate(
-            condition=changed,
-            set={"valid_to": "s.valid_to", "is_current": "s.is_current"},
-        )
+        .whenMatchedUpdateAll(condition=changed)
         .whenNotMatchedInsertAll()
+        .whenNotMatchedBySourceDelete()
         .execute()
     )
