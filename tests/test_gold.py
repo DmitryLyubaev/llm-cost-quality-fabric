@@ -367,6 +367,10 @@ def test_live_checks_seed_valid():
         if row["measured_value"]:
             float(row["measured_value"])
         assert not re.search(r"https?://|[0-9a-f]{8}-[0-9a-f]{4}-", " ".join(row.values()), re.I)
+    # the functions report's first T2/T3 attempt ("no response") is kept as not-run
+    verdicts = {(r["project"], r["session"], r["check_id"]): r["verdict"] for r in rows}
+    assert verdicts[("p5", "run-9748b95", "T2")] == "not-run"
+    assert verdicts[("p5", "run-9748b95", "T3")] == "not-run"
     # every report contributes rows, and failures are kept
     assert {r["source_report"] for r in rows} == allowed_reports
     assert {r["verdict"] for r in rows} == {"pass", "fail", "not-run"}

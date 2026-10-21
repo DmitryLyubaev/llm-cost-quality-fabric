@@ -70,26 +70,30 @@ DIM_COLUMNS = DIM_SCHEMA.fieldNames()
 _SK_TIME = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'"  # valid_from as UTC text; the session is UTC
 
 
-def read_deployment_changes(spark: SparkSession, path: str) -> DataFrame:
-    """The change seed, read with CHANGES_SCHEMA; a malformed row or header fails the read."""
+def read_seed(spark: SparkSession, path: str, schema: StructType) -> DataFrame:
+    """A seed CSV read strictly with `schema`: a malformed row or a header mismatch fails the read."""
     return (
         spark.read.option("header", True)
         .option("mode", "FAILFAST")
         .option("enforceSchema", False)
-        .schema(CHANGES_SCHEMA)
+        .schema(schema)
         .csv(path)
     )
 
 
+def read_dim_arm(spark: SparkSession, seeds_dir: str) -> DataFrame:
+    """`seeds/dim_arm.csv` (all columns strings), read strictly."""
+    return read_seed(spark, f"{seeds_dir}/dim_arm.csv", _DIM_ARM_SCHEMA)
+
+
+def read_deployment_changes(spark: SparkSession, path: str) -> DataFrame:
+    """The change seed, read with CHANGES_SCHEMA; a malformed row or header fails the read."""
+    return read_seed(spark, path, CHANGES_SCHEMA)
+
+
 def _members(spark: SparkSession, seeds_dir: str) -> DataFrame:
     """One open row per external model in dim_arm, plus the no-model member."""
-    dim_arm = (
-        spark.read.option("header", True)
-        .option("mode", "FAILFAST")
-        .option("enforceSchema", False)
-        .schema(_DIM_ARM_SCHEMA)
-        .csv(f"{seeds_dir}/dim_arm.csv")
-    )
+    dim_arm = read_dim_arm(spark, seeds_dir)
     external = (
         dim_arm.where(F.col("account_alias") == EXTERNAL_ALIAS)
         .select(

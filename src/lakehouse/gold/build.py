@@ -18,6 +18,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import DateType, DoubleType, StringType, StructField, StructType
 
 from lakehouse.paths import LakePaths
+from lakehouse.silver.deployments import read_dim_arm, read_seed
 from lakehouse.silver.eval_attempts import EVAL_COLUMNS, EVAL_KEY
 
 DATE_FROM = date(2026, 9, 1)  # the lakehouse covers the portfolio from September 2026
@@ -66,10 +67,6 @@ PROJECTS = [
     ("untagged", "Untagged spend"),
 ]
 
-_DIM_ARM_SCHEMA = StructType(
-    [StructField(name, StringType()) for name in
-     ("study", "arm", "label", "account_alias", "deployment_name", "model")]
-)
 _LIVE_CHECK_SCHEMA = StructType(
     [
         StructField("project", StringType()),
@@ -83,16 +80,6 @@ _LIVE_CHECK_SCHEMA = StructType(
         StructField("source_sha", StringType()),
     ]
 )
-
-
-def _read_seed(spark: SparkSession, path: str, schema: StructType) -> DataFrame:
-    return (
-        spark.read.option("header", True)
-        .option("mode", "FAILFAST")
-        .option("enforceSchema", False)
-        .schema(schema)
-        .csv(path)
-    )
 
 
 def _silver(spark: SparkSession, path: str) -> DataFrame:
@@ -179,8 +166,8 @@ def build_gold(spark: SparkSession, paths: LakePaths, seeds_dir: str) -> dict[st
     attempts = _silver(spark, paths.table("silver", "eval_attempts"))
     costs = _silver(spark, paths.table("silver", "daily_cost"))
     deployments = _silver(spark, paths.table("silver", "model_deployment"))
-    dim_arm = _read_seed(spark, f"{seeds_dir}/dim_arm.csv", _DIM_ARM_SCHEMA)
-    checks = _read_seed(spark, f"{seeds_dir}/live_checks.csv", _LIVE_CHECK_SCHEMA)
+    dim_arm = read_dim_arm(spark, seeds_dir)
+    checks = read_seed(spark, f"{seeds_dir}/live_checks.csv", _LIVE_CHECK_SCHEMA)
 
     bad = [r["verdict"] for r in checks.where(~F.col("verdict").isin(*VERDICTS)).distinct().collect()]
     if bad:
