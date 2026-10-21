@@ -1,0 +1,87 @@
+import subprocess
+import sys
+import zipfile
+from datetime import date
+from pathlib import Path
+
+import pytest
+from pyspark.sql.types import DateType, DoubleType, LongType, StringType, StructField, StructType
+
+from lakehouse.seeding import SEEDS_DIR, read_seed_rows, seed_df
+
+SCHEMA = StructType(
+    [
+        StructField("name", StringType()),
+        StructField("count", LongType()),
+        StructField("rate", DoubleType()),
+        StructField("day", DateType()),
+    ]
+)
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _seed(tmp_path, text, name="things.csv"):
+    (tmp_path / name).write_text(text, encoding="utf-8", newline="")
+    return str(tmp_path)
+
+
+def test_seed_df_matches_schema(spark, tmp_path):
+    seeds = _seed(tmp_path, 'name,count,rate,day\na,3,0.5,2026-10-09\n"b, c",,,\n')
+
+    df = seed_df(spark, seeds, "things.csv", SCHEMA)
+
+    assert df.schema == SCHEMA
+    rows = [tuple(r) for r in df.orderBy("name").collect()]
+    assert rows == [("a", 3, 0.5, date(2026, 10, 9)), ("b, c", None, None, None)]
+
+
+def test_seed_df_bad_value_names_row_and_column(spark, tmp_path):
+    seeds = _seed(tmp_path, "name,count,rate,day\na,1,0.5,2026-10-09\nb,two,0.5,2026-10-09\n")
+
+    with pytest.raises(ValueError, match=r"things\.csv.*row 2.*column 'count'.*'two'"):
+        seed_df(spark, seeds, "things.csv", SCHEMA)
+
+
+def test_header_mismatch_raises(spark, tmp_path):
+    seeds = _seed(tmp_path, "name,rate,count,day\na,0.5,1,2026-10-09\n")
+
+    with pytest.raises(ValueError, match=r"things\.csv.*header"):
+        seed_df(spark, seeds, "things.csv", SCHEMA)
+
+
+def test_read_seed_rows_rejects_wrong_field_count(tmp_path):
+    seeds = _seed(tmp_path, "a,b\n1,2\n3\n")
+
+    with pytest.raises(ValueError, match=r"things\.csv.*row 2"):
+        read_seed_rows(seeds, "things.csv")
+
+
+def test_read_seed_rows_rejects_empty_file(tmp_path):
+    seeds = _seed(tmp_path, "")
+
+    with pytest.raises(ValueError, match=r"things\.csv.*header"):
+        read_seed_rows(seeds, "things.csv")
+
+
+def test_packaged_seeds_dir_holds_the_seeds():
+    names = {p.name for p in Path(SEEDS_DIR).iterdir()}
+
+    assert {"dim_arm.csv", "ingest_manifest.json", "rg_rules.csv"} <= names
+    assert Path(SEEDS_DIR).parts[-2:] == ("lakehouse", "seeds")
+
+
+def test_wheel_contains_seeds(tmp_path):
+    out = tmp_path / "dist"
+    args = [sys.executable, "-m", "build", "--wheel", "--outdir", str(out), str(ROOT)]
+    result = subprocess.run(args, capture_output=True, text=True)
+    if result.returncode != 0:  # build isolation needs the network for setuptools
+        result = subprocess.run([*args, "--no-isolation"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+
+    (wheel,) = out.glob("lakehouse-*.whl")
+    with zipfile.ZipFile(wheel) as z:
+        names = set(z.namelist())
+    expected = {p.name for p in Path(SEEDS_DIR).iterdir() if p.suffix in (".csv", ".json")}
+    assert expected  # the seeds exist
+    for name in expected:
+        assert f"lakehouse/seeds/{name}" in names

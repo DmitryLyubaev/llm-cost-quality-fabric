@@ -9,12 +9,12 @@ Pure Python, loaded from the committed seeds. Applied in order; the first match 
 4. everything else is `untagged`. Nothing is dropped.
 """
 
-import csv
 import json
 from dataclasses import dataclass
 from datetime import date
 from fnmatch import fnmatchcase
-from pathlib import Path
+
+from lakehouse.seeding import read_seed_rows
 
 UNTAGGED = "untagged"
 SHARED_PROJECT = "releaselens-shared"
@@ -123,37 +123,35 @@ def _date_or_none(value: str | None) -> date | None:
     return date.fromisoformat(value) if value else None
 
 
-def load_rg_rules(path: str | Path) -> list[RgRule]:
-    """Resource-group rules from seeds/rg_rules.csv, in file order (first match wins)."""
+def load_rg_rules(seeds_dir: str, name: str = "rg_rules.csv") -> list[RgRule]:
+    """Resource-group rules from the rg_rules seed, in file order (first match wins)."""
     rules = []
-    with open(path, newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
-            shared = row["shared"].strip().lower() == "true"
-            project = _blank_to_none(row["project"])
-            if (project is None) == (not shared):
-                raise ValueError(f"rule {row['pattern']!r} needs a project, or shared=true (not both)")
-            rules.append(
-                RgRule(
-                    pattern=row["pattern"].strip(),
-                    project=project,
-                    shared=shared,
-                    valid_from=_date_or_none(row["valid_from"]),
-                    valid_to=_date_or_none(row["valid_to"]),
-                    evidence=row["evidence"].strip(),
-                )
+    for row in read_seed_rows(seeds_dir, name):
+        shared = row["shared"].strip().lower() == "true"
+        project = _blank_to_none(row["project"])
+        if (project is None) == (not shared):
+            raise ValueError(f"rule {row['pattern']!r} needs a project, or shared=true (not both)")
+        rules.append(
+            RgRule(
+                pattern=row["pattern"].strip(),
+                project=project,
+                shared=shared,
+                valid_from=_date_or_none(row["valid_from"]),
+                valid_to=_date_or_none(row["valid_to"]),
+                evidence=row["evidence"].strip(),
             )
+        )
     return rules
 
 
-def load_session_windows(path: str | Path) -> list[SessionWindow]:
-    """Session windows from seeds/session_windows.csv."""
-    with open(path, newline="", encoding="utf-8") as handle:
-        return [
-            SessionWindow(
-                project=row["project"].strip(),
-                start_date=date.fromisoformat(row["start_date"].strip()),
-                end_date=date.fromisoformat(row["end_date"].strip()),
-                evidence=row["evidence"].strip(),
-            )
-            for row in csv.DictReader(handle)
-        ]
+def load_session_windows(seeds_dir: str, name: str = "session_windows.csv") -> list[SessionWindow]:
+    """Session windows from the session_windows seed."""
+    return [
+        SessionWindow(
+            project=row["project"].strip(),
+            start_date=date.fromisoformat(row["start_date"].strip()),
+            end_date=date.fromisoformat(row["end_date"].strip()),
+            evidence=row["evidence"].strip(),
+        )
+        for row in read_seed_rows(seeds_dir, name)
+    ]

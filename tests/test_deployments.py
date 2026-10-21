@@ -1,9 +1,9 @@
 import hashlib
-from pathlib import Path
 
 import pytest
 from delta.tables import DeltaTable
 
+from lakehouse.seeding import SEEDS_DIR
 from lakehouse.silver.deployments import (
     CHANGES_SCHEMA,
     DEPLOYMENT_KEY,
@@ -13,7 +13,7 @@ from lakehouse.silver.deployments import (
     scd2_rows,
 )
 
-SEEDS = str(Path(__file__).resolve().parent.parent / "seeds")
+SEEDS = SEEDS_DIR
 KEY = ("rl-primary", "releaselens-chat")
 MEMBERS = "account_alias IN ('external', 'none')"
 
@@ -222,7 +222,7 @@ def test_same_instant_with_different_attributes_is_rejected(spark, tmp_path):
 
 
 def test_committed_seed_resolves_every_dim_arm_deployment(spark):
-    changes = read_deployment_changes(spark, f"{SEEDS}/deployment_changes.csv")
+    changes = read_deployment_changes(spark, SEEDS)
     assert changes.columns == CHANGES_SCHEMA.fieldNames()
     rows = scd2_rows(changes, SEEDS)
 

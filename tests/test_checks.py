@@ -1,4 +1,5 @@
 import csv
+from pathlib import Path
 from datetime import UTC, date, datetime
 
 import pytest
@@ -20,7 +21,7 @@ from lakehouse.gold.fingerprint import gold_fingerprint, table_fingerprint
 from lakehouse.paths import LakePaths
 from lakehouse.silver.costs import read_cost_export
 
-from lake_helpers import COST_FIXTURE, FIGURES, ROOT, SEEDS, copy_lake
+from lake_helpers import COST_FIXTURE, FIGURES, FIGURES_DIR, SEEDS, copy_lake
 
 
 @pytest.fixture
@@ -43,7 +44,7 @@ def test_each_check_passes_on_good_data(spark, good):
     results = [
         check_deployment_resolution(spark, paths),
         check_cost_totals(spark, paths, export),
-        check_published_figures(spark, paths, FIGURES),
+        check_published_figures(spark, paths, FIGURES_DIR),
         check_rerun_unchanged(summary.fingerprint, gold_fingerprint(spark, paths)),
     ]
 
@@ -108,12 +109,13 @@ def _figures(tmp_path, **changes):
         rows = list(csv.DictReader(f))
     for row in rows:
         row.update(changes.get(row["figure_id"], {}))
-    out = tmp_path / "figures.csv"
+    out = tmp_path / "figures" / "published_figures.csv"
+    out.parent.mkdir(exist_ok=True)
     with open(out, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]), lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
-    return str(out)
+    return str(out.parent)
 
 
 def test_published_figures_fails(spark, good, tmp_path):
@@ -135,7 +137,7 @@ def test_published_figures_fails_when_gold_row_changes(spark, good, tmp_path):
         {"success": F.lit(False)},
     )
 
-    result = check_published_figures(spark, paths, FIGURES)
+    result = check_published_figures(spark, paths, FIGURES_DIR)
 
     assert not result.passed
     assert "p3_gpt_success" in result.detail
@@ -144,7 +146,7 @@ def test_published_figures_fails_when_gold_row_changes(spark, good, tmp_path):
 def test_published_figures_p3_denominator_is_checked(spark, good, tmp_path):
     """The fixture's P3 arms each hold two scored rows; a published 3 fails the check."""
     paths = good[0]
-    assert check_published_figures(spark, paths, FIGURES).passed
+    assert check_published_figures(spark, paths, FIGURES_DIR).passed
 
     result = check_published_figures(spark, paths, _figures(tmp_path, p3_n_per_arm={"expected": "3"}))
 
@@ -159,7 +161,7 @@ def test_published_figures_unknown_query_is_an_error(spark, good, tmp_path):
 
 
 def test_published_figures_seed_is_well_formed():
-    with open(ROOT / "seeds" / "published_figures.csv", encoding="utf-8", newline="") as f:
+    with open(Path(SEEDS) / "published_figures.csv", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         rows = {r["figure_id"]: r for r in reader}
         assert reader.fieldnames == ["figure_id", "study", "query", "expected", "tolerance", "source"]

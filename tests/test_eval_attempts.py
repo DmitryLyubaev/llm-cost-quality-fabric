@@ -8,6 +8,7 @@ import pytest
 from delta.tables import DeltaTable
 from pyspark.sql import functions as F
 
+from lakehouse.seeding import SEEDS_DIR
 from lakehouse.silver.eval_attempts import (
     EVAL_COLUMNS,
     EVAL_KEY,
@@ -18,7 +19,7 @@ from lakehouse.silver.eval_attempts import (
 )
 
 ROOT = Path(__file__).resolve().parent.parent
-SEEDS = str(ROOT / "seeds")
+SEEDS = SEEDS_DIR
 P3_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "p3"
 LOAD_DATE = date(2026, 10, 21)
 STUDY_DIR = "study-synthetic"
@@ -207,7 +208,7 @@ def test_p2_cost_from_dim_arm_model_and_nulls(silver_df):
 def test_p3_rows_use_estimate_and_scores(silver_df):
     rates = {
         r["model"]: (float(r["input_per_m_usd"]), float(r["output_per_m_usd"]))
-        for r in csv.DictReader((ROOT / "seeds" / "model_rates.csv").open(encoding="utf-8"))
+        for r in csv.DictReader((Path(SEEDS) / "model_rates.csv").open(encoding="utf-8"))
     }
     gpt = _by_key(silver_df, study="p3-agent", item_id="s01", arm="gpt", attempt_kind="scored")
     claude = _by_key(silver_df, study="p3-agent", item_id="s01", arm="claude", attempt_kind="scored")
@@ -228,7 +229,7 @@ def test_p3_rows_use_estimate_and_scores(silver_df):
 
 
 def test_dim_arm_seed_matches_confirmed_models():
-    with (ROOT / "seeds" / "dim_arm.csv").open(encoding="utf-8") as f:
+    with (Path(SEEDS) / "dim_arm.csv").open(encoding="utf-8") as f:
         dim = {(r["study"], r["arm"]): r for r in csv.DictReader(f)}
 
     expected_model = {

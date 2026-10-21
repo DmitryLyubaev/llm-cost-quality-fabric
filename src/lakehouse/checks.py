@@ -5,7 +5,6 @@ A check returns a `CheckResult`; it does not raise when the data is wrong (`run_
 row naming a query that does not exist, is an error, not a failed check.
 """
 
-import csv
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -13,6 +12,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from lakehouse.paths import LakePaths
+from lakehouse.seeding import read_seed_rows
 from lakehouse.silver.costs import normalise_costs
 
 COST_TOLERANCE = 0.01  # in the billing currency (spec 3.7)
@@ -132,10 +132,11 @@ QUERIES: dict[str, Callable[[DataFrame, DataFrame, str], float | None]] = {
 }
 
 
-def check_published_figures(spark: SparkSession, paths: LakePaths, figures_csv: str) -> CheckResult:
-    """Every figure in the CSV must be reproduced by gold within its tolerance."""
-    with open(figures_csv, encoding="utf-8", newline="") as handle:
-        figures = list(csv.DictReader(handle))
+def check_published_figures(
+    spark: SparkSession, paths: LakePaths, seeds_dir: str, name: str = "published_figures.csv"
+) -> CheckResult:
+    """Every figure in the seed must be reproduced by gold within its tolerance."""
+    figures = read_seed_rows(seeds_dir, name)
     facts = spark.read.format("delta").load(paths.table("gold", "fact_eval_attempt"))
     dim_arm = spark.read.format("delta").load(paths.table("gold", "dim_arm"))
 

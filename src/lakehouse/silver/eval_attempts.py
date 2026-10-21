@@ -23,6 +23,9 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
+from lakehouse.seeding import seed_df
+from lakehouse.silver.deployments import read_dim_arm
+
 P1_STUDY = "p1-three-arm"
 P2_STUDY = "p2-retrieval"
 P3_STUDY = "p3-agent"
@@ -268,11 +271,8 @@ def build_eval_attempts(
     )
     staged = _stage(p1).unionByName(_stage(p2)).unionByName(p3)
 
-    dim_arm = (
-        spark.read.option("header", True).csv(f"{seeds_dir}/dim_arm.csv")
-        .select("study", "arm", F.col("model").alias("dim_model"))
-    )
-    rates = spark.read.option("header", True).schema(_RATES_SCHEMA).csv(f"{seeds_dir}/model_rates.csv")
+    dim_arm = read_dim_arm(spark, seeds_dir).select("study", "arm", F.col("model").alias("dim_model"))
+    rates = seed_df(spark, seeds_dir, "model_rates.csv", _RATES_SCHEMA)
     rates = rates.select(
         F.col("model").alias("dim_model"),
         F.col("input_per_m_usd").alias("rate_in"),

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from lakehouse.bronze.fetch_public import fetch_manifest
+from lakehouse.seeding import SEEDS_DIR
 
 MANIFEST = {
     "owner": "octo",
@@ -14,7 +15,7 @@ MANIFEST = {
     ],
 }
 LOAD_DATE = date(2026, 10, 21)
-SEED_MANIFEST = Path(__file__).resolve().parents[1] / "seeds" / "ingest_manifest.json"
+SEED_MANIFEST = Path(SEEDS_DIR) / "ingest_manifest.json"
 
 
 def _fake_get(requested=None):
@@ -83,3 +84,42 @@ def test_committed_manifest_is_well_formed():
             assert path and not path.startswith("/")
             assert (source["repo"], path) not in seen
             seen.add((source["repo"], path))
+
+
+def test_fetch_uses_writer(tmp_path):
+    sink = {}
+
+    written = fetch_manifest(
+        MANIFEST, "bronze-root", LOAD_DATE, _fake_get(), write=lambda dest, body: sink.__setitem__(dest, body)
+    )
+
+    sha = "a" * 40
+    dest1 = "bronze-root/public/load_date=2026-10-21/repo-a/dir/one.json"
+    dest2 = "bronze-root/public/load_date=2026-10-21/repo-a/two.md"
+    url1 = f"https://raw.githubusercontent.com/octo/repo-a/{sha}/dir/one.json"
+    assert sorted(sink) == sorted([dest1, dest2])
+    assert sink[dest1] == ("body of " + url1).encode()
+    assert sorted(written) == sorted([dest1, dest2])
+    assert not (tmp_path / "bronze-root").exists()
+
+
+@pytest.mark.parametrize("bad", ["../x", "/etc/x", "a/../../x", "a\\..\\x", "C:/x"])
+def test_fetch_rejects_traversal(tmp_path, bad):
+    manifest = {"owner": "octo", "sources": [{"repo": "repo-a", "sha": "a" * 40, "paths": [bad]}]}
+    requested = []
+
+    with pytest.raises(ValueError, match="path"):
+        fetch_manifest(manifest, str(tmp_path), LOAD_DATE, _fake_get(requested))
+
+    assert requested == []
+    assert not list(tmp_path.rglob("*"))
+
+
+def test_fetch_encodes_spaces(tmp_path):
+    manifest = {"owner": "octo", "sources": [{"repo": "repo-a", "sha": "a" * 40, "paths": ["docs/My Report #1.md"]}]}
+    requested = []
+
+    written = fetch_manifest(manifest, str(tmp_path), LOAD_DATE, _fake_get(requested))
+
+    assert requested == [f"https://raw.githubusercontent.com/octo/repo-a/{'a' * 40}/docs/My%20Report%20%231.md"]
+    assert Path(written[0]).name == "My Report #1.md"

@@ -6,12 +6,14 @@ from pathlib import Path
 
 from lakehouse.paths import LakePaths
 from lakehouse.run import run_load
+from lakehouse.seeding import SEEDS_DIR
 
 ROOT = Path(__file__).resolve().parent.parent
-SEEDS = str(ROOT / "seeds")
+SEEDS = SEEDS_DIR
 LAKE_FIXTURE = ROOT / "tests" / "fixtures" / "lake"
 COST_FIXTURE = ROOT / "tests" / "fixtures" / "cost_export_2026-10.csv"
 FIGURES = str(LAKE_FIXTURE / "published_figures.csv")
+FIGURES_DIR = str(LAKE_FIXTURE)  # a seeds folder as far as published_figures.csv goes
 LOAD_DATE = date(2026, 10, 21)
 
 
@@ -25,7 +27,7 @@ def make_lake(root: Path) -> tuple[LakePaths, str]:
     shutil.copytree(LAKE_FIXTURE / "bronze", paths.bronze)
     shutil.copytree(LAKE_FIXTURE / "private", paths.private)
     seeds = root / "seeds"
-    shutil.copytree(ROOT / "seeds", seeds)
+    shutil.copytree(SEEDS_DIR, seeds)
     shutil.copyfile(FIGURES, seeds / "published_figures.csv")
     return paths, str(seeds)
 

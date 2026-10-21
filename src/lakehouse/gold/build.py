@@ -18,7 +18,8 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import DateType, DoubleType, StringType, StructField, StructType
 
 from lakehouse.paths import LakePaths
-from lakehouse.silver.deployments import read_dim_arm, read_seed
+from lakehouse.seeding import seed_df
+from lakehouse.silver.deployments import read_dim_arm
 from lakehouse.silver.eval_attempts import EVAL_COLUMNS, EVAL_KEY
 
 DATE_FROM = date(2026, 9, 1)  # the lakehouse covers the portfolio from September 2026
@@ -167,7 +168,7 @@ def build_gold(spark: SparkSession, paths: LakePaths, seeds_dir: str) -> dict[st
     costs = _silver(spark, paths.table("silver", "daily_cost"))
     deployments = _silver(spark, paths.table("silver", "model_deployment"))
     dim_arm = read_dim_arm(spark, seeds_dir)
-    checks = read_seed(spark, f"{seeds_dir}/live_checks.csv", _LIVE_CHECK_SCHEMA)
+    checks = seed_df(spark, seeds_dir, "live_checks.csv", _LIVE_CHECK_SCHEMA)
 
     bad = [r["verdict"] for r in checks.where(~F.col("verdict").isin(*VERDICTS)).distinct().collect()]
     if bad:

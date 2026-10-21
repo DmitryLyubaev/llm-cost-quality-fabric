@@ -6,6 +6,7 @@ from delta.tables import DeltaTable
 from pyspark.sql import functions as F
 
 from lakehouse.attribution import load_rg_rules, load_session_windows
+from lakehouse.seeding import SEEDS_DIR
 from lakehouse.silver.costs import (
     COST_COLUMN_MAP,
     COST_COLUMNS,
@@ -16,8 +17,8 @@ from lakehouse.silver.costs import (
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = ROOT / "tests" / "fixtures" / "cost_export_2026-10.csv"
-RULES = load_rg_rules(ROOT / "seeds" / "rg_rules.csv")
-WINDOWS = load_session_windows(ROOT / "seeds" / "session_windows.csv")
+RULES = load_rg_rules(SEEDS_DIR)
+WINDOWS = load_session_windows(SEEDS_DIR)
 ROWS = 11
 
 

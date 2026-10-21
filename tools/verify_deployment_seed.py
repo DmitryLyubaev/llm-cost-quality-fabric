@@ -1,4 +1,4 @@
-"""Check seeds/deployment_changes.csv against the Terraform at each row's commit.
+"""Check src/lakehouse/seeds/deployment_changes.csv against the Terraform at each row's commit.
 
 Local only: it reads the two source repositories with `git show`, so it is not run in CI. The
 comparison logic is pure (it takes a `git_show(sha, path) -> text` callable), and the tests
@@ -24,7 +24,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 GitShow = Callable[[str, str], str]
-DEFAULT_SEED = Path(__file__).resolve().parent.parent / "seeds" / "deployment_changes.csv"
+DEFAULT_SEED = Path(__file__).resolve().parent.parent / "src" / "lakehouse" / "seeds" / "deployment_changes.csv"
 REPO_OPTIONS = {"ReleaseLens": "releaselens", "foundry-workshop-agent": "fwa"}
 UNPINNED = "unpinned"
 

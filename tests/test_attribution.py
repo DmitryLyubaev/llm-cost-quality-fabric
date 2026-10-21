@@ -1,5 +1,4 @@
 from datetime import date, timedelta
-from pathlib import Path
 
 import pytest
 
@@ -12,10 +11,11 @@ from lakehouse.attribution import (
     load_session_windows,
     parse_tags,
 )
+from lakehouse.seeding import SEEDS_DIR
 
-SEEDS = Path(__file__).resolve().parent.parent / "seeds"
-RULES = load_rg_rules(SEEDS / "rg_rules.csv")
-WINDOWS = load_session_windows(SEEDS / "session_windows.csv")
+SEEDS = SEEDS_DIR
+RULES = load_rg_rules(SEEDS)
+WINDOWS = load_session_windows(SEEDS)
 
 
 def test_parse_tags_formats():
@@ -107,7 +107,7 @@ def test_group_none_can_still_use_tag():
 
 
 def test_windows_do_not_overlap():
-    windows = sorted(load_session_windows(SEEDS / "session_windows.csv"), key=lambda w: w.start_date)
+    windows = sorted(load_session_windows(SEEDS), key=lambda w: w.start_date)
     assert windows
     for w in windows:
         assert w.start_date <= w.end_date

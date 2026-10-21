@@ -84,8 +84,8 @@ def _build(
     costs = normalise_costs(
         spark,
         export,
-        load_rg_rules(f"{seeds_dir}/rg_rules.csv"),
-        load_session_windows(f"{seeds_dir}/session_windows.csv"),
+        load_rg_rules(seeds_dir),
+        load_session_windows(seeds_dir),
     )
     months = [r["billing_month"] for r in costs.select("billing_month").distinct().collect()]
     if None in months:
@@ -96,7 +96,7 @@ def _build(
     attempts = build_eval_attempts(spark, paths.bronze, paths.private, seeds_dir, load_date)
     merge_eval_attempts(spark, attempts, paths.table("silver", "eval_attempts"))
 
-    changes = read_deployment_changes(spark, f"{seeds_dir}/deployment_changes.csv")
+    changes = read_deployment_changes(spark, seeds_dir)
     apply_scd2(spark, changes, paths.table("silver", "model_deployment"), seeds_dir)
 
     return build_gold(spark, paths, seeds_dir)
@@ -172,7 +172,7 @@ def run_load(
     checks = [
         check_deployment_resolution(spark, paths),
         check_cost_totals(spark, paths, export),
-        check_published_figures(spark, paths, f"{seeds_dir}/published_figures.csv"),
+        check_published_figures(spark, paths, seeds_dir),
         rerun,
     ]
     failed = [c for c in checks if not c.passed]

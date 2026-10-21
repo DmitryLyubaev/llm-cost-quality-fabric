@@ -1,6 +1,6 @@
 """Silver model deployments: a Type 2 slowly changing dimension from Terraform git history.
 
-`seeds/deployment_changes.csv` lists one row per change to a deployment (a Terraform commit, or a
+`lakehouse/seeds/deployment_changes.csv` lists one row per change to a deployment (a Terraform commit, or a
 manual row where git has no record). `scd2_rows` turns those changes into versions with
 `valid_from`, `valid_to` and `is_current`; `apply_scd2` MERGEs them into a Delta table, so
 re-applying the same changes writes nothing. Timestamps are UTC (session time zone UTC).
@@ -9,7 +9,6 @@ re-applying the same changes writes nothing. Timestamps are UTC (session time zo
 from datetime import UTC, datetime
 from functools import reduce
 from operator import or_
-from pathlib import Path
 
 from delta.tables import DeltaTable
 from pyspark.sql import DataFrame, SparkSession, Window
@@ -23,6 +22,8 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
+from lakehouse.seeding import SEEDS_DIR, seed_df
+
 DEPLOYMENT_KEY = ["account_alias", "deployment_name"]
 TRACKED = ["model_name", "model_version", "sku", "capacity", "region_alias"]
 
@@ -30,8 +31,6 @@ EXTERNAL_ALIAS = "external"  # models called outside Azure (dim_arm account_alia
 NONE_ALIAS = "none"  # arms that call no model
 NO_MODEL = "no-model"
 OPEN_FROM = datetime(1900, 1, 1, tzinfo=UTC)  # members that exist "always" start here
-
-SEEDS_DIR = str(Path(__file__).resolve().parents[3] / "seeds")
 
 # Times are read as ISO strings (with any offset) and converted to UTC timestamps in scd2_rows.
 CHANGES_SCHEMA = StructType(
@@ -52,7 +51,7 @@ CHANGES_SCHEMA = StructType(
         StructField("evidence", StringType()),
     ]
 )
-_DIM_ARM_SCHEMA = StructType(
+DIM_ARM_SCHEMA = StructType(
     [StructField(name, StringType()) for name in
      ("study", "arm", "label", "account_alias", "deployment_name", "model")]
 )
@@ -70,25 +69,14 @@ DIM_COLUMNS = DIM_SCHEMA.fieldNames()
 _SK_TIME = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'"  # valid_from as UTC text; the session is UTC
 
 
-def read_seed(spark: SparkSession, path: str, schema: StructType) -> DataFrame:
-    """A seed CSV read strictly with `schema`: a malformed row or a header mismatch fails the read."""
-    return (
-        spark.read.option("header", True)
-        .option("mode", "FAILFAST")
-        .option("enforceSchema", False)
-        .schema(schema)
-        .csv(path)
-    )
-
-
 def read_dim_arm(spark: SparkSession, seeds_dir: str) -> DataFrame:
-    """`seeds/dim_arm.csv` (all columns strings), read strictly."""
-    return read_seed(spark, f"{seeds_dir}/dim_arm.csv", _DIM_ARM_SCHEMA)
+    """`dim_arm.csv` (all columns strings), read strictly."""
+    return seed_df(spark, seeds_dir, "dim_arm.csv", DIM_ARM_SCHEMA)
 
 
-def read_deployment_changes(spark: SparkSession, path: str) -> DataFrame:
+def read_deployment_changes(spark: SparkSession, seeds_dir: str, name: str = "deployment_changes.csv") -> DataFrame:
     """The change seed, read with CHANGES_SCHEMA; a malformed row or header fails the read."""
-    return read_seed(spark, path, CHANGES_SCHEMA)
+    return seed_df(spark, seeds_dir, name, CHANGES_SCHEMA)
 
 
 def _members(spark: SparkSession, seeds_dir: str) -> DataFrame:
