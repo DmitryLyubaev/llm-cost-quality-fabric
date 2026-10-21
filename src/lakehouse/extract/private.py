@@ -8,6 +8,7 @@ endpoint details. Output goes to a git-ignored folder, never into the repo.
 import argparse
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 P1_STUDY = "p1-three-arm"
@@ -21,12 +22,20 @@ _GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}
 _URL = re.compile(r"https?://", re.IGNORECASE)
 
 
+def _run_label(study: str, started_at: str) -> str:
+    """Derived run label, e.g. p1-three-arm-20261002T101500Z (the source run ids are not used)."""
+    moment = datetime.fromisoformat(started_at)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return f"{study}-{moment.astimezone(UTC):%Y%m%dT%H%M%SZ}"
+
+
 def extract_p1(report: dict) -> list[dict]:
     """One row per scored outcome of the three-arm study."""
     return [
         {
             "study": P1_STUDY,
-            "run_id": report["run_id"],
+            "run_id": _run_label(P1_STUDY, report["started_at"]),
             "started_at": report["started_at"],
             "item_id": o["id"],
             "arm": o["arm"],
@@ -51,9 +60,13 @@ def extract_p1(report: dict) -> list[dict]:
 
 
 def _target_rank(hits: list[dict], target: str) -> int | None:
-    for rank, hit in enumerate(hits, start=1):
-        if hit["artefact"] == target:
-            return rank
+    """1-based rank of the target among distinct artefacts, in hit order."""
+    seen: set[str] = set()
+    for hit in hits:
+        artefact = hit["artefact"]
+        if artefact == target:
+            return len(seen) + 1
+        seen.add(artefact)
     return None
 
 
@@ -70,7 +83,7 @@ def extract_p2(report: dict, questions: list[dict]) -> list[dict]:
             rows.append(
                 {
                     "study": P2_STUDY,
-                    "run_id": report["run_id"],
+                    "run_id": _run_label(P2_STUDY, report["started_at"]),
                     "started_at": report["started_at"],
                     "item_id": qid,
                     "arm": entry["arm"],

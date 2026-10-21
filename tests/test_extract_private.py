@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from lakehouse.extract.private import assert_clean, extract_p1, extract_p2
+from lakehouse.extract.private import _target_rank, assert_clean, extract_p1, extract_p2
 
 FIXTURES = Path(__file__).parent / "fixtures"
 GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
@@ -51,7 +51,9 @@ def test_p1_row_shape(p1):
     assert len(rows) == 12
     assert all(set(r) == P1_KEYS for r in rows)
     assert all(r["study"] == "p1-three-arm" and r["attempt_kind"] == "scored" for r in rows)
-    assert all(r["run_id"] == p1["run_id"] and r["started_at"] == p1["started_at"] for r in rows)
+    assert all(r["run_id"] == "p1-three-arm-20260101T000000Z" for r in rows)
+    assert all(r["started_at"] == p1["started_at"] for r in rows)
+    assert all(p1["run_id"] not in json.dumps(r) for r in rows)
 
     first, src = rows[0], p1["outcomes"][0]
     assert first["item_id"] == src["id"]
@@ -80,7 +82,8 @@ def test_p2_row_shape(p2, questions):
     assert row["latency_ms"] == 110
     assert row["tokens_in"] == 12
     assert row["success"] is True
-    assert row["run_id"] == p2["run_id"] and row["started_at"] == p2["started_at"]
+    assert row["run_id"] == "p2-retrieval-20260102T000000Z"
+    assert row["started_at"] == p2["started_at"]
 
 
 def test_p2_rank_and_metrics(p2, questions):
@@ -104,6 +107,32 @@ def test_p2_target_missing_from_hits(p2, questions):
     assert row["target_rank"] is None
     assert row["top1"] is False
     assert row["reciprocal_rank"] == 0.0
+
+
+def test_run_label_is_utc(p1):
+    p1["started_at"] = "2026-10-02T12:15:00+02:00"
+
+    assert extract_p1(p1)[0]["run_id"] == "p1-three-arm-20261002T101500Z"
+
+
+def test_target_rank_counts_distinct_artefacts():
+    hits = [{"artefact": "A"}, {"artefact": "A"}, {"artefact": "B"}]
+
+    assert _target_rank(hits, "B") == 2
+    assert _target_rank(hits, "A") == 1
+    assert _target_rank(hits, "Z") is None
+
+
+def test_p2_duplicate_artefact_hits_do_not_advance_rank(p2, questions):
+    p2["results"][0]["hits"] = [
+        {"chunk_id": "c1", "artefact": "art-x1", "score": 0.9},
+        {"chunk_id": "c2", "artefact": "art-x1", "score": 0.8},
+        {"chunk_id": "c3", "artefact": "art-t1", "score": 0.7},
+    ]
+
+    row = _p2_row(extract_p2(p2, questions), "r-001", "E1")
+    assert row["target_rank"] == 2
+    assert row["reciprocal_rank"] == 0.5
 
 
 def test_p2_error_is_not_success(p2, questions):
