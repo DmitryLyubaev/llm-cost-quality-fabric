@@ -1,8 +1,11 @@
 """The gold answers: cost per project, quality across models and cost per measured result.
 
 Costs stay in their own currency. Repo estimates are USD list-price figures; Cost Management is
-in its billing currency. They sit in separate columns, each with its own currency column, and
-nothing here converts one into the other.
+in its billing currency. They sit in separate columns, each with its own currency column, and are
+never added together. The one conversion is the estimate into the billing currency in
+`cost_per_result`, at the export's own USD-to-billing rate for the study's month (the rate Cost
+Management wrote into its export, never one chosen here); with no single such rate the converted
+columns are null. Actual spend is never converted, and nothing is converted with an invented rate.
 """
 
 from pyspark.sql import DataFrame, SparkSession
@@ -13,6 +16,7 @@ from lakehouse.paths import LakePaths
 
 SCORED = "scored"
 ESTIMATE_CURRENCY = "USD"
+PRICING_CURRENCY = "USD"  # the pricing currency whose export rate converts the estimate
 NO_MODEL_BASIS = "no_model"  # cost_basis of an arm with no model: its cost is a true zero
 ALWAYS_PRESENT = [UNTAGGED, SHARED_PROJECT]
 # The project each study measured (dim_study has no project column; the tracker's names).
@@ -82,13 +86,40 @@ def quality_across_models(spark: SparkSession, paths: LakePaths) -> DataFrame:
     )
 
 
+def _usd_rates(spark: SparkSession, paths: LakePaths) -> DataFrame:
+    """fx_month, actual_currency, fx_usd_to_billing: the export's USD-to-billing rate per month.
+
+    The rate of a (billing month, billing currency) is the distinct non-null
+    `fx_pricing_to_billing` over `fact_daily_cost` lines in that month and currency whose
+    `pricing_currency` is USD. Exactly one distinct value is the rate; several are not resolved by
+    picking one, so the rate is null (and a pair with no such value has no row at all).
+    """
+    lines = _gold(spark, paths, "fact_daily_cost").where(
+        (F.col("pricing_currency") == PRICING_CURRENCY) & F.col("fx_pricing_to_billing").isNotNull()
+    )
+    return lines.groupBy(
+        F.col("billing_month").alias("fx_month"), F.col("billing_currency").alias("actual_currency")
+    ).agg(
+        F.when(
+            F.countDistinct("fx_pricing_to_billing") == 1, F.first("fx_pricing_to_billing")
+        ).alias("fx_usd_to_billing")
+    )
+
+
 def cost_per_result(spark: SparkSession, paths: LakePaths) -> DataFrame:
     """Per project, estimated and actual cost per scored result, side by side.
 
     estimated: the studies' own USD figures (`estimated_currency` is USD).
     actual: the project's attributed Cost Management total in its billing currency
     (`actual_currency`); a project billed in two currencies gets one row per currency. The
-    two are never added, converted or divided into one another.
+    two are never added together, and the actual is never converted.
+
+    The estimate is also shown in the billing currency, converted only at the export's own
+    USD-to-billing rate: `fx_month` is the calendar month (`yyyy-MM`, session time zone) of the
+    project's earliest scored `started_at`, and `fx_usd_to_billing` is the rate for that month and
+    that row's `actual_currency` (`_usd_rates`). `estimated_in_billing_total` is the USD total times
+    the rate and `estimated_in_billing_per_result` that over `results`; both are null when the
+    rate or the estimate is null (no single rate for the month and currency, or unpriced results).
 
     `unpriced_results` counts the scored results with no cost and a basis other than `no_model`
     (a model without a rate). When it is above zero the estimate is unknown, so the estimated
@@ -105,6 +136,7 @@ def cost_per_result(spark: SparkSession, paths: LakePaths) -> DataFrame:
                 "unpriced_results"
             ),
             F.sum("cost_usd").alias("estimated_usd_total"),
+            F.date_format(F.min("started_at"), "yyyy-MM").alias("fx_month"),
         )
         .withColumn(
             "estimated_usd_total",
@@ -120,7 +152,12 @@ def cost_per_result(spark: SparkSession, paths: LakePaths) -> DataFrame:
     )
     return (
         estimated.join(actual, "project", "left")
+        .join(_usd_rates(spark, paths), ["fx_month", "actual_currency"], "left")
         .withColumn("actual_per_result", F.col("actual_total") / F.col("results"))
+        .withColumn("estimated_in_billing_total", F.col("estimated_usd_total") * F.col("fx_usd_to_billing"))
+        .withColumn(
+            "estimated_in_billing_per_result", F.col("estimated_in_billing_total") / F.col("results")
+        )
         .select(
             "project",
             "results",
@@ -131,6 +168,10 @@ def cost_per_result(spark: SparkSession, paths: LakePaths) -> DataFrame:
             "actual_total",
             "actual_per_result",
             "actual_currency",
+            "fx_month",
+            "fx_usd_to_billing",
+            "estimated_in_billing_total",
+            "estimated_in_billing_per_result",
         )
         .orderBy("project", "actual_currency")
     )

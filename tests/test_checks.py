@@ -367,6 +367,172 @@ def test_cost_per_result_counts_unpriced_results_and_withholds_the_estimate(spar
     assert rows["p1"]["unpriced_results"] == 0
 
 
+# --- cost_per_result: the estimate in the billing currency, at the export's own rate ----------
+
+_FX_FACT_SCHEMA = (
+    "study string, attempt_kind string, started_at timestamp, cost_usd double, cost_basis string"
+)
+_FX_COST_SCHEMA = (
+    "project string, billing_currency string, cost double, billing_month string, "
+    "pricing_currency string, fx_pricing_to_billing double"
+)
+
+
+def _fx_lake(spark, tmp_lake, attempts, costs):
+    """Synthetic gold tables: scored attempts (study, started_at, cost_usd, cost_basis) and cost
+    lines (project, billing currency, cost, billing month, pricing currency, rate)."""
+    rows = [
+        (study, kind, datetime.fromisoformat(started).replace(tzinfo=UTC), cost_usd, basis)
+        for study, kind, started, cost_usd, basis in attempts
+    ]
+    spark.createDataFrame(rows, _FX_FACT_SCHEMA).write.format("delta").save(
+        tmp_lake.table("gold", "fact_eval_attempt")
+    )
+    spark.createDataFrame(costs, _FX_COST_SCHEMA).write.format("delta").save(
+        tmp_lake.table("gold", "fact_daily_cost")
+    )
+    return tmp_lake
+
+
+def _scored(started, cost_usd=0.25, basis="tokens_x_rate", study="p1-three-arm", kind="scored"):
+    return (study, kind, started, cost_usd, basis)
+
+
+def _cost_line(month, currency="AUD", rate=1.5, pricing="USD", project="p1", cost=3.0):
+    return (project, currency, cost, month, pricing, rate)
+
+
+def _result_rows(spark, paths):
+    return [r for r in cost_per_result(spark, paths).collect()]
+
+
+def test_cost_per_result_converts_the_estimate_at_the_exports_rate_for_the_study_month(spark, tmp_lake):
+    paths = _fx_lake(
+        spark, tmp_lake,
+        [
+            _scored("2026-10-03T00:00:00", 0.25),
+            _scored("2026-10-20T00:00:00", 0.75),
+            _scored("2026-08-01T00:00:00", 9.0, kind="warmup"),  # not scored: not the study month
+        ],
+        [
+            _cost_line("2026-10", rate=1.5), _cost_line("2026-10", rate=1.5, project="p2"),
+            _cost_line("2026-09", rate=1.3),  # another month's rate is not used
+        ],
+    )
+
+    frame = cost_per_result(spark, paths)
+    (row,) = [r for r in frame.collect() if r["project"] == "p1"]
+
+    assert frame.columns[-4:] == [
+        "fx_month", "fx_usd_to_billing", "estimated_in_billing_total", "estimated_in_billing_per_result",
+    ]
+    assert frame.columns[:9] == [
+        "project", "results", "unpriced_results", "estimated_usd_total", "estimated_usd_per_result",
+        "estimated_currency", "actual_total", "actual_per_result", "actual_currency",
+    ]
+    assert row["fx_month"] == "2026-10" and row["fx_usd_to_billing"] == 1.5
+    assert row["estimated_usd_total"] == pytest.approx(1.0)
+    assert row["estimated_in_billing_total"] == pytest.approx(1.5)
+    assert row["estimated_in_billing_per_result"] == pytest.approx(0.75)
+    assert row["actual_currency"] == "AUD" and row["actual_total"] == pytest.approx(6.0)  # both months, not converted or summed with the estimate
+
+
+def test_the_study_month_is_the_earliest_scored_attempts_month(spark, tmp_lake):
+    paths = _fx_lake(
+        spark, tmp_lake,
+        [_scored("2026-10-02T00:00:00"), _scored("2026-09-30T23:00:00")],
+        [_cost_line("2026-09", rate=1.3), _cost_line("2026-10", rate=1.5)],
+    )
+
+    (row,) = _result_rows(spark, paths)
+
+    assert row["fx_month"] == "2026-09" and row["fx_usd_to_billing"] == 1.3
+    assert row["estimated_in_billing_total"] == pytest.approx(0.5 * 1.3)
+
+
+def test_no_rate_for_the_month_gives_null_conversion(spark, tmp_lake):
+    """A month with no rate line, only a null rate (an older export) or only a non-USD pricing
+    currency has no rate: null, and the USD estimate and the actual are untouched."""
+    paths = _fx_lake(
+        spark, tmp_lake,
+        [_scored("2026-10-03T00:00:00")],
+        [
+            _cost_line("2026-10", rate=None),
+            _cost_line("2026-10", rate=1.0, pricing="AUD"),
+            _cost_line("2026-09", rate=1.3),
+        ],
+    )
+
+    (row,) = _result_rows(spark, paths)
+
+    assert row["fx_month"] == "2026-10"
+    assert row["fx_usd_to_billing"] is None
+    assert row["estimated_in_billing_total"] is None and row["estimated_in_billing_per_result"] is None
+    assert row["estimated_usd_total"] == pytest.approx(0.25)
+    assert row["actual_total"] == pytest.approx(9.0)
+
+
+def test_two_distinct_rates_for_the_month_give_null_not_a_pick(spark, tmp_lake):
+    paths = _fx_lake(
+        spark, tmp_lake,
+        [_scored("2026-10-03T00:00:00")],
+        [_cost_line("2026-10", rate=1.4246), _cost_line("2026-10", rate=1.4247), _cost_line("2026-10", rate=1.4246)],
+    )
+
+    (row,) = _result_rows(spark, paths)
+
+    assert row["fx_usd_to_billing"] is None and row["estimated_in_billing_total"] is None
+    assert row["estimated_usd_total"] == pytest.approx(0.25)
+
+
+def test_repeated_identical_rates_are_one_rate(spark, tmp_lake):
+    paths = _fx_lake(
+        spark, tmp_lake,
+        [_scored("2026-10-03T00:00:00")],
+        [_cost_line("2026-10", rate=1.4246, project=p) for p in ("p1", "p2", "untagged")] + [_cost_line("2026-10", rate=None)],
+    )
+
+    (row,) = _result_rows(spark, paths)
+
+    assert row["fx_usd_to_billing"] == 1.4246  # a null rate on another line is not a second rate
+
+
+def test_unpriced_results_leave_the_converted_values_null_too(spark, tmp_lake):
+    paths = _fx_lake(
+        spark, tmp_lake,
+        [_scored("2026-10-03T00:00:00"), _scored("2026-10-04T00:00:00", None, "rate_missing")],
+        [_cost_line("2026-10", rate=1.5)],
+    )
+
+    (row,) = _result_rows(spark, paths)
+
+    assert row["unpriced_results"] == 1
+    assert row["estimated_usd_total"] is None
+    assert row["fx_usd_to_billing"] == 1.5  # the rate is known; the estimate is not
+    assert row["estimated_in_billing_total"] is None and row["estimated_in_billing_per_result"] is None
+
+
+def test_a_project_billed_in_two_currencies_gets_each_currencys_own_rate(spark, tmp_lake):
+    paths = _fx_lake(
+        spark, tmp_lake,
+        [_scored("2026-10-03T00:00:00", 1.0)],
+        [
+            _cost_line("2026-10", "AUD", 1.5, cost=3.0),
+            _cost_line("2026-10", "NZD", 1.75, cost=2.0),
+            _cost_line("2026-10", "EUR", None, cost=1.0),  # a currency with no rate
+        ],
+    )
+
+    rows = {r["actual_currency"]: r for r in _result_rows(spark, paths)}
+
+    assert set(rows) == {"AUD", "NZD", "EUR"}
+    assert rows["AUD"]["fx_usd_to_billing"] == 1.5 and rows["AUD"]["estimated_in_billing_total"] == pytest.approx(1.5)
+    assert rows["NZD"]["fx_usd_to_billing"] == 1.75 and rows["NZD"]["estimated_in_billing_total"] == pytest.approx(1.75)
+    assert rows["EUR"]["fx_usd_to_billing"] is None and rows["EUR"]["estimated_in_billing_total"] is None
+    assert {r["estimated_usd_total"] for r in rows.values()} == {1.0}
+    assert {r["estimated_currency"] for r in rows.values()} == {"USD"}
+
+
 def test_quality_across_models_scored_rows_only(spark, good):
     paths = good[0]
     frame = quality_across_models(spark, paths)
