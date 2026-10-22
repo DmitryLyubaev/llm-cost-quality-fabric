@@ -1,7 +1,7 @@
 import json
 import os
 import shutil
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -12,7 +12,8 @@ from lake_helpers import copy_lake, cost_export_maker, make_lake, run
 from lakehouse.checks import QualityCheckFailed
 from lakehouse.gold.build import GOLD_TABLES, REJECT_NAME
 from lakehouse.gold.fingerprint import gold_fingerprint
-from lakehouse.run import RunSummary
+from lakehouse.run import RunSummary, inputs_digest
+from lakehouse.silver.costs import ExportRun
 
 
 @pytest.fixture
@@ -27,6 +28,19 @@ def _listing(folder):
 def _log(spark, paths):
     rows = spark.read.format("delta").load(paths.table("silver", "run_log")).orderBy("recorded_at").collect()
     return [(r["load_date"], json.loads(r["fingerprint"])) for r in rows]
+
+
+def _log_rows(spark, paths):
+    rows = spark.read.format("delta").load(paths.table("silver", "run_log")).orderBy("recorded_at").collect()
+    return [r.asDict() for r in rows]
+
+
+def _rerun_detail(summary):
+    return [c for c in summary.checks if c.name == "rerun_unchanged"][0]
+
+
+def _export_run(run_id):
+    return ExportRun("20261001-20261031", run_id, datetime(2026, 10, 21, tzinfo=UTC), (), 1)
 
 
 def _versions(spark, paths):
@@ -222,3 +236,109 @@ def test_missing_cost_export_writes_nothing_on_a_fresh_lake(spark, lake, tmp_pat
         run(spark, paths, seeds, export=tmp_path / "nope")
 
     assert not os.path.exists(paths.tables_root)
+
+
+def test_log_row_records_the_inputs_digest_and_status(spark, loaded_lake):
+    paths, seeds, _ = loaded_lake
+    (row,) = _log_rows(spark, paths)
+
+    assert row["status"] == "passed"
+    assert row["inputs_digest"] == inputs_digest(
+        seeds,
+        json.loads(Path(seeds, "ingest_manifest.json").read_text(encoding="utf-8")),
+        [_export_run(cost_export_maker.RUN_B), _export_run(cost_export_maker.RUN_C)],
+    )
+    assert len(row["inputs_digest"]) == 16
+
+
+def test_same_inputs_still_compared(spark, loaded_lake, tmp_path):
+    """Same seeds, manifest and export runs: the gold fingerprint is compared and a difference fails."""
+    paths, seeds, first = _copy(loaded_lake, tmp_path)
+    silver = paths.table("silver", "eval_attempts")
+    extra = (
+        spark.read.format("delta").load(silver)
+        .where("attempt_kind = 'determinism_repeat'").limit(1)
+        .withColumn("pass_index", F.lit(7))
+    )
+    extra.write.format("delta").mode("append").save(silver)
+
+    with pytest.raises(QualityCheckFailed) as error:
+        run(spark, paths, seeds)
+
+    assert [r.name for r in error.value.failed] == ["rerun_unchanged"]
+    assert len(_log_rows(spark, paths)) == 1
+
+
+def test_changed_seed_is_new_baseline(spark, loaded_lake, tmp_path):
+    """A seed edit legitimately changes gold; the re-run check must not treat that as drift."""
+    paths, seeds_src, first = _copy(loaded_lake, tmp_path)
+    seeds = tmp_path / "seeds_changed"
+    shutil.copytree(seeds_src, seeds)
+    live = seeds / "live_checks.csv"
+    text = live.read_text(encoding="utf-8")
+    assert ",failover,pass,45,requests," in text
+    live.write_text(text.replace(",failover,pass,45,requests,", ",failover,pass,46,requests,", 1),
+                    encoding="utf-8", newline="")
+
+    second = run(spark, paths, str(seeds))
+
+    detail = _rerun_detail(second)
+    assert detail.passed and detail.detail == "new baseline: inputs changed"
+    assert second.fingerprint != first.fingerprint
+    rows = _log_rows(spark, paths)
+    assert len(rows) == 2 and rows[0]["inputs_digest"] != rows[1]["inputs_digest"]
+
+    # and the new baseline is what the next run is compared with
+    third = run(spark, paths, str(seeds))
+    assert "identical" in _rerun_detail(third).detail
+
+
+def test_digest_changes_with_export_run(tmp_path):
+    seeds = tmp_path / "seeds"
+    seeds.mkdir()
+    (seeds / "a.csv").write_bytes(b"x,y\n1,2\n")
+    manifest = {"owner": "someone", "sources": []}
+    runs = [_export_run("run-1")]
+
+    base = inputs_digest(str(seeds), manifest, runs)
+
+    assert base == inputs_digest(str(seeds), manifest, list(runs))
+    assert base != inputs_digest(str(seeds), manifest, [_export_run("run-2")])
+    assert base != inputs_digest(str(seeds), manifest, runs + [_export_run("run-0")])
+    assert base != inputs_digest(str(seeds), {**manifest, "owner": "other"}, runs)
+    assert inputs_digest(str(seeds), manifest, [_export_run("b"), _export_run("a")]) == inputs_digest(
+        str(seeds), manifest, [_export_run("a"), _export_run("b")]
+    )
+    (seeds / "a.csv").write_bytes(b"x,y\n1,3\n")
+    assert base != inputs_digest(str(seeds), manifest, runs)
+
+
+def test_run_log_without_the_new_columns_still_works(spark, loaded_lake, tmp_path):
+    """An older log (no inputs_digest or status) is read as null digest: a new baseline, never a match;
+    the earlier-date guard still counts its rows."""
+    paths, seeds, first = _copy(loaded_lake, tmp_path)
+    log = paths.table("silver", "run_log")
+    legacy = (
+        spark.read.format("delta").load(log).select("load_date", "fingerprint", "recorded_at")
+    )
+    legacy.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(log)
+    assert "inputs_digest" not in spark.read.format("delta").load(log).columns
+
+    with pytest.raises(ValueError, match="earlier"):
+        run(spark, paths, seeds, load_date=date(2026, 10, 20))
+    second = run(spark, paths, seeds)
+
+    assert _rerun_detail(second).detail == "new baseline: inputs changed"
+    rows = _log_rows(spark, paths)
+    assert [r["inputs_digest"] is None for r in rows] == [True, False]
+    assert [r["status"] for r in rows] == [None, "passed"]
+
+
+def test_earlier_date_guard_counts_only_passed_rows(spark, loaded_lake, tmp_path):
+    paths, seeds, _ = _copy(loaded_lake, tmp_path)
+    log = paths.table("silver", "run_log")
+    spark.sql(
+        f"INSERT INTO delta.`{log}` VALUES (DATE'2026-10-25', '{{}}', TIMESTAMP'2026-10-25 00:00:00', 'abc', 'failed')"
+    )
+
+    run(spark, paths, seeds)  # 2026-10-21 is not earlier than the latest *passed* date

@@ -5,14 +5,18 @@ and this reads what it landed for `load_date`. Nothing is written before the cos
 been found and read, so a missing or empty export can never replace a full month with nothing.
 
 Every run builds once. The re-run check compares this run's gold fingerprint with the one the
-last successful run of the same load date recorded in `silver/run_log`; a first run for a date
-has nothing to compare and passes. An entry is appended only after every check has passed, so a
+last successful run of the same load date and the same inputs digest recorded in
+`silver/run_log`; a first run for a date, or one whose inputs (seeds, ingest manifest, export
+runs, package version) changed since, is a new baseline and passes. An entry is appended only after every check has passed, so a
 failed run never becomes the baseline.
 """
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from importlib.metadata import version
+from pathlib import Path
 
 from delta.tables import DeltaTable
 
@@ -32,7 +36,7 @@ from lakehouse.checks import (
 from lakehouse.gold.build import build_gold
 from lakehouse.gold.fingerprint import gold_fingerprint
 from lakehouse.paths import LakePaths
-from lakehouse.silver.costs import normalise_costs, read_cost_export, replace_month
+from lakehouse.silver.costs import ExportRun, find_latest_runs, normalise_costs, read_export_runs, replace_month
 from lakehouse.silver.deployments import apply_scd2, read_deployment_changes
 from lakehouse.silver.eval_attempts import build_eval_attempts, merge_eval_attempts
 
@@ -43,8 +47,12 @@ _RUN_LOG_SCHEMA = StructType(
         StructField("load_date", DateType()),
         StructField("fingerprint", StringType()),  # JSON object: gold table -> content hash
         StructField("recorded_at", TimestampType()),
+        StructField("inputs_digest", StringType()),  # null in rows written before the digest existed
+        StructField("status", StringType()),  # null in rows written before status existed: they passed
     ]
 )
+PASSED = "passed"
+MANIFEST_FILE = "ingest_manifest.json"
 
 
 @dataclass
@@ -55,15 +63,36 @@ class RunSummary:
     fingerprint: dict[str, str]
 
 
-def _read_export(spark: SparkSession, root: str) -> tuple[DataFrame, dict[str, int]]:
-    """The cost export's rows and manifest row counts per month folder.
+def _read_export(spark: SparkSession, root: str) -> tuple[DataFrame, dict[str, int], list[ExportRun]]:
+    """The cost export's rows, manifest row counts per month folder and the runs they come from.
 
     FileNotFoundError naming `root` if it holds no manifest, or its latest manifests list no rows.
     """
-    export, expected_rows = read_cost_export(spark, root)
+    runs = find_latest_runs(spark, root)
+    expected_rows = {run.month_folder: run.data_row_count for run in runs}
+    export = read_export_runs(spark, runs)
     if sum(expected_rows.values()) == 0 or export.limit(1).count() == 0:
         raise FileNotFoundError(f"cost export lists no data rows: {root}")
-    return export, expected_rows
+    return export, expected_rows, runs
+
+
+def inputs_digest(seeds_dir: str, manifest: dict, export_runs: list[ExportRun]) -> str:
+    """First 16 hex chars of a sha256 over everything a run reads besides bronze.
+
+    Hashed in order: the `lakehouse` package version, every file in `seeds_dir` by name (bytes, the
+    ingest manifest included), the ingest manifest as JSON with sorted keys, and the export runs'
+    ids sorted. A run whose digest differs from the last one's is a new baseline: its gold may
+    legitimately differ.
+    """
+    digest = hashlib.sha256()
+    digest.update(version("lakehouse").encode("utf-8"))
+    for path in sorted(Path(seeds_dir).iterdir(), key=lambda p: p.name):
+        if path.is_file():
+            digest.update(path.read_bytes())
+    digest.update(json.dumps(manifest, sort_keys=True).encode("utf-8"))
+    for run_id in sorted(r.run_id for r in export_runs):
+        digest.update(run_id.encode("utf-8"))
+    return digest.hexdigest()[:16]
 
 
 def _build(
@@ -99,29 +128,55 @@ def _build(
     return build_gold(spark, paths, seeds_dir)
 
 
-def _previous_fingerprint(spark: SparkSession, log_path: str, load_date: date) -> dict[str, str] | None:
-    """The fingerprint the latest logged run of `load_date` recorded, or None for a first run."""
+def _passed_log(spark: SparkSession, log_path: str) -> DataFrame | None:
+    """The run log's passed rows (a null status is a row from before status existed), or None.
+
+    A log written before `inputs_digest` and `status` existed reads them as null.
+    """
     if not DeltaTable.isDeltaTable(spark, log_path):
         return None
+    log = spark.read.format("delta").load(log_path)
+    for name in ("inputs_digest", "status"):
+        if name not in log.columns:
+            log = log.withColumn(name, F.lit(None).cast("string"))
+    return log.where(F.col("status").isNull() | (F.col("status") == PASSED))
+
+
+def _previous_run(
+    spark: SparkSession, log_path: str, load_date: date, digest: str
+) -> tuple[bool, dict[str, str] | None]:
+    """(a passed run of `load_date` exists, the fingerprint of the latest one with this digest).
+
+    A null digest (an older log row) never matches.
+    """
+    log = _passed_log(spark, log_path)
+    if log is None:
+        return False, None
+    same_date = log.where(F.col("load_date") == F.lit(load_date))
+    if same_date.limit(1).count() == 0:
+        return False, None
     latest = (
-        spark.read.format("delta").load(log_path)
-        .where(F.col("load_date") == F.lit(load_date))
+        same_date.where(F.col("inputs_digest") == F.lit(digest))
         .orderBy(F.col("recorded_at").desc())
         .first()
     )
-    return json.loads(latest["fingerprint"]) if latest else None
+    return True, (json.loads(latest["fingerprint"]) if latest else None)
 
 
 def _latest_logged_date(spark: SparkSession, log_path: str) -> date | None:
-    """The latest `load_date` in the run log, or None when nothing has been logged."""
-    if not DeltaTable.isDeltaTable(spark, log_path):
-        return None
-    return spark.read.format("delta").load(log_path).agg(F.max("load_date")).first()[0]
+    """The latest `load_date` of a passed run in the log, or None when there is none."""
+    log = _passed_log(spark, log_path)
+    return None if log is None else log.agg(F.max("load_date")).first()[0]
 
 
-def _append_log(spark: SparkSession, log_path: str, load_date: date, fingerprint: dict[str, str]) -> None:
-    row = (load_date, json.dumps(fingerprint, sort_keys=True), datetime.now(UTC))
-    spark.createDataFrame([row], _RUN_LOG_SCHEMA).write.format("delta").mode("append").save(log_path)
+def _append_log(
+    spark: SparkSession, log_path: str, load_date: date, fingerprint: dict[str, str], digest: str
+) -> None:
+    row = (load_date, json.dumps(fingerprint, sort_keys=True), datetime.now(UTC), digest, PASSED)
+    (
+        spark.createDataFrame([row], _RUN_LOG_SCHEMA)
+        .write.format("delta").mode("append").option("mergeSchema", "true").save(log_path)
+    )
 
 
 def run_load(
@@ -139,7 +194,7 @@ def run_load(
     both are part of the lake's contract (unreadable text fails, timestamps are UTC).
 
     Raises ValueError, before reading or writing anything, if `load_date` is earlier than the
-    latest load date in the run log, because rebuilding an earlier export would roll the
+    latest load date of a passed run in the run log, because rebuilding an earlier export would roll the
     published costs back; pass `allow_earlier=True` to do it on purpose. Re-running the latest
     date is always allowed. Raises FileNotFoundError, before writing anything, if
     `cost_export_root` holds no manifest or its latest manifests list no rows. Raises
@@ -157,16 +212,20 @@ def run_load(
             f"{latest.isoformat()}; rebuilding it would roll published costs back "
             "(pass allow_earlier=True to do so on purpose)"
         )
-    export, expected_rows = _read_export(spark, cost_export_root)
+    export, expected_rows, export_runs = _read_export(spark, cost_export_root)
+    manifest = json.loads((Path(seeds_dir) / MANIFEST_FILE).read_text(encoding="utf-8"))
+    digest = inputs_digest(seeds_dir, manifest, export_runs)
 
     row_counts = _build(spark, paths, seeds_dir, export, load_date)
     fingerprint = gold_fingerprint(spark, paths)
-    previous = _previous_fingerprint(spark, log_path, load_date)
+    seen_date, previous = _previous_run(spark, log_path, load_date, digest)
 
-    if previous is None:
-        rerun = CheckResult("rerun_unchanged", True, "first run for this load date; nothing to compare")
-    else:
+    if previous is not None:
         rerun = check_rerun_unchanged(previous, fingerprint)
+    elif seen_date:
+        rerun = CheckResult("rerun_unchanged", True, "new baseline: inputs changed")
+    else:
+        rerun = CheckResult("rerun_unchanged", True, "first run for this load date")
     checks = [
         check_deployment_resolution(spark, paths),
         check_cost_totals(spark, paths, export, expected_rows),
@@ -176,5 +235,5 @@ def run_load(
     failed = [c for c in checks if not c.passed]
     if failed:
         raise QualityCheckFailed(failed)
-    _append_log(spark, log_path, load_date, fingerprint)
+    _append_log(spark, log_path, load_date, fingerprint, digest)
     return RunSummary(load_date=load_date, row_counts=row_counts, checks=checks, fingerprint=fingerprint)

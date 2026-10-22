@@ -231,6 +231,15 @@ def _read_run(spark: SparkSession, run: ExportRun) -> DataFrame:
     return frame.select(*[F.col(f"`{resolved[silver]}`").alias(silver) for silver in COST_COLUMN_ALIASES])
 
 
+def read_export_runs(spark: SparkSession, runs: list[ExportRun]) -> DataFrame:
+    """The part files of `runs` as strings under silver names (empty when no run has a part file)."""
+    frames = [_read_run(spark, run) for run in runs if run.blobs]
+    if not frames:
+        empty = StructType([StructField(name, StringType()) for name in COST_COLUMN_ALIASES])
+        return spark.createDataFrame([], empty)
+    return reduce(DataFrame.unionByName, frames)
+
+
 def read_cost_export(spark: SparkSession, export_root: str) -> tuple[DataFrame, dict[str, int]]:
     """The latest run of each month under `export_root` as strings under silver names.
 
@@ -238,12 +247,7 @@ def read_cost_export(spark: SparkSession, export_root: str) -> tuple[DataFrame, 
     files whose headers differ, or a header lacking a silver column's name raises.
     """
     runs = find_latest_runs(spark, export_root)
-    expected = {run.month_folder: run.data_row_count for run in runs}
-    frames = [_read_run(spark, run) for run in runs if run.blobs]
-    if not frames:
-        empty = StructType([StructField(name, StringType()) for name in COST_COLUMN_ALIASES])
-        return spark.createDataFrame([], empty), expected
-    return reduce(DataFrame.unionByName, frames), expected
+    return read_export_runs(spark, runs), {run.month_folder: run.data_row_count for run in runs}
 
 
 def _select_silver_inputs(export_df: DataFrame) -> DataFrame:
