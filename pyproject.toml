@@ -17,6 +17,7 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
     "pyspark==4.1.1",
     "delta-spark==4.2.0",
+    "requests>=2.32",
 ]
 
 [project.optional-dependencies]
