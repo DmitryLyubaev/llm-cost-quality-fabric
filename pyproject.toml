@@ -27,6 +27,11 @@ dev = [
     "build>=1.2",
     "pyyaml>=6.0.3",
 ]
+deploy = [
+    "fabric-cicd==1.4.0",
+    "azure-identity",
+    "azure-storage-file-datalake",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

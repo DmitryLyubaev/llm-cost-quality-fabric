@@ -1,0 +1,196 @@
+"""Tests for .deploy/deploy.py. Every Azure/Fabric call sits behind a seam the
+tests replace; nothing here touches the network."""
+
+import importlib.util
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+DEPLOY_PY = Path(__file__).resolve().parent.parent / ".deploy" / "deploy.py"
+
+WS = "11111111-aaaa-bbbb-cccc-000000000001"
+LH = "22222222-aaaa-bbbb-cccc-000000000002"
+CONN = "33333333-aaaa-bbbb-cccc-000000000003"
+LOCATION = "https://secretacct.dfs.core.windows.net"
+SUBPATH = "/exports/costs"
+
+
+@pytest.fixture
+def deploy():
+    spec = importlib.util.spec_from_file_location("deploy_script", DEPLOY_PY)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class FakeCredential:
+    def get_token(self, *scopes):
+        self.scopes = scopes
+        return SimpleNamespace(token="tok-secret-value")
+
+
+class FakeFileClient:
+    def __init__(self, store, path):
+        self.store, self.path = store, path
+
+    def upload_data(self, data, overwrite=False):
+        self.store["path"] = self.path
+        self.store["data"] = data
+        self.store["overwrite"] = overwrite
+
+
+class FakeFileSystem:
+    def __init__(self, store, name):
+        self.store, self.name = store, name
+
+    def get_file_client(self, path):
+        self.store["file_system"] = self.name
+        return FakeFileClient(self.store, path)
+
+
+class FakeDatalake:
+    def __init__(self, store):
+        self.store = store
+
+    def get_file_system_client(self, file_system):
+        return FakeFileSystem(self.store, file_system)
+
+
+@pytest.fixture
+def env(monkeypatch, tmp_path):
+    wheel = tmp_path / "lakehouse-0.1.0-py3-none-any.whl"
+    wheel.write_bytes(b"wheel-bytes")
+    values = {
+        "FABRIC_WORKSPACE_ID": WS,
+        "FABRIC_LAKEHOUSE_ID": LH,
+        "FABRIC_CONNECTION_ID": CONN,
+        "FABRIC_ENVIRONMENT": "PROD",
+        "COST_EXPORT_LOCATION": LOCATION,
+        "COST_EXPORT_SUBPATH": SUBPATH,
+        "WHEEL_PATH": str(wheel),
+    }
+    for k, v in values.items():
+        monkeypatch.setenv(k, v)
+    return values
+
+
+@pytest.fixture
+def seams(deploy, monkeypatch):
+    cred = FakeCredential()
+    monkeypatch.setattr(deploy, "_credential", lambda: cred)
+    state = SimpleNamespace(cred=cred, upload={}, posts=[], response=(201, {}),
+                            ws_kwargs=None, published=[])
+
+    def datalake_client(credential):
+        assert credential is cred
+        return FakeDatalake(state.upload)
+
+    def http_post(url, json, token):
+        state.posts.append((url, json, token))
+        return state.response
+
+    def fabric_workspace(**kwargs):
+        state.ws_kwargs = kwargs
+        return "WS-OBJECT"
+
+    monkeypatch.setattr(deploy, "_datalake_client", datalake_client)
+    monkeypatch.setattr(deploy, "_http_post", http_post)
+    monkeypatch.setattr(deploy, "_fabric_workspace", fabric_workspace)
+    monkeypatch.setattr(deploy, "_publish", state.published.append)
+    return state
+
+
+def test_upload_wheel_path(deploy, env, seams):
+    assert deploy.main(["upload-wheel"]) == 0
+    assert seams.upload["file_system"] == WS
+    assert seams.upload["path"] == f"{LH}/Files/wheels/lakehouse-0.1.0-py3-none-any.whl"
+    assert seams.upload["data"] == b"wheel-bytes"
+    assert seams.upload["overwrite"] is True
+    assert deploy.ONELAKE_DFS_URL == "https://onelake.dfs.fabric.microsoft.com"
+
+
+def test_publish_scope_and_args(deploy, env, seams):
+    assert deploy.main(["publish"]) == 0
+    assert seams.ws_kwargs == {
+        "workspace_id": WS,
+        "environment": "PROD",
+        "repository_directory": str(DEPLOY_PY.parent.parent / "fabric"),
+        "item_type_in_scope": ["Lakehouse", "Notebook", "DataPipeline"],
+        "token_credential": seams.cred,
+    }
+    assert Path(seams.ws_kwargs["repository_directory"]).is_absolute()
+    assert seams.published == ["WS-OBJECT"]
+
+
+def test_ensure_shortcut_payload(deploy, env, seams):
+    assert deploy.main(["ensure-shortcut"]) == 0
+    (url, body, token), = seams.posts
+    assert url.startswith(f"https://api.fabric.microsoft.com/v1/workspaces/{WS}/items/{LH}/shortcuts?")
+    assert body == {
+        "path": "Files",
+        "name": "cost_export",
+        "target": {"adlsGen2": {"location": LOCATION, "subpath": SUBPATH,
+                                "connectionId": CONN}},
+    }
+    assert token == "tok-secret-value"
+    assert seams.cred.scopes == ("https://api.fabric.microsoft.com/.default",)
+
+
+def test_ensure_shortcut_is_idempotent_policy(deploy, env, seams):
+    deploy.main(["ensure-shortcut"])
+    url = seams.posts[0][0]
+    assert url.endswith("?shortcutConflictPolicy=CreateOrOverwrite")
+
+
+def test_ensure_shortcut_subpath_must_start_with_slash(deploy, env, seams, monkeypatch):
+    monkeypatch.setenv("COST_EXPORT_SUBPATH", "exports/costs")
+    with pytest.raises(ValueError, match="COST_EXPORT_SUBPATH"):
+        deploy.main(["ensure-shortcut"])
+    assert seams.posts == []
+
+
+@pytest.mark.parametrize("body, code", [
+    ({"errorCode": "InsufficientPrivileges", "message": f"bad {LOCATION}"}, "InsufficientPrivileges"),
+    ({"message": "no code here"}, "unknown"),
+    ("not-json-object", "unknown"),
+    ({"errorCode": f"{LOCATION} injected"}, "unknown"),
+])
+def test_non_2xx_prints_status_not_body(deploy, env, seams, capsys, body, code):
+    seams.response = (403, body)
+    assert deploy.main(["ensure-shortcut"]) == 1
+    out, err = capsys.readouterr()
+    assert err.strip() == f"ensure-shortcut: HTTP 403 {code}"
+    assert out == ""
+    for value in (LOCATION, CONN, WS, LH, SUBPATH, "tok-secret-value", "no code here"):
+        assert value not in out + err
+
+
+def test_missing_env_names_variable_only(deploy, env, seams, monkeypatch, capsys):
+    monkeypatch.delenv("FABRIC_CONNECTION_ID")
+    assert deploy.main(["ensure-shortcut"]) == 2
+    out, err = capsys.readouterr()
+    assert err.strip() == "missing environment variable FABRIC_CONNECTION_ID"
+    assert out == ""
+    assert seams.posts == []
+
+
+@pytest.mark.parametrize("command, name", [
+    ("upload-wheel", "WHEEL_PATH"),
+    ("publish", "FABRIC_ENVIRONMENT"),
+    ("ensure-shortcut", "COST_EXPORT_LOCATION"),
+])
+def test_missing_env_per_command(deploy, env, seams, monkeypatch, capsys, command, name):
+    monkeypatch.delenv(name)
+    assert deploy.main([command]) == 2
+    assert capsys.readouterr().err.strip() == f"missing environment variable {name}"
+
+
+def test_no_secret_in_output(deploy, env, seams, capsys):
+    for command in ("upload-wheel", "publish", "ensure-shortcut"):
+        assert deploy.main([command]) == 0
+    seams.response = (500, {"errorCode": "Boom", "message": LOCATION})
+    assert deploy.main(["ensure-shortcut"]) == 1
+    out, err = capsys.readouterr()
+    for value in list(env.values()) + ["tok-secret-value"]:
+        assert value not in out + err
