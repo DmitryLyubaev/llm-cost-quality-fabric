@@ -1,0 +1,34 @@
+# fabric-cicd 1.4.0 parameter file (https://microsoft.github.io/fabric-cicd/latest/how_to/parameterization/).
+# Only PROD is deployed by fabric-cicd; the dev workspace syncs from git, so it has no key here.
+# Regexes follow fabric-cicd's sample/workspace/parameter.yml; capture group 1 is what is replaced.
+
+find_replace:
+    # The notebooks' default lakehouse: lh_portfolio's logicalId in git -> its deployed id.
+    - find_value: '\#\s*META\s+"default_lakehouse":\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"'
+      replace_value:
+        PROD: "$items.Lakehouse.lh_portfolio.$id"
+      is_regex: "true"
+      item_type: "Notebook"
+      file_path: "**/notebook-content.py"
+    - find_value: '"known_lakehouses":\s*\[\s*# META\s*\{\s*# META\s*"id":\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"'
+      replace_value:
+        PROD: "$items.Lakehouse.lh_portfolio.$id"
+      is_regex: "true"
+      item_type: "Notebook"
+      file_path: "**/notebook-content.py"
+    # The default lakehouse's workspace: the empty GUID ("this workspace") in git -> the target workspace id.
+    - find_value: '\#\s*META\s+"default_lakehouse_workspace_id":\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"'
+      replace_value:
+        PROD: "$workspace.$id"
+      is_regex: "true"
+      item_type: "Notebook"
+      file_path: "**/notebook-content.py"
+
+key_value_replace:
+    # The daily schedule is disabled in git (dev never runs on a timer); PROD turns it on.
+    - find_key: $.schedules[?(@.jobType=="Execute")].enabled
+      replace_value:
+        PROD: true
+      item_type: "DataPipeline"
+      item_name: "pl_daily_load"
+      file_path: "**/.schedules"

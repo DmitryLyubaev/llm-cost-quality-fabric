@@ -1,4 +1,8 @@
-"""Fail if tracked files hold notebook outputs or forbidden literal values.
+"""Fail if tracked files hold notebook outputs, lakehouse shortcuts or forbidden literal values.
+
+Fabric rules: a Fabric `notebook-content.py` must hold no cell-output marker, and a lakehouse
+`shortcuts.metadata.json` must be an empty JSON array (a shortcut's target serialises the storage
+account URL; the deploy creates the shortcut instead, so it never lands in git).
 
 Forbidden values (for example a tenant ID or storage account name) come from the
 HYGIENE_FORBIDDEN environment variable, comma-separated, so they never live in the repo.
@@ -27,16 +31,42 @@ def _notebook_has_outputs(text: str) -> bool:
     return any(cell.get("outputs") for cell in cells if isinstance(cell, dict))
 
 
+# verify in plan 3: the marker a committed Fabric notebook would use for cell output. Fabric
+# documents that outputs are not synced to git, so these are guesses that fail closed.
+FABRIC_OUTPUT_MARKERS = ("# OUTPUT", "# CELL OUTPUT")
+
+
+def _fabric_notebook_has_outputs(text: str) -> bool:
+    return any(line.startswith(FABRIC_OUTPUT_MARKERS) for line in text.splitlines())
+
+
+def _shortcuts_problem(text: str) -> str | None:
+    try:
+        shortcuts = json.loads(text)
+    except json.JSONDecodeError:
+        return "shortcuts file is not valid JSON"
+    if shortcuts != []:
+        return "lakehouse shortcuts are committed (expected an empty array)"
+    return None
+
+
 def check_hygiene(paths: list[Path], forbidden: list[str]) -> list[str]:
     """Return one message per problem found. Messages never repeat a forbidden value."""
     needles = [v.lower() for v in forbidden if v]
     problems: list[str] = []
     for path in paths:
-        text = _read_text(Path(path))
+        path = Path(path)
+        text = _read_text(path)
         if text is None:
             continue
         if path.suffix == ".ipynb" and _notebook_has_outputs(text):
             problems.append(f"{path}: notebook has saved outputs")
+        if path.name == "notebook-content.py" and _fabric_notebook_has_outputs(text):
+            problems.append(f"{path}: Fabric notebook has an output marker")
+        if path.name == "shortcuts.metadata.json":
+            problem = _shortcuts_problem(text)
+            if problem:
+                problems.append(f"{path}: {problem}")
         lowered = text.lower()
         for index, needle in enumerate(needles, start=1):
             if needle in lowered:

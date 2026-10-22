@@ -1,0 +1,85 @@
+{
+  "properties": {
+    "activities": [
+      {
+        "name": "ingest",
+        "type": "TridentNotebook",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.01:00:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 60,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "notebookId": "6a4a957f-1637-4b00-9b4c-fe7c118ce4f1",
+          "workspaceId": "00000000-0000-0000-0000-000000000000",
+          "parameters": {
+            "load_date": {
+              "value": {
+                "value": "@if(empty(pipeline().parameters.load_date), formatDateTime(pipeline().TriggerTime, 'yyyy-MM-dd'), pipeline().parameters.load_date)",
+                "type": "Expression"
+              },
+              "type": "string"
+            },
+            "wheel": {
+              "value": "lakehouse-0.1.0-py3-none-any.whl",
+              "type": "string"
+            },
+            "_inlineInstallationEnabled": {
+              "value": true,
+              "type": "bool"
+            }
+          }
+        }
+      },
+      {
+        "name": "load",
+        "type": "TridentNotebook",
+        "dependsOn": [
+          {
+            "activity": "ingest",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.01:00:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 60,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "notebookId": "b641df7b-3308-46e6-b56b-26dccc3f8c5b",
+          "workspaceId": "00000000-0000-0000-0000-000000000000",
+          "parameters": {
+            "load_date": {
+              "value": {
+                "value": "@if(empty(pipeline().parameters.load_date), formatDateTime(pipeline().TriggerTime, 'yyyy-MM-dd'), pipeline().parameters.load_date)",
+                "type": "Expression"
+              },
+              "type": "string"
+            },
+            "wheel": {
+              "value": "lakehouse-0.1.0-py3-none-any.whl",
+              "type": "string"
+            },
+            "_inlineInstallationEnabled": {
+              "value": true,
+              "type": "bool"
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "load_date": {
+        "type": "string",
+        "defaultValue": ""
+      }
+    }
+  }
+}
