@@ -70,15 +70,38 @@ def test_packaged_seeds_dir_holds_the_seeds():
     assert Path(SEEDS_DIR).parts[-2:] == ("lakehouse", "seeds")
 
 
-def test_wheel_contains_seeds(tmp_path):
+def _build_wheel(tmp_path) -> Path:
     out = tmp_path / "dist"
     args = [sys.executable, "-m", "build", "--wheel", "--outdir", str(out), str(ROOT)]
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode != 0:  # build isolation needs the network for setuptools
         result = subprocess.run([*args, "--no-isolation"], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
-
     (wheel,) = out.glob("lakehouse-*.whl")
+    return wheel
+
+
+def test_wheel_does_not_require_spark_at_runtime(tmp_path):
+    # Fabric already provides Spark and Delta; the wheel must not pull them in on %pip install.
+    wheel = _build_wheel(tmp_path)
+    with zipfile.ZipFile(wheel) as z:
+        (meta,) = [n for n in z.namelist() if n.endswith(".dist-info/METADATA")]
+        requires = [
+            line.split(":", 1)[1].strip()
+            for line in z.read(meta).decode("utf-8").splitlines()
+            if line.startswith("Requires-Dist:")
+        ]
+    names = ("pyspark", "delta-spark")
+    spark = [r for r in requires if r.split(";")[0].strip().lower().startswith(names)]
+    assert spark, requires  # still declared, in the spark extra
+    for r in spark:
+        assert 'extra == "spark"' in r, r
+    runtime = [r for r in requires if "extra ==" not in r]
+    assert [r.split(">")[0].split("=")[0].strip() for r in runtime] == ["requests"], runtime
+
+
+def test_wheel_contains_seeds(tmp_path):
+    wheel = _build_wheel(tmp_path)
     with zipfile.ZipFile(wheel) as z:
         names = set(z.namelist())
     expected = {p.name for p in Path(SEEDS_DIR).iterdir() if p.suffix in (".csv", ".json")}

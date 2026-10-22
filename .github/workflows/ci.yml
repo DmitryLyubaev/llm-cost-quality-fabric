@@ -34,7 +34,7 @@ jobs:
           key: ivy-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
             ivy-${{ runner.os }}-
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,spark]"
       - run: pytest -q
       # Check only: the deploy workflow builds the wheel it uploads.
       - run: python -m build --wheel

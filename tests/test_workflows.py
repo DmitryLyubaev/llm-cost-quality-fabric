@@ -201,6 +201,11 @@ def test_ci_runs_pytest_and_checks_the_wheel_builds(ci):
     assert any("python -m build --wheel" in r for r in runs)
 
 
+def test_ci_installs_the_spark_extra(ci):
+    runs = [str(s.get("run", "")) for s in steps(ci["jobs"]["test"])]
+    assert 'pip install -e ".[dev,spark]"' in runs
+
+
 def test_ci_hygiene_runs_always_and_fails_on_push_without_the_secret(ci):
     hygiene = next(s for s in steps(ci["jobs"]["test"]) if "check_hygiene.py" in str(s.get("run", "")))
     assert hygiene["if"] == "always()"
