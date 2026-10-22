@@ -352,10 +352,10 @@ cost fact, the Type 2 dimension and CI/CD are never cut; they are the skill bein
 
 ## 11. Amendments, 22 October 2026
 
-Where these amendments differ from sections 1–10, the amendment governs. Plan 2 checked the
-Fabric details against current Microsoft documentation and the Terraform provider docs. The
-findings are in `docs/research/2026-10-22-fabric-facts.md`. They change the decisions below;
-earlier sections are left as approved.
+Plan 2 checked the Fabric details against current Microsoft documentation and the Terraform
+provider docs. The findings are in `docs/research/2026-10-22-fabric-facts.md`. They change the
+decisions below. Sections 1–10 are unchanged except for the `dim_project` row in 3.3 (now
+projects 1–9); where an amendment differs from sections 1–10, the amendment governs.
 
 **1. Terraform creates the workspaces, not the capacity link.** The Terraform provider cannot
 assign a trial capacity. Terraform creates the two workspaces (with workspace identity) and their
