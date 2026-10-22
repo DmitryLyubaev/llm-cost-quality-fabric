@@ -7,15 +7,15 @@ been found and read, so a missing or empty export can never replace a full month
 Every run builds once. The re-run check compares this run's gold fingerprint with the one the
 last successful run of the same load date and the same inputs digest recorded in
 `silver/run_log`; a first run for a date, or one whose inputs (seeds, ingest manifest, export
-runs, package version) changed since, is a new baseline and passes. An entry is appended only after every check has passed, so a
-failed run never becomes the baseline.
+runs, package code) changed since, is a new baseline and passes. An entry is appended only after
+every check has passed, so a failed run never becomes the baseline.
 """
 
 import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from importlib.metadata import version
+from importlib.metadata import distribution
 from pathlib import Path
 
 from delta.tables import DeltaTable
@@ -76,22 +76,59 @@ def _read_export(spark: SparkSession, root: str) -> tuple[DataFrame, dict[str, i
     return export, expected_rows, runs
 
 
+def _installed_record() -> str | None:
+    """The installed `lakehouse` distribution's RECORD, or None when it does not list the
+    package's files (an editable install's RECORD lists only its own metadata)."""
+    record = distribution("lakehouse").read_text("RECORD")
+    if record is None or not any(line.startswith("lakehouse/") for line in record.splitlines()):
+        return None
+    return record
+
+
+def _package_dir() -> Path:
+    """The directory the running `lakehouse` package is imported from."""
+    return Path(__file__).resolve().parent
+
+
+def _code_components() -> list[tuple[str, bytes]]:
+    """What stands for the package code: the RECORD of an installed wheel (it carries every file's
+    hash), else the version plus every `*.py` under the package directory by relative path."""
+    record = _installed_record()
+    if record is not None:
+        return [("code:record", record.encode("utf-8"))]
+    package = _package_dir()
+    sources = sorted((p.relative_to(package).as_posix(), p) for p in package.rglob("*.py"))
+    return [("code:version", distribution("lakehouse").version.encode("utf-8"))] + [
+        (f"code:source:{name}", path.read_bytes()) for name, path in sources
+    ]
+
+
+def _feed(digest, name: str, data: bytes) -> None:
+    """One component, framed by lengths so no two different component lists hash alike."""
+    label = name.encode("utf-8")
+    digest.update(len(label).to_bytes(8, "big"))
+    digest.update(label)
+    digest.update(len(data).to_bytes(8, "big"))
+    digest.update(data)
+
+
 def inputs_digest(seeds_dir: str, manifest: dict, export_runs: list[ExportRun]) -> str:
     """First 16 hex chars of a sha256 over everything a run reads besides bronze.
 
-    Hashed in order: the `lakehouse` package version, every file in `seeds_dir` by name (bytes, the
-    ingest manifest included), the ingest manifest as JSON with sorted keys, and the export runs'
-    ids sorted. A run whose digest differs from the last one's is a new baseline: its gold may
-    legitimately differ.
+    Hashed in order, each component as its name, its length and its bytes: the package code
+    (`_code_components`), every file in `seeds_dir` by name (bytes, the ingest manifest included),
+    the ingest manifest as JSON with sorted keys, and the export runs' ids sorted. A run whose
+    digest differs from the last one's is a new baseline: its gold may legitimately differ.
     """
     digest = hashlib.sha256()
-    digest.update(version("lakehouse").encode("utf-8"))
+    for name, data in _code_components():
+        _feed(digest, name, data)
     for path in sorted(Path(seeds_dir).iterdir(), key=lambda p: p.name):
         if path.is_file():
-            digest.update(path.read_bytes())
-    digest.update(json.dumps(manifest, sort_keys=True).encode("utf-8"))
+            _feed(digest, f"seed:{path.name}", path.read_bytes())
+    _feed(digest, "manifest", json.dumps(manifest, sort_keys=True).encode("utf-8"))
     for run_id in sorted(r.run_id for r in export_runs):
-        digest.update(run_id.encode("utf-8"))
+        _feed(digest, "export_run", run_id.encode("utf-8"))
     return digest.hexdigest()[:16]
 
 

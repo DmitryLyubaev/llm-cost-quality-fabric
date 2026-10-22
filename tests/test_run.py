@@ -13,6 +13,7 @@ from lakehouse.checks import QualityCheckFailed
 from lakehouse.gold.build import GOLD_TABLES, REJECT_NAME
 from lakehouse.gold.fingerprint import gold_fingerprint
 from lakehouse.run import RunSummary, inputs_digest
+import lakehouse.run as run_module
 from lakehouse.silver.costs import ExportRun
 
 
@@ -311,6 +312,64 @@ def test_digest_changes_with_export_run(tmp_path):
     )
     (seeds / "a.csv").write_bytes(b"x,y\n1,3\n")
     assert base != inputs_digest(str(seeds), manifest, runs)
+
+
+def _digest_inputs(tmp_path):
+    seeds = tmp_path / "seeds"
+    seeds.mkdir()
+    (seeds / "a.csv").write_bytes(b"x,y\n1,2\n")
+    return str(seeds), {"owner": "someone", "sources": []}, [_export_run("run-1")]
+
+
+def test_digest_changes_when_a_module_source_changes_without_a_record(tmp_path, monkeypatch):
+    """An editable install has no RECORD listing the package files: the sources are hashed."""
+    package = tmp_path / "pkg" / "lakehouse"
+    shutil.copytree(Path(run_module.__file__).parent, package)
+    monkeypatch.setattr(run_module, "_installed_record", lambda: None)
+    monkeypatch.setattr(run_module, "_package_dir", lambda: package)
+    seeds, manifest, runs = _digest_inputs(tmp_path)
+
+    base = inputs_digest(seeds, manifest, runs)
+    assert base == inputs_digest(seeds, manifest, runs)
+    module = package / "silver" / "costs.py"
+    module.write_bytes(module.read_bytes() + b"\n# changed\n")
+
+    assert base != inputs_digest(seeds, manifest, runs)
+
+
+def test_digest_follows_the_installed_record(tmp_path, monkeypatch):
+    """An installed wheel's RECORD carries every file's hash, so it stands for the code."""
+    seeds, manifest, runs = _digest_inputs(tmp_path)
+    record = "lakehouse/__init__.py,sha256=aaa,10\nlakehouse/run.py,sha256=bbb,20\n"
+    monkeypatch.setattr(run_module, "_installed_record", lambda: record)
+    base = inputs_digest(seeds, manifest, runs)
+
+    monkeypatch.setattr(run_module, "_installed_record", lambda: record.replace("bbb", "ccc"))
+
+    assert base != inputs_digest(seeds, manifest, runs)
+
+
+def test_digest_changes_when_a_seed_is_renamed(tmp_path):
+    seeds, manifest, runs = _digest_inputs(tmp_path)
+    base = inputs_digest(seeds, manifest, runs)
+
+    (Path(seeds) / "a.csv").rename(Path(seeds) / "b.csv")
+
+    assert base != inputs_digest(seeds, manifest, runs)
+
+
+def test_digest_separates_its_components(tmp_path):
+    """Moving bytes from the end of one seed to the start of the next changes the digest."""
+    seeds = tmp_path / "seeds"
+    seeds.mkdir()
+    (seeds / "a.csv").write_bytes(b"x,y\n")
+    (seeds / "b.csv").write_bytes(b"1,2\n")
+    base = inputs_digest(str(seeds), {}, [])
+
+    (seeds / "a.csv").write_bytes(b"x,y\n1,2\n")
+    (seeds / "b.csv").write_bytes(b"")
+
+    assert base != inputs_digest(str(seeds), {}, [])
 
 
 def test_run_log_without_the_new_columns_still_works(spark, loaded_lake, tmp_path):
