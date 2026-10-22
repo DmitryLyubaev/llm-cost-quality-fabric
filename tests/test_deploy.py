@@ -248,9 +248,25 @@ def test_ensure_shortcut_subpath_must_start_with_slash(deploy, env, seams, monke
     monkeypatch.setenv("COST_EXPORT_SUBPATH", "exports/costs")
     assert deploy.main(["ensure-shortcut"]) == 1
     out, err = capsys.readouterr()
-    assert err.strip() == "ensure-shortcut: failed (ValueError)"
+    assert err.strip() == "ensure-shortcut: COST_EXPORT_SUBPATH must start with '/'"
     assert out == "" and "exports/costs" not in err
     assert seams.posts == []
+
+
+def test_an_unexpected_error_in_publish_prints_only_its_type(deploy, env, seams, monkeypatch, capsys):
+    url = f"https://x/workspaces/{WS}/items"
+
+    def failing_publish(workspace):
+        raise RuntimeError(f"publish to {url} failed")
+
+    monkeypatch.setattr(deploy, "_publish", failing_publish)
+
+    assert deploy.main(["publish"]) == 1
+    out, err = capsys.readouterr()
+    assert err.strip() == "publish: failed (RuntimeError)"
+    assert out == ""
+    for value in (url, WS, "https://x", "Traceback"):
+        assert value not in out + err
 
 
 @pytest.mark.parametrize("command", ["upload-wheel", "ensure-shortcut"])

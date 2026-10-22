@@ -324,10 +324,12 @@ def _parsed_date(column: str) -> Column:
 
 def _require_readable(raw: DataFrame) -> None:
     """ValueError if a row's Cost is empty or unreadable, its Date text is unreadable, or its
-    exchange-rate text is non-empty and not a number (an empty rate is null).
+    exchange-rate text is non-empty and not a positive finite number (an empty rate is null; NaN,
+    an infinity, zero and a negative rate are unreadable).
 
     Done with non-raising casts so the answer does not depend on the session's ANSI setting.
     """
+    rate = F.trim("fx_pricing_to_billing").try_cast("double")
     counts = raw.agg(
         F.count(F.when(F.trim("cost").try_cast("double").isNull(), 1)).alias("cost"),
         F.count(
@@ -336,7 +338,12 @@ def _require_readable(raw: DataFrame) -> None:
         F.count(
             F.when(
                 (F.trim("fx_pricing_to_billing") != "")
-                & F.trim("fx_pricing_to_billing").try_cast("double").isNull(),
+                & (
+                    rate.isNull()
+                    | F.isnan(rate)
+                    | (rate <= 0)
+                    | (rate == F.lit(float("inf")))  # NaN sorts above everything, so test it first
+                ),
                 1,
             )
         ).alias("fx_pricing_to_billing"),
@@ -348,7 +355,8 @@ def _require_readable(raw: DataFrame) -> None:
         problems.append(f"{counts['cost_date']} row(s) have a cost_date that is not a date")
     if counts["fx_pricing_to_billing"]:
         problems.append(
-            f"{counts['fx_pricing_to_billing']} row(s) have a fx_pricing_to_billing that is not a number"
+            f"{counts['fx_pricing_to_billing']} row(s) have a fx_pricing_to_billing that is not a "
+            "positive finite number"
         )
     if problems:
         raise ValueError("cost export is not readable: " + "; ".join(problems))
@@ -407,12 +415,16 @@ def replace_month(spark: SparkSession, df: DataFrame, table_path: str, billing_m
     """Replace one billing month of the Delta table with df; other months are untouched.
 
     Raises ValueError, before writing anything, if df holds any month other than
-    `billing_month`. A restated month that lost rows loses them from the table too. The write
-    merges the schema, so a table written before `pricing_currency` and `fx_pricing_to_billing`
+    `billing_month` or any column that is not in COST_COLUMNS (the schema merge would otherwise
+    let a stray column into the table; a subset of COST_COLUMNS is fine). A restated month that
+    lost rows loses them from the table too. The write merges the schema, so a table written before `pricing_currency` and `fx_pricing_to_billing`
     existed gains them (null for the months not restated).
     """
     if not _MONTH.fullmatch(billing_month):
         raise ValueError(f"billing_month must be YYYY-MM, got {billing_month!r}")
+    stray = [column for column in df.columns if column not in COST_COLUMNS]
+    if stray:
+        raise ValueError(f"silver costs has no column {stray}; expected a subset of {COST_COLUMNS}")
     months = {r["billing_month"] for r in df.select("billing_month").distinct().collect()}
     foreign = sorted(months - {billing_month}, key=str)
     if foreign:

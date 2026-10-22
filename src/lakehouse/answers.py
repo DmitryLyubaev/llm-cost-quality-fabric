@@ -115,8 +115,8 @@ def cost_per_result(spark: SparkSession, paths: LakePaths) -> DataFrame:
     two are never added together, and the actual is never converted.
 
     The estimate is also shown in the billing currency, converted only at the export's own
-    USD-to-billing rate: `fx_month` is the calendar month (`yyyy-MM`, session time zone) of the
-    project's earliest scored `started_at`, and `fx_usd_to_billing` is the rate for that month and
+    USD-to-billing rate: `fx_month` is the calendar month (`yyyy-MM`, in UTC) of the project's
+    earliest scored `started_at`, and `fx_usd_to_billing` is the rate for that month and
     that row's `actual_currency` (`_usd_rates`). `estimated_in_billing_total` is the USD total times
     the rate and `estimated_in_billing_per_result` that over `results`; both are null when the
     rate or the estimate is null (no single rate for the month and currency, or unpriced results).
@@ -124,7 +124,13 @@ def cost_per_result(spark: SparkSession, paths: LakePaths) -> DataFrame:
     `unpriced_results` counts the scored results with no cost and a basis other than `no_model`
     (a model without a rate). When it is above zero the estimate is unknown, so the estimated
     total and per-result values are null rather than a sum that leaves those results out.
+
+    ValueError if the session time zone is not UTC: the month is cut in the session's zone, so
+    another zone could put a study near a month boundary in the wrong month and pick that month's rate.
     """
+    zone = spark.conf.get("spark.sql.session.timeZone")
+    if zone != "UTC":
+        raise ValueError(f"cost_per_result needs a UTC session (spark.sql.session.timeZone), got {zone!r}")
     project = F.create_map(*[x for pair in STUDY_PROJECT.items() for x in (F.lit(pair[0]), F.lit(pair[1]))])
     facts = _gold(spark, paths, "fact_eval_attempt").where(F.col("attempt_kind") == SCORED)
     estimated = (

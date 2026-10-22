@@ -443,6 +443,16 @@ def test_an_empty_rate_is_null_and_a_non_numeric_rate_is_an_error(spark, tmp_pat
         normalise_costs(spark, bad, RULES, WINDOWS)
 
 
+@pytest.mark.parametrize("rate", ["NaN", "Infinity", "-Infinity", "0", "-1.5"])
+def test_a_rate_that_is_not_a_positive_finite_number_is_an_error(spark, tmp_path, rate):
+    export = _export(spark, tmp_path, style="new").withColumn(
+        "fx_pricing_to_billing",
+        F.when(F.col("meter_id") == "meter-blob", F.lit(rate)).otherwise(F.col("fx_pricing_to_billing")),
+    )
+    with pytest.raises(ValueError, match=r"1 row.*fx_pricing_to_billing"):
+        normalise_costs(spark, export, RULES, WINDOWS)
+
+
 def test_unreadable_date_is_an_error(spark, tmp_path):
     export = _export(spark, tmp_path).withColumn(
         "cost_date", F.when(F.col("meter_id") == "meter-blob", F.lit("someday")).otherwise(F.col("cost_date"))
@@ -526,6 +536,19 @@ def test_replace_month_adds_new_columns_to_a_table_written_before_them(spark, tm
     assert _months(spark, table) == {"2026-09": ROWS, "2026-10": ROWS}
     assert current.filter("billing_month = '2026-10'").filter(F.col("fx_pricing_to_billing") == 1.5).count() == ROWS
     assert current.filter("billing_month = '2026-09'").filter(F.col("fx_pricing_to_billing").isNotNull()).count() == 0
+
+
+def test_replace_month_rejects_a_column_silver_does_not_define(spark, tmp_path, tmp_lake):
+    """mergeSchema would otherwise let any stray column into the table."""
+    table = tmp_lake.table("silver", "fact_cost")
+    octo = _silver(spark, tmp_path, "oct", "2026-10")
+    replace_month(spark, octo, table, "2026-10")
+
+    with pytest.raises(ValueError, match="stray_column"):
+        replace_month(spark, octo.withColumn("stray_column", F.lit(1)), table, "2026-10")
+
+    assert "stray_column" not in spark.read.format("delta").load(table).columns
+    assert _months(spark, table) == {"2026-10": ROWS}
 
 
 def test_replace_month_rejects_other_months(spark, tmp_path, tmp_lake):

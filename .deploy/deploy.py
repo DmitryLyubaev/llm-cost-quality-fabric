@@ -177,7 +177,7 @@ def ensure_shortcut():
     location = _env("COST_EXPORT_LOCATION")
     subpath = _env("COST_EXPORT_SUBPATH")
     if not subpath.startswith("/"):
-        raise ValueError("COST_EXPORT_SUBPATH must start with '/'")
+        raise StepFailed("COST_EXPORT_SUBPATH must start with '/'")
     body = {
         "path": SHORTCUT_PATH,
         "name": SHORTCUT_NAME,

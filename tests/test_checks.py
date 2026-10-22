@@ -406,6 +406,19 @@ def _result_rows(spark, paths):
     return [r for r in cost_per_result(spark, paths).collect()]
 
 
+def test_cost_per_result_refuses_a_session_that_is_not_utc(spark, tmp_lake):
+    """The study month is cut in the session time zone, so a non-UTC session could pick the wrong
+    month's rate: it is refused, before any table is read."""
+    before = spark.conf.get("spark.sql.session.timeZone")
+    spark.conf.set("spark.sql.session.timeZone", "Australia/Brisbane")
+    try:
+        with pytest.raises(ValueError, match=r"UTC.*Australia/Brisbane|Australia/Brisbane.*UTC"):
+            cost_per_result(spark, tmp_lake)
+    finally:
+        spark.conf.set("spark.sql.session.timeZone", before)
+    assert spark.conf.get("spark.sql.session.timeZone") == before
+
+
 def test_cost_per_result_converts_the_estimate_at_the_exports_rate_for_the_study_month(spark, tmp_lake):
     paths = _fx_lake(
         spark, tmp_lake,
