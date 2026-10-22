@@ -8,10 +8,11 @@ git-ignored along with `*.tfvars`, `.terraform/` and plan files. The provider lo
 ## `fabric/`
 
 Creates the two Fabric workspaces `p9-dev` and `p9-prod`, each with a system-assigned workspace
-identity, and their role assignments: the owner as Admin and the deploy service principal as
-Contributor on both. It sets no capacity, because the provider cannot assign a trial capacity
-(spec amendment 1); assign the trial capacity in the Fabric UI after apply. Values from
-`terraform.tfvars`: `owner_object_id` and `deploy_sp_object_id`. Outputs the two workspace IDs
+identity, and the deploy service principal's Contributor role on both. The owner, who runs
+Terraform through Azure CLI, creates the workspaces and is therefore already Admin on both, so
+the stack assigns no owner role. It sets no capacity, because the provider cannot assign a trial
+capacity (spec amendment 1); assign the trial capacity in the Fabric UI after apply. Value from
+`terraform.tfvars`: `deploy_sp_object_id`. Outputs the two workspace IDs
 and the two workspace identities' service principal IDs. Authenticates through Azure CLI as the
 signed-in user (`az login`).
 

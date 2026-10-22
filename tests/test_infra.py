@@ -8,6 +8,7 @@ INFRA = Path(__file__).resolve().parent.parent / "infra"
 STACKS = ("fabric", "cost-export")
 GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 URL = re.compile(r"https?://", re.IGNORECASE)
+BLOCK_END = "\n}\n"
 
 
 def tf_files():
@@ -73,8 +74,14 @@ def test_fabric_stack_shape():
         line for path in (INFRA / "fabric").glob("*.tf") for line in code_lines(path)
     )
     assert "amendment 1" in text
-    assert 'role = "Admin"' in text and 'role = "Contributor"' in text
-    assert "var.owner_object_id" in text and "var.deploy_sp_object_id" in text
+    # The owner creates the workspaces through Azure CLI and is Admin as their creator, so there
+    # is no owner role assignment (and no owner_object_id) to manage.
+    assert 'role = "Admin"' not in text
+    assert "owner_object_id" not in text and "owner_dev" not in text and "owner_prod" not in text
+    assert "already Admin" in text
+    assert text.count('role = "Contributor"') == 2
+    assert text.count("fabric_workspace_role_assignment") == 2
+    assert "var.deploy_sp_object_id" in text
     assert text.count("service_principal_id") >= 2
 
 
@@ -109,13 +116,29 @@ def test_cost_export_has_no_output_naming_the_account():
 def test_variables_have_no_secret_defaults():
     fabric = (INFRA / "fabric" / "variables.tf").read_text(encoding="utf-8")
     cost = (INFRA / "cost-export" / "variables.tf").read_text(encoding="utf-8")
-    for name in ("owner_object_id", "deploy_sp_object_id"):
+    for name in ("deploy_sp_object_id",):
         block = fabric.split(f'variable "{name}"', 1)[1].split("\n}\n", 1)[0]
         assert "default" not in block
     for name in ("subscription_id", "storage_account_name"):
         block = cost.split(f'variable "{name}"', 1)[1].split("\n}\n", 1)[0]
         assert "default" not in block
     assert 'default     = "australiaeast"' in cost
+
+
+def test_cost_export_identifiers_are_sensitive_and_the_reader_is_a_service_principal():
+    cost = (INFRA / "cost-export" / "variables.tf").read_text(encoding="utf-8")
+    for name in ("subscription_id", "storage_account_name"):
+        block = cost.split(f'variable "{name}"', 1)[1].split(BLOCK_END, 1)[0]
+        assert squash("sensitive = true") in squash(block), name
+    main = (INFRA / "cost-export" / "main.tf").read_text(encoding="utf-8")
+    reader = main.split('resource "azurerm_role_assignment" "reader"', 1)[1].split(BLOCK_END, 1)[0]
+    assert squash('principal_type = "ServicePrincipal"') in squash(reader)
+
+
+def test_readme_names_no_owner_object_id():
+    readme = (INFRA / "README.md").read_text(encoding="utf-8")
+    assert "owner_object_id" not in readme
+    assert "already Admin" in readme
 
 
 def test_gitignore_covers_terraform_local_state_but_not_lock_files():

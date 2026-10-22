@@ -45,4 +45,5 @@ resource "azurerm_role_assignment" "reader" {
   scope                = azurerm_storage_account.cost_export.id
   role_definition_name = "Storage Blob Data Reader"
   principal_id         = each.value
+  principal_type       = "ServicePrincipal"
 }

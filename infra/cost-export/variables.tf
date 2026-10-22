@@ -1,11 +1,13 @@
 variable "subscription_id" {
   description = "Azure subscription ID. Set in terraform.tfvars; never committed."
   type        = string
+  sensitive   = true
 }
 
 variable "storage_account_name" {
   description = "Globally unique storage account name (3 to 24 lower-case letters and digits). Set in terraform.tfvars; never committed."
   type        = string
+  sensitive   = true
 }
 
 variable "location" {

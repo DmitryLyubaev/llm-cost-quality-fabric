@@ -19,25 +19,8 @@ resource "fabric_workspace" "prod" {
   }
 }
 
-resource "fabric_workspace_role_assignment" "owner_dev" {
-  workspace_id = fabric_workspace.dev.id
-  role         = "Admin"
-
-  principal = {
-    id   = var.owner_object_id
-    type = "User"
-  }
-}
-
-resource "fabric_workspace_role_assignment" "owner_prod" {
-  workspace_id = fabric_workspace.prod.id
-  role         = "Admin"
-
-  principal = {
-    id   = var.owner_object_id
-    type = "User"
-  }
-}
+# No owner role assignment: the owner runs Terraform through Azure CLI as themselves, so they
+# create both workspaces and are already Admin on each as the creator.
 
 resource "fabric_workspace_role_assignment" "deploy_dev" {
   workspace_id = fabric_workspace.dev.id
