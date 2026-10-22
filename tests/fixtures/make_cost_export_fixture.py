@@ -11,7 +11,8 @@ manifest.
 
   portfolio-daily/20261001-20261031/<RUN_A>  superseded October run: 12 rows (one stale), MOSA headers
   portfolio-daily/20261001-20261031/<RUN_B>  latest October run: 11 rows in two parts, MOSA headers
-  portfolio-daily/20260901-20260930/<RUN_C>  September run: 4 rows, newer (camelCase) headers
+  portfolio-daily/20260901-20260930/<RUN_C>  September run: 4 rows, newer (camelCase) headers,
+                                             with pricingCurrency (USD) and a rate of 1.5
 
 Synthetic values only.
 """
@@ -35,7 +36,14 @@ SILVER_NAMES = (
 )
 
 # Extra columns the real export carries that silver does not use.
-_EXTRA = {"meter_category": "Cognitive Services", "quantity": "1"}
+_EXTRA = {
+    "meter_category": "Cognitive Services",
+    "quantity": "1",
+    # the newer export's pricing currency and its one rate to the billing currency (the MOSA
+    # headers list neither, so these are written only for the newer style)
+    "pricing_currency": "USD",
+    "fx_pricing_to_billing": "1.5",  # synthetic USD -> AUD, the same on every row of the month
+}
 
 HEADERS: dict[str, dict[str, str]] = {
     # Pay-as-you-go (MOSA) 2019-11-01 names
@@ -51,6 +59,7 @@ HEADERS: dict[str, dict[str, str]] = {
         "meter_id": "meterId", "meter_name": "meterName", "cost": "costInBillingCurrency",
         "billing_currency": "billingCurrencyCode", "tags": "tags",
         "meter_category": "meterCategory", "quantity": "quantity",
+        "pricing_currency": "pricingCurrency", "fx_pricing_to_billing": "exchangeRatePricingToBilling",
     },
 }
 

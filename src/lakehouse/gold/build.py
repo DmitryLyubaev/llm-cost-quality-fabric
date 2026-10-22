@@ -188,6 +188,8 @@ def build_gold(spark: SparkSession, paths: LakePaths, seeds_dir: str) -> dict[st
         "meter_name",
         "cost",
         "billing_currency",
+        "pricing_currency",
+        "fx_pricing_to_billing",
         "project",
         "attribution_rule",
         "billing_month",

@@ -1,6 +1,6 @@
 {
   "manifestVersion": "2024-04-01",
-  "byteCount": 410,
+  "byteCount": 438,
   "blobCount": 1,
   "dataRowCount": 4,
   "exportConfig": {
@@ -30,7 +30,7 @@
   "blobs": [
     {
       "blobName": "synthetic-prefix/portfolio-daily/20260901-20260930/0a1b2c3d-0000-4000-8000-00000000000c/part0.csv.gz",
-      "byteCount": 410,
+      "byteCount": 438,
       "dataRowCount": 4
     }
   ]
