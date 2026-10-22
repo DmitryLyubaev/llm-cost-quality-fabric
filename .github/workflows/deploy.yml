@@ -1,0 +1,130 @@
+name: deploy
+
+# Runs only on a push to dev (dev wheel) or main (prod). Never on pull_request, and there are no
+# manual inputs. Every value comes from the GitHub environment secrets of the `dev` / `prod`
+# environment; Azure access is OIDC (azure/login), with no client secret.
+on:
+  push:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install build
+      - run: python -m build --wheel
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheel
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # dev: the wheel only. Dev items come from Fabric git sync, so there is no publish here.
+  dev:
+    if: github.ref == 'refs/heads/dev'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wheel
+          path: dist
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - run: pip install ".[deploy]"
+      - name: Upload the wheel
+        env:
+          FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
+          FABRIC_LAKEHOUSE_ID: ${{ secrets.FABRIC_LAKEHOUSE_ID }}
+        run: |
+          WHEEL_PATH="$(ls dist/*.whl)"
+          export WHEEL_PATH
+          python .deploy/deploy.py upload-wheel
+      - name: Ensure the cost-export shortcut
+        env:
+          FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
+          FABRIC_LAKEHOUSE_ID: ${{ secrets.FABRIC_LAKEHOUSE_ID }}
+          FABRIC_CONNECTION_ID: ${{ secrets.FABRIC_CONNECTION_ID }}
+          COST_EXPORT_LOCATION: ${{ secrets.COST_EXPORT_LOCATION }}
+          COST_EXPORT_SUBPATH: ${{ secrets.COST_EXPORT_SUBPATH }}
+        run: python .deploy/deploy.py ensure-shortcut
+
+  # prod: wheel, publish the Fabric items, shortcut. The `prod` environment's required reviewer
+  # (configured in plan 3) gates this job.
+  prod:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: prod
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wheel
+          path: dist
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - run: pip install ".[deploy]"
+      - name: Upload the wheel
+        env:
+          FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
+          FABRIC_LAKEHOUSE_ID: ${{ secrets.FABRIC_LAKEHOUSE_ID }}
+        run: |
+          WHEEL_PATH="$(ls dist/*.whl)"
+          export WHEEL_PATH
+          python .deploy/deploy.py upload-wheel
+      - name: Publish the Fabric items
+        env:
+          FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
+          FABRIC_ENVIRONMENT: PROD
+        run: python .deploy/deploy.py publish
+      - name: Ensure the cost-export shortcut
+        env:
+          FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
+          FABRIC_LAKEHOUSE_ID: ${{ secrets.FABRIC_LAKEHOUSE_ID }}
+          FABRIC_CONNECTION_ID: ${{ secrets.FABRIC_CONNECTION_ID }}
+          COST_EXPORT_LOCATION: ${{ secrets.COST_EXPORT_LOCATION }}
+          COST_EXPORT_SUBPATH: ${{ secrets.COST_EXPORT_SUBPATH }}
+        run: python .deploy/deploy.py ensure-shortcut

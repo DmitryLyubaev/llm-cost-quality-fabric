@@ -12,18 +12,54 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TF_IN_AUTOMATION: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Versions pinned to Fabric Runtime 2.0 (GA): Java 21, Python 3.13, Spark 4.1, Delta 4.2.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: "21"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      # Spark resolves the Delta jars through Ivy; cache them between runs.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ivy2
+          key: ivy-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ivy-${{ runner.os }}-
       - run: pip install -e ".[dev]"
       - run: pytest -q
-      - run: python tools/check_hygiene.py
+      # Check only: the deploy workflow builds the wheel it uploads.
+      - run: python -m build --wheel
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.9.x
+          terraform_wrapper: false
+      # Format and validate only; CI never plans or applies, and uses no backend or credentials.
+      - run: terraform fmt -check -recursive infra
+      - run: |
+          terraform -chdir=infra/fabric init -backend=false && terraform -chdir=infra/fabric validate
+      - run: |
+          terraform -chdir=infra/cost-export init -backend=false && terraform -chdir=infra/cost-export validate
+      # The forbidden values live in a secret. A push must have it; a pull request from a fork has
+      # no secrets, so only the forbidden-value part is skipped there (the structural checks run).
+      - name: Hygiene
+        if: always()
         env:
           HYGIENE_FORBIDDEN: ${{ secrets.HYGIENE_FORBIDDEN }}
+        run: |
+          if [ -z "$HYGIENE_FORBIDDEN" ]; then
+            if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+              echo "::error::HYGIENE_FORBIDDEN is empty on a push; add the repository secret so the forbidden-value check can run"
+              exit 1
+            fi
+            echo "::notice::HYGIENE_FORBIDDEN is empty (pull requests from forks get no secrets); skipping the forbidden-value check"
+          fi
+          python tools/check_hygiene.py
