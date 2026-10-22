@@ -19,3 +19,8 @@ htmlcov/
 spark-warehouse/
 metastore_db/
 derby.log
+
+# Terraform (lock files are committed; state, plans and variable files are not)
+.terraform/
+*.tfvars
+*.tfplan

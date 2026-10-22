@@ -46,7 +46,7 @@ GRAINS: dict[str, str] = {
     "fact_daily_cost": "cost-export line: resource x meter x day",
     "fact_live_check": "check x session",
     "dim_model_deployment": "deployment version (Type 2)",
-    "dim_project": "project 1-8, plus releaselens-shared and untagged",
+    "dim_project": "project 1-9, plus releaselens-shared and untagged",
     "dim_study": "study run",
     "dim_arm": "arm within a study",
     "dim_date": "day",
@@ -64,6 +64,7 @@ PROJECTS = [
     ("p6", "App Service front end"),
     ("p7", "Short-lived build agents on Container Apps jobs"),
     ("p8", "Azure Pipelines delivery for project 2"),
+    ("p9", "Fabric lakehouse and batch pipelines"),
     ("releaselens-shared", "ReleaseLens shared resources"),
     ("untagged", "Untagged spend"),
 ]

@@ -245,9 +245,11 @@ def test_dimensions(spark, silver):
     counts = build_gold(spark, paths, SEEDS)
 
     projects = {r["project"]: r["name"] for r in _gold(spark, paths, "dim_project").collect()}
-    assert sorted(projects) == ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "releaselens-shared", "untagged"]
+    assert sorted(projects) == ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "releaselens-shared", "untagged"]
     assert projects["p1"] == "Azure OpenAI, keyless"
     assert projects["p8"] == "Azure Pipelines delivery for project 2"
+    assert projects["p9"] == "Fabric lakehouse and batch pipelines"
+    assert len(projects) == 11
 
     studies = {
         (r["study"], r["run_id"]): r["started_at"]
