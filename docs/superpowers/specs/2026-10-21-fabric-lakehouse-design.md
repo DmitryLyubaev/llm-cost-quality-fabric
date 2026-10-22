@@ -98,7 +98,7 @@ The local folder is `E:\Projects\Fabric`; renaming it to match the repo is the b
 | `fact_daily_cost` | cost-export line: resource × meter × day | Cost Management export | Actual cost in the billing currency; project from attribution rules (3.6) |
 | `fact_live_check` | check × session | P4–P8 public reports | ~50 rows; verdict, measured value, unit, date, source report and commit SHA |
 | `dim_model_deployment` | deployment version (Type 2) | Terraform git history | `valid_from`, `valid_to`, `is_current`; model, version, SKU, capacity, region, account |
-| `dim_project` | project 1–8, plus `releaselens-shared` and `untagged` | seed | |
+| `dim_project` | projects 1–9, plus `releaselens-shared` and `untagged` | seed | |
 | `dim_study` | study run | results files | P1 three-arm, P2 six-arm, P3 agent study |
 | `dim_arm` | arm within a study | results files | maps arm → deployment name |
 | `dim_date` | day | generated | |
@@ -352,9 +352,10 @@ cost fact, the Type 2 dimension and CI/CD are never cut; they are the skill bein
 
 ## 11. Amendments, 22 October 2026
 
-Plan 2 checked the Fabric details against current Microsoft documentation and the Terraform
-provider docs. The findings are in `docs/research/2026-10-22-fabric-facts.md`. They change the
-decisions below; earlier sections are left as approved.
+Where these amendments differ from sections 1–10, the amendment governs. Plan 2 checked the
+Fabric details against current Microsoft documentation and the Terraform provider docs. The
+findings are in `docs/research/2026-10-22-fabric-facts.md`. They change the decisions below;
+earlier sections are left as approved.
 
 **1. Terraform creates the workspaces, not the capacity link.** The Terraform provider cannot
 assign a trial capacity. Terraform creates the two workspaces (with workspace identity) and their
