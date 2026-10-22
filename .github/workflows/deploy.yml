@@ -22,6 +22,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
@@ -47,6 +49,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
@@ -56,16 +60,17 @@ jobs:
         with:
           name: wheel
           path: dist
+      # Install before logging in: the Azure CLI session exists only for the deploy.py steps.
+      - run: pip install ".[deploy]"
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
-      - run: pip install ".[deploy]"
+      # The lakehouse lh_portfolio is looked up by name in the workspace.
       - name: Upload the wheel
         env:
           FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
-          FABRIC_LAKEHOUSE_ID: ${{ secrets.FABRIC_LAKEHOUSE_ID }}
         run: |
           WHEEL_PATH="$(ls dist/*.whl)"
           export WHEEL_PATH
@@ -73,14 +78,14 @@ jobs:
       - name: Ensure the cost-export shortcut
         env:
           FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
-          FABRIC_LAKEHOUSE_ID: ${{ secrets.FABRIC_LAKEHOUSE_ID }}
           FABRIC_CONNECTION_ID: ${{ secrets.FABRIC_CONNECTION_ID }}
           COST_EXPORT_LOCATION: ${{ secrets.COST_EXPORT_LOCATION }}
           COST_EXPORT_SUBPATH: ${{ secrets.COST_EXPORT_SUBPATH }}
         run: python .deploy/deploy.py ensure-shortcut
 
-  # prod: wheel, publish the Fabric items, shortcut. The `prod` environment's required reviewer
-  # (configured in plan 3) gates this job.
+  # prod: publish the Fabric items first (on a first deploy that creates lh_portfolio), then the
+  # wheel, then the shortcut. The `prod` environment's required reviewer (configured in plan 3)
+  # gates this job.
   prod:
     if: github.ref == 'refs/heads/main'
     needs: build
@@ -92,6 +97,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
@@ -101,29 +108,29 @@ jobs:
         with:
           name: wheel
           path: dist
+      # Install before logging in: the Azure CLI session exists only for the deploy.py steps.
+      - run: pip install ".[deploy]"
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
-      - run: pip install ".[deploy]"
-      - name: Upload the wheel
-        env:
-          FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
-          FABRIC_LAKEHOUSE_ID: ${{ secrets.FABRIC_LAKEHOUSE_ID }}
-        run: |
-          WHEEL_PATH="$(ls dist/*.whl)"
-          export WHEEL_PATH
-          python .deploy/deploy.py upload-wheel
       - name: Publish the Fabric items
         env:
           FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
           FABRIC_ENVIRONMENT: PROD
         run: python .deploy/deploy.py publish
+      # The lakehouse lh_portfolio is looked up by name in the workspace.
+      - name: Upload the wheel
+        env:
+          FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
+        run: |
+          WHEEL_PATH="$(ls dist/*.whl)"
+          export WHEEL_PATH
+          python .deploy/deploy.py upload-wheel
       - name: Ensure the cost-export shortcut
         env:
           FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
-          FABRIC_LAKEHOUSE_ID: ${{ secrets.FABRIC_LAKEHOUSE_ID }}
           FABRIC_CONNECTION_ID: ${{ secrets.FABRIC_CONNECTION_ID }}
           COST_EXPORT_LOCATION: ${{ secrets.COST_EXPORT_LOCATION }}
           COST_EXPORT_SUBPATH: ${{ secrets.COST_EXPORT_SUBPATH }}

@@ -109,12 +109,43 @@ def test_dev_uploads_and_shortcuts_but_does_not_publish(deploy):
     assert deploy_commands(deploy["jobs"]["dev"]) == ["upload-wheel", "ensure-shortcut"]
 
 
-def test_prod_uploads_publishes_and_shortcuts_in_order(deploy):
+def test_prod_publishes_then_uploads_then_shortcuts(deploy):
+    # publish first: on a first deploy the lakehouse the wheel and the shortcut go into exists
+    # only after it
     assert deploy_commands(deploy["jobs"]["prod"]) == [
-        "upload-wheel",
         "publish",
+        "upload-wheel",
         "ensure-shortcut",
     ]
+
+
+@pytest.mark.parametrize("job", ["dev", "prod"])
+def test_install_comes_before_login_and_login_directly_before_the_first_deploy_step(deploy, job):
+    job_steps = steps(deploy["jobs"][job])
+    install = next(
+        i for i, s in enumerate(job_steps) if 'pip install ".[deploy]"' in str(s.get("run", ""))
+    )
+    login = next(
+        i for i, s in enumerate(job_steps) if str(s.get("uses", "")).startswith("azure/login@")
+    )
+    first_deploy = next(
+        i for i, s in enumerate(job_steps) if "deploy.py" in str(s.get("run", ""))
+    )
+    assert install < login
+    assert login + 1 == first_deploy
+
+
+def test_no_workflow_takes_a_lakehouse_id(any_workflow):
+    for job_name, step in all_steps(any_workflow):
+        assert "FABRIC_LAKEHOUSE_ID" not in (step.get("env") or {}), job_name
+        assert "FABRIC_LAKEHOUSE_ID" not in str(step.get("run", "")), job_name
+
+
+def test_every_checkout_does_not_persist_credentials(any_workflow):
+    checkouts = [s for _, s in all_steps(any_workflow) if str(s.get("uses", "")).startswith("actions/checkout@")]
+    assert checkouts
+    for step in checkouts:
+        assert (step.get("with") or {}).get("persist-credentials") is False
 
 
 def test_prod_publishes_into_the_prod_environment(deploy):

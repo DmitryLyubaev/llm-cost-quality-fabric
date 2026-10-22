@@ -14,6 +14,8 @@ LH = "22222222-aaaa-bbbb-cccc-000000000002"
 CONN = "33333333-aaaa-bbbb-cccc-000000000003"
 LOCATION = "https://secretacct.dfs.core.windows.net"
 SUBPATH = "/exports/costs"
+OTHER_LH = "44444444-aaaa-bbbb-cccc-000000000004"
+LIST_URL = f"https://api.fabric.microsoft.com/v1/workspaces/{WS}/lakehouses"
 
 
 @pytest.fixture
@@ -63,7 +65,6 @@ def env(monkeypatch, tmp_path):
     wheel.write_bytes(b"wheel-bytes")
     values = {
         "FABRIC_WORKSPACE_ID": WS,
-        "FABRIC_LAKEHOUSE_ID": LH,
         "FABRIC_CONNECTION_ID": CONN,
         "FABRIC_ENVIRONMENT": "PROD",
         "COST_EXPORT_LOCATION": LOCATION,
@@ -80,7 +81,10 @@ def seams(deploy, monkeypatch):
     cred = FakeCredential()
     monkeypatch.setattr(deploy, "_credential", lambda: cred)
     state = SimpleNamespace(cred=cred, upload={}, posts=[], response=(201, {}),
-                            ws_kwargs=None, published=[])
+                            ws_kwargs=None, published=[], gets=[], pages=[(200, {"value": [
+                                {"displayName": "lh_other", "id": OTHER_LH},
+                                {"displayName": "lh_portfolio", "id": LH},
+                            ]})])
 
     def datalake_client(credential):
         assert credential is cred
@@ -90,12 +94,17 @@ def seams(deploy, monkeypatch):
         state.posts.append((url, json, token))
         return state.response
 
+    def http_get(url, token):
+        state.gets.append((url, token))
+        return state.pages[len(state.gets) - 1]
+
     def fabric_workspace(**kwargs):
         state.ws_kwargs = kwargs
         return "WS-OBJECT"
 
     monkeypatch.setattr(deploy, "_datalake_client", datalake_client)
     monkeypatch.setattr(deploy, "_http_post", http_post)
+    monkeypatch.setattr(deploy, "_http_get", http_get)
     monkeypatch.setattr(deploy, "_fabric_workspace", fabric_workspace)
     monkeypatch.setattr(deploy, "_publish", state.published.append)
     return state
@@ -108,6 +117,52 @@ def test_upload_wheel_path(deploy, env, seams):
     assert seams.upload["data"] == b"wheel-bytes"
     assert seams.upload["overwrite"] is True
     assert deploy.ONELAKE_DFS_URL == "https://onelake.dfs.fabric.microsoft.com"
+    # the lakehouse is looked up by name with a Fabric-scoped token from the same credential
+    assert seams.gets == [(LIST_URL, "tok-secret-value")]
+    assert seams.cred.scopes == ("https://api.fabric.microsoft.com/.default",)
+
+
+def test_the_lakehouse_id_is_not_an_input(deploy, env, seams, monkeypatch):
+    monkeypatch.setenv("FABRIC_LAKEHOUSE_ID", OTHER_LH)
+    for command in ("upload-wheel", "ensure-shortcut"):
+        assert deploy.main([command]) == 0
+        seams.gets.clear()
+    assert seams.upload["path"].startswith(f"{LH}/")
+    assert f"/items/{LH}/" in seams.posts[0][0]
+    assert "FABRIC_LAKEHOUSE_ID" not in DEPLOY_PY.read_text(encoding="utf-8")
+
+
+def test_lakehouse_lookup_follows_continuation_tokens(deploy, seams):
+    seams.pages = [
+        (200, {"value": [{"displayName": "lh_other", "id": OTHER_LH}], "continuationToken": "a b/c"}),
+        (200, {"value": [{"displayName": "lh_portfolio", "id": LH}]}),
+    ]
+    assert deploy._lakehouse_id(WS, "tok") == LH
+    assert [url for url, _ in seams.gets] == [LIST_URL, f"{LIST_URL}?continuationToken=a%20b%2Fc"]
+
+
+@pytest.mark.parametrize("command", ["upload-wheel", "ensure-shortcut"])
+def test_missing_lakehouse_exits_1_without_ids(deploy, env, seams, capsys, command):
+    seams.pages = [
+        (200, {"value": [{"displayName": "lh_other", "id": OTHER_LH}], "continuationToken": "next"}),
+        (200, {"value": []}),
+    ]
+    assert deploy.main([command]) == 1
+    out, err = capsys.readouterr()
+    assert err.strip() == f"{command}: lakehouse lh_portfolio not found"
+    assert out == ""
+    assert seams.upload == {} and seams.posts == []
+    for value in (WS, LH, OTHER_LH, "tok-secret-value"):
+        assert value not in out + err
+
+
+def test_lakehouse_lookup_http_error_prints_status_and_code_only(deploy, env, seams, capsys):
+    seams.pages = [(401, {"errorCode": "TokenExpired", "message": f"workspace {WS}"})]
+    assert deploy.main(["upload-wheel"]) == 1
+    out, err = capsys.readouterr()
+    assert err.strip() == "upload-wheel: HTTP 401 TokenExpired"
+    assert out == "" and WS not in err
+    assert seams.upload == {}
 
 
 def test_publish_scope_and_args(deploy, env, seams):
@@ -189,8 +244,9 @@ def test_missing_env_per_command(deploy, env, seams, monkeypatch, capsys, comman
 def test_no_secret_in_output(deploy, env, seams, capsys):
     for command in ("upload-wheel", "publish", "ensure-shortcut"):
         assert deploy.main([command]) == 0
+        seams.gets.clear()
     seams.response = (500, {"errorCode": "Boom", "message": LOCATION})
     assert deploy.main(["ensure-shortcut"]) == 1
     out, err = capsys.readouterr()
-    for value in list(env.values()) + ["tok-secret-value"]:
+    for value in list(env.values()) + ["tok-secret-value", LH, OTHER_LH]:
         assert value not in out + err
