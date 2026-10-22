@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import re
+import shutil
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -333,6 +334,20 @@ def test_live_check_fact_matches_seed(spark, silver):
 
     assert counts["fact_live_check"] == len(seed) == fact.count()
     assert {r["verdict"] for r in fact.collect()} == {"pass", "fail", "not-run"}
+
+
+def test_a_null_or_empty_verdict_in_the_live_checks_seed_is_refused(spark, silver, tmp_path):
+    """A blank verdict cell is null, which `isin` would let through: the guard names the row."""
+    paths, _ = silver
+    seeds = tmp_path / "seeds"
+    shutil.copytree(SEEDS, seeds)
+    with open(seeds / "live_checks.csv", "a", encoding="utf-8", newline="") as seed:
+        seed.write("p4,2026-10-09,session-x,check-y,,,,docs/gateway-report.md," + "0" * 40 + "\n")
+
+    with pytest.raises(ValueError, match=r"null or empty verdict.*p4.*session-x.*check-y"):
+        build_gold(spark, paths, str(seeds))
+
+    assert not DeltaTable.isDeltaTable(spark, paths.table("gold", "fact_live_check"))
 
 
 def test_every_table_has_a_grain():

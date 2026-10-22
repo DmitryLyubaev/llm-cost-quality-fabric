@@ -149,9 +149,10 @@ The full reasoning, including the options rejected, is in the
 - **No model changed version between measured runs.** `gpt-4.1-mini` stayed on `2025-04-14`
   (its changes were capacity), and the Foundry version changes all landed the day before that
   study. So the answers compare models, not versions.
-- **Estimates and actuals are different things.** Each study's estimated cost is in USD at list
-  price; actual spend is AUD from Cost Management and covers Azure only. They sit side by side
-  and are never summed or converted with an invented rate.
+- **Estimates and actuals are different things.** Estimated cost is USD at list price; actual
+  spend is in the billing currency (AUD) from Cost Management and covers Azure only. The estimate
+  is also shown in AUD, converted at the export's own USD-to-AUD rate for the study's month (null
+  when the export has no single rate for that month). The two are never summed.
 - **Commit time stands in for apply time** in the Type 2 dimension, because git doesn't record
   applies. The one capacity change that isn't in git is hand-entered and flagged.
 - **Small data.** Sample sizes are stated with every answer.
