@@ -141,6 +141,52 @@ def test_lakehouse_lookup_follows_continuation_tokens(deploy, seams):
     assert [url for url, _ in seams.gets] == [LIST_URL, f"{LIST_URL}?continuationToken=a%20b%2Fc"]
 
 
+def test_lakehouse_lookup_stops_after_100_pages(deploy, seams, monkeypatch):
+    """A server that never stops paging (every token new) cannot hold the deploy forever."""
+    calls = []
+
+    def endless(url, token):
+        calls.append(url)
+        assert len(calls) <= 200, "the lookup never stopped paging"
+        return 200, {"value": [{"displayName": "lh_other", "id": OTHER_LH}], "continuationToken": f"t{len(calls)}"}
+
+    monkeypatch.setattr(deploy, "_http_get", endless)
+
+    with pytest.raises(deploy.StepFailed, match="lakehouse lookup did not finish") as failed:
+        deploy._lakehouse_id(WS, "tok")
+
+    assert failed.value.reason == "lakehouse lookup did not finish"
+    assert len(calls) == 100
+
+
+def test_the_lakehouse_can_be_on_the_last_allowed_page(deploy, seams, monkeypatch):
+    calls = []
+
+    def paged(url, token):
+        calls.append(url)
+        if len(calls) == 100:
+            return 200, {"value": [{"displayName": "lh_portfolio", "id": LH}]}
+        return 200, {"value": [], "continuationToken": f"t{len(calls)}"}
+
+    monkeypatch.setattr(deploy, "_http_get", paged)
+
+    assert deploy._lakehouse_id(WS, "tok") == LH
+    assert len(calls) == 100
+
+
+def test_lakehouse_lookup_stops_when_a_continuation_token_repeats(deploy, seams):
+    seams.pages = [
+        (200, {"value": [], "continuationToken": "same"}),
+        (200, {"value": [], "continuationToken": "same"}),
+        (200, {"value": [{"displayName": "lh_portfolio", "id": LH}]}),  # never reached
+    ]
+
+    with pytest.raises(deploy.StepFailed, match="lakehouse lookup did not finish"):
+        deploy._lakehouse_id(WS, "tok")
+
+    assert len(seams.gets) == 2
+
+
 @pytest.mark.parametrize("command", ["upload-wheel", "ensure-shortcut"])
 def test_missing_lakehouse_exits_1_without_ids(deploy, env, seams, capsys, command):
     seams.pages = [
@@ -198,11 +244,48 @@ def test_ensure_shortcut_is_idempotent_policy(deploy, env, seams):
     assert url.endswith("?shortcutConflictPolicy=CreateOrOverwrite")
 
 
-def test_ensure_shortcut_subpath_must_start_with_slash(deploy, env, seams, monkeypatch):
+def test_ensure_shortcut_subpath_must_start_with_slash(deploy, env, seams, monkeypatch, capsys):
     monkeypatch.setenv("COST_EXPORT_SUBPATH", "exports/costs")
-    with pytest.raises(ValueError, match="COST_EXPORT_SUBPATH"):
-        deploy.main(["ensure-shortcut"])
+    assert deploy.main(["ensure-shortcut"]) == 1
+    out, err = capsys.readouterr()
+    assert err.strip() == "ensure-shortcut: COST_EXPORT_SUBPATH must start with '/'"
+    assert out == "" and "exports/costs" not in err
     assert seams.posts == []
+
+
+def test_an_unexpected_error_in_publish_prints_only_its_type(deploy, env, seams, monkeypatch, capsys):
+    url = f"https://x/workspaces/{WS}/items"
+
+    def failing_publish(workspace):
+        raise RuntimeError(f"publish to {url} failed")
+
+    monkeypatch.setattr(deploy, "_publish", failing_publish)
+
+    assert deploy.main(["publish"]) == 1
+    out, err = capsys.readouterr()
+    assert err.strip() == "publish: failed (RuntimeError)"
+    assert out == ""
+    for value in (url, WS, "https://x", "Traceback"):
+        assert value not in out + err
+
+
+@pytest.mark.parametrize("command", ["upload-wheel", "ensure-shortcut"])
+def test_an_unexpected_error_prints_only_its_type(deploy, env, seams, monkeypatch, capsys, command):
+    """No message, URL, workspace ID or traceback: a ConnectionError text carries the request URL."""
+    url = f"https://x/workspaces/{WS}/lakehouses"
+
+    def failing_get(requested, token):
+        raise ConnectionError(url)
+
+    monkeypatch.setattr(deploy, "_http_get", failing_get)
+
+    assert deploy.main([command]) == 1
+    out, err = capsys.readouterr()
+    assert err.strip() == f"{command}: failed (ConnectionError)"
+    assert out == ""
+    for value in (url, WS, "https://x", "Traceback", "tok-secret-value"):
+        assert value not in out + err
+    assert seams.upload == {} and seams.posts == []
 
 
 @pytest.mark.parametrize("body, code", [

@@ -13,6 +13,7 @@ from lakehouse.seeding import SEEDS_DIR
 from lakehouse.silver.costs import (
     COST_COLUMN_ALIASES,
     COST_COLUMNS,
+    OPTIONAL_COST_ALIASES,
     ExportRun,
     find_latest_runs,
     month_range,
@@ -25,7 +26,7 @@ from lakehouse.silver.costs import (
 RULES = load_rg_rules(SEEDS_DIR)
 WINDOWS = load_session_windows(SEEDS_DIR)
 ROWS = 11
-SILVER_INPUTS = list(COST_COLUMN_ALIASES)
+SILVER_INPUTS = [*COST_COLUMN_ALIASES, *OPTIONAL_COST_ALIASES]
 MOSA_HEADER = list(maker.HEADERS["mosa"].values())
 NEW_HEADER = list(maker.HEADERS["new"].values())
 SUBMITTED = "2026-10-21T03:30:09Z"
@@ -70,6 +71,17 @@ def test_aliases_cover_every_silver_input():
     assert COST_COLUMN_ALIASES["cost"] == ("PreTaxCost", "CostInBillingCurrency", "Cost")
 
 
+def test_optional_aliases_are_separate_from_the_required_ones():
+    assert OPTIONAL_COST_ALIASES == {
+        "pricing_currency": ("PricingCurrency", "PricingCurrencyCode"),
+        "fx_pricing_to_billing": ("ExchangeRatePricingToBilling",),
+    }
+    assert not set(OPTIONAL_COST_ALIASES) & set(COST_COLUMN_ALIASES)
+    assert COST_COLUMNS[COST_COLUMNS.index("billing_currency") + 1 : COST_COLUMNS.index("billing_currency") + 3] == [
+        "pricing_currency", "fx_pricing_to_billing",
+    ]
+
+
 def test_mosa_headers_resolve(spark, tmp_path):
     assert resolve_cost_headers(MOSA_HEADER) == {
         "cost_date": "UsageDateTime", "resource_id": "InstanceId", "resource_group": "ResourceGroup",
@@ -88,6 +100,7 @@ def test_new_headers_resolve(spark, tmp_path):
         "cost_date": "date", "resource_id": "resourceId", "resource_group": "resourceGroupName",
         "meter_id": "meterId", "meter_name": "meterName", "cost": "costInBillingCurrency",
         "billing_currency": "billingCurrencyCode", "tags": "tags",
+        "pricing_currency": "pricingCurrency", "fx_pricing_to_billing": "exchangeRatePricingToBilling",
     }
     frame = _export(spark, tmp_path, style="new")
     assert frame.columns == SILVER_INPUTS
@@ -101,6 +114,13 @@ def test_first_alias_wins_and_matching_ignores_case():
     got = resolve_cost_headers(header)
     assert got["cost"] == "PRETAXCOST" and got["cost_date"] == "usagedatetime"
     assert got["billing_currency"] == "currency"
+
+
+def test_optional_headers_match_ignoring_case_and_may_be_absent():
+    got = resolve_cost_headers([*MOSA_HEADER, "PRICINGCURRENCYCODE", "exchangeratepricingtobilling"])
+    assert got["pricing_currency"] == "PRICINGCURRENCYCODE"
+    assert got["fx_pricing_to_billing"] == "exchangeratepricingtobilling"
+    assert "pricing_currency" not in resolve_cost_headers(MOSA_HEADER)  # absent is not an error
 
 
 def test_unknown_headers_raise_listing_found(spark, tmp_path):
@@ -311,7 +331,11 @@ def test_no_row_dropped(spark, tmp_path):
 def test_both_header_styles_give_the_same_silver_rows(spark, tmp_path):
     mosa = _silver(spark, tmp_path, "m", style="mosa")
     new = _silver(spark, tmp_path, "n", style="new")
-    assert sorted(map(tuple, mosa.drop("tags").collect())) == sorted(map(tuple, new.drop("tags").collect()))
+    # the newer export also carries the pricing currency and rate, which the MOSA one cannot
+    rate = ["pricing_currency", "fx_pricing_to_billing"]
+    assert sorted(map(tuple, mosa.drop("tags", *rate).collect())) == sorted(
+        map(tuple, new.drop("tags", *rate).collect())
+    )
 
 
 def test_attribution_applied_per_row(spark, tmp_path):
@@ -387,6 +411,48 @@ def test_unreadable_cost_is_an_error_even_without_ansi(spark, tmp_path):
         normalise_costs(spark, export, RULES, WINDOWS)
 
 
+def test_the_export_rate_is_carried_into_silver(spark, tmp_path):
+    new = _silver(spark, tmp_path, style="new")
+    assert {(r["pricing_currency"], r["fx_pricing_to_billing"]) for r in new.collect()} == {("USD", 1.5)}
+    assert dict(new.dtypes)["pricing_currency"] == "string"
+    assert dict(new.dtypes)["fx_pricing_to_billing"] == "double"
+
+
+def test_an_export_without_the_rate_columns_gives_null_columns(spark, tmp_path):
+    """The MOSA 2019-11-01 schema has neither column: silver keeps working, with nulls."""
+    mosa = _silver(spark, tmp_path, style="mosa")
+    assert mosa.count() == ROWS
+    assert mosa.filter(F.col("pricing_currency").isNotNull() | F.col("fx_pricing_to_billing").isNotNull()).count() == 0
+    assert dict(mosa.dtypes)["fx_pricing_to_billing"] == "double"
+
+
+def test_an_empty_rate_is_null_and_a_non_numeric_rate_is_an_error(spark, tmp_path):
+    export = _export(spark, tmp_path, style="new")
+    blank = export.withColumn(
+        "fx_pricing_to_billing",
+        F.when(F.col("meter_id") == "meter-blob", F.lit(" ")).otherwise(F.col("fx_pricing_to_billing")),
+    )
+    silver = normalise_costs(spark, blank, RULES, WINDOWS)
+    assert silver.filter(F.col("fx_pricing_to_billing").isNull()).count() == 1
+
+    bad = export.withColumn(
+        "fx_pricing_to_billing",
+        F.when(F.col("meter_id") == "meter-blob", F.lit("one point five")).otherwise(F.col("fx_pricing_to_billing")),
+    )
+    with pytest.raises(ValueError, match=r"1 row.*fx_pricing_to_billing"):
+        normalise_costs(spark, bad, RULES, WINDOWS)
+
+
+@pytest.mark.parametrize("rate", ["NaN", "Infinity", "-Infinity", "0", "-1.5"])
+def test_a_rate_that_is_not_a_positive_finite_number_is_an_error(spark, tmp_path, rate):
+    export = _export(spark, tmp_path, style="new").withColumn(
+        "fx_pricing_to_billing",
+        F.when(F.col("meter_id") == "meter-blob", F.lit(rate)).otherwise(F.col("fx_pricing_to_billing")),
+    )
+    with pytest.raises(ValueError, match=r"1 row.*fx_pricing_to_billing"):
+        normalise_costs(spark, export, RULES, WINDOWS)
+
+
 def test_unreadable_date_is_an_error(spark, tmp_path):
     export = _export(spark, tmp_path).withColumn(
         "cost_date", F.when(F.col("meter_id") == "meter-blob", F.lit("someday")).otherwise(F.col("cost_date"))
@@ -451,6 +517,38 @@ def test_replace_month_is_idempotent(spark, tmp_path, tmp_lake):
     replace_month(spark, octo, table, "2026-10")
     replace_month(spark, octo, table, "2026-10")
     assert spark.read.format("delta").load(table).count() == ROWS
+
+
+def test_replace_month_adds_new_columns_to_a_table_written_before_them(spark, tmp_path, tmp_lake):
+    """A silver table written with the older column set accepts the restated month with the new."""
+    table = tmp_lake.table("silver", "fact_cost")
+    rate = ["pricing_currency", "fx_pricing_to_billing"]
+    sept = _silver(spark, tmp_path, "sept", "2026-09")
+    replace_month(spark, sept.drop(*rate), table, "2026-09")
+    old = _silver(spark, tmp_path, "oct-old", "2026-10", style="new").drop(*rate)
+    replace_month(spark, old, table, "2026-10")
+    assert not set(rate) & set(spark.read.format("delta").load(table).columns)
+
+    replace_month(spark, _silver(spark, tmp_path, "oct-new", "2026-10", style="new"), table, "2026-10")
+
+    current = spark.read.format("delta").load(table)
+    assert set(rate) <= set(current.columns)
+    assert _months(spark, table) == {"2026-09": ROWS, "2026-10": ROWS}
+    assert current.filter("billing_month = '2026-10'").filter(F.col("fx_pricing_to_billing") == 1.5).count() == ROWS
+    assert current.filter("billing_month = '2026-09'").filter(F.col("fx_pricing_to_billing").isNotNull()).count() == 0
+
+
+def test_replace_month_rejects_a_column_silver_does_not_define(spark, tmp_path, tmp_lake):
+    """mergeSchema would otherwise let any stray column into the table."""
+    table = tmp_lake.table("silver", "fact_cost")
+    octo = _silver(spark, tmp_path, "oct", "2026-10")
+    replace_month(spark, octo, table, "2026-10")
+
+    with pytest.raises(ValueError, match="stray_column"):
+        replace_month(spark, octo.withColumn("stray_column", F.lit(1)), table, "2026-10")
+
+    assert "stray_column" not in spark.read.format("delta").load(table).columns
+    assert _months(spark, table) == {"2026-10": ROWS}
 
 
 def test_replace_month_rejects_other_months(spark, tmp_path, tmp_lake):

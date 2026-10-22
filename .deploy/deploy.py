@@ -27,6 +27,10 @@ SHORTCUT_NAME = "cost_export"
 # The lakehouse is found by name, so a first prod deploy needs no ID that only exists after publish.
 LAKEHOUSE_NAME = "lh_portfolio"
 
+# A lookup that is still paging after this many pages, or is handed a continuation token it has
+# already used, is not going to finish.
+MAX_LOOKUP_PAGES = 100
+
 _ERROR_CODE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 
@@ -99,10 +103,12 @@ def _http_get(url, token):
 
 def _lakehouse_id(workspace_id, token):
     """The ID of the lakehouse named LAKEHOUSE_NAME in the workspace, following continuation
-    tokens. StepFailed if the list call fails or no lakehouse has that name."""
+    tokens. StepFailed if the list call fails, no lakehouse has that name, or the listing does not
+    end (a continuation token repeats, or MAX_LOOKUP_PAGES pages go by without the lakehouse)."""
     url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/lakehouses"
     next_url = url
-    while next_url:
+    seen_tokens = set()
+    for _ in range(MAX_LOOKUP_PAGES):
         status, body = _http_get(next_url, token)  # status before body
         if not 200 <= status < 300 or not isinstance(body, dict):
             raise StepFailed(f"HTTP {status} {_error_code(body)}")
@@ -110,8 +116,13 @@ def _lakehouse_id(workspace_id, token):
             if isinstance(item, dict) and item.get("displayName") == LAKEHOUSE_NAME and item.get("id"):
                 return str(item["id"])
         token_value = body.get("continuationToken")
-        next_url = f"{url}?continuationToken={quote(token_value, safe='')}" if token_value else None
-    raise StepFailed(f"lakehouse {LAKEHOUSE_NAME} not found")
+        if not token_value:
+            raise StepFailed(f"lakehouse {LAKEHOUSE_NAME} not found")
+        if token_value in seen_tokens:
+            break
+        seen_tokens.add(token_value)
+        next_url = f"{url}?continuationToken={quote(token_value, safe='')}"
+    raise StepFailed("lakehouse lookup did not finish")
 
 
 def _fabric_workspace(**kwargs):
@@ -166,7 +177,7 @@ def ensure_shortcut():
     location = _env("COST_EXPORT_LOCATION")
     subpath = _env("COST_EXPORT_SUBPATH")
     if not subpath.startswith("/"):
-        raise ValueError("COST_EXPORT_SUBPATH must start with '/'")
+        raise StepFailed("COST_EXPORT_SUBPATH must start with '/'")
     body = {
         "path": SHORTCUT_PATH,
         "name": SHORTCUT_NAME,
@@ -210,6 +221,11 @@ def main(argv=None):
         return 2
     except StepFailed as failed:
         print(f"{args.command}: {failed.reason}", file=sys.stderr)
+        return 1
+    except Exception as err:
+        # Only the type: an exception's text can carry a URL, an ID or a token, and a traceback
+        # carries all of them.
+        print(f"{args.command}: failed ({type(err).__name__})", file=sys.stderr)
         return 1
 
 

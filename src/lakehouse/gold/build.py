@@ -171,6 +171,11 @@ def build_gold(spark: SparkSession, paths: LakePaths, seeds_dir: str) -> dict[st
     dim_arm = read_dim_arm(spark, seeds_dir)
     checks = seed_df(spark, seeds_dir, "live_checks.csv", _LIVE_CHECK_SCHEMA)
 
+    # A blank cell is null, and `isin` is null for null, so a null verdict needs its own guard.
+    blank = checks.where(F.col("verdict").isNull() | (F.trim("verdict") == "")).collect()
+    if blank:
+        rows = sorted(f"{r['project']}/{r['session']}/{r['check_id']}" for r in blank)
+        raise ValueError(f"live_checks.csv has rows with a null or empty verdict (project/session/check): {rows}")
     bad = [r["verdict"] for r in checks.where(~F.col("verdict").isin(*VERDICTS)).distinct().collect()]
     if bad:
         raise ValueError(f"live_checks.csv has verdicts outside {VERDICTS}: {bad}")
@@ -188,6 +193,8 @@ def build_gold(spark: SparkSession, paths: LakePaths, seeds_dir: str) -> dict[st
         "meter_name",
         "cost",
         "billing_currency",
+        "pricing_currency",
+        "fx_pricing_to_billing",
         "project",
         "attribution_rule",
         "billing_month",

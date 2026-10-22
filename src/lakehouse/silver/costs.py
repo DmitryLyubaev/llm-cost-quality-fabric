@@ -1,8 +1,11 @@
 """Silver costs: the Cost Management export, one row per resource x meter x day, with a project.
 
 Exports restate the month to date, so silver replaces a whole billing month at a time
-(`replace_month`). Costs stay in the export's billing currency; nothing is converted. The export
-is read through its manifests (`find_latest_runs`), never by guessing file names.
+(`replace_month`). Costs stay in the export's billing currency; nothing is converted here. When
+the export carries its own pricing currency and the rate from it to the billing currency, silver
+keeps both (`pricing_currency`, `fx_pricing_to_billing`) so a later step can use the export's rate
+and say so; when it does not, they are null. The export is read through its manifests
+(`find_latest_runs`), never by guessing file names.
 """
 
 import csv
@@ -45,6 +48,17 @@ COST_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "tags": ("Tags",),
 }
 
+# Silver columns an export may or may not carry. The newer exports (data version 2021-10-01) have
+# `pricingCurrency` and `exchangeRatePricingToBilling` (one rate per month); the MOSA 2019-11-01
+# schema has neither. When the header lacks them the silver column is null. Matching is
+# case-insensitive, like the required names.
+OPTIONAL_COST_ALIASES: dict[str, tuple[str, ...]] = {
+    "pricing_currency": ("PricingCurrency", "PricingCurrencyCode"),
+    "fx_pricing_to_billing": ("ExchangeRatePricingToBilling",),
+}
+
+SILVER_INPUTS = [*COST_COLUMN_ALIASES, *OPTIONAL_COST_ALIASES]  # the raw export frame's columns
+
 COST_COLUMNS = [
     "cost_date",
     "resource_id",
@@ -53,6 +67,8 @@ COST_COLUMNS = [
     "meter_name",
     "cost",
     "billing_currency",
+    "pricing_currency",
+    "fx_pricing_to_billing",
     "tags",
     "billing_month",
     "project",
@@ -105,7 +121,8 @@ def calendar_month(month_folder: str) -> str:
 def resolve_cost_headers(headers: list[str]) -> dict[str, str]:
     """Silver name -> the export header that carries it (first alias wins, case-insensitive).
 
-    ValueError, listing the headers found, if some silver column has no accepted header.
+    ValueError, listing the headers found, if some required silver column has no accepted header.
+    An optional column (`OPTIONAL_COST_ALIASES`) the headers lack is left out of the result.
     """
     by_lower: dict[str, str] = {}
     for header in headers:
@@ -117,6 +134,10 @@ def resolve_cost_headers(headers: list[str]) -> dict[str, str]:
         if match is None:
             missing.append(f"{silver} (one of {', '.join(aliases)})")
         else:
+            resolved[silver] = match
+    for silver, aliases in OPTIONAL_COST_ALIASES.items():
+        match = next((by_lower[a.lower()] for a in aliases if a.lower() in by_lower), None)
+        if match is not None:
             resolved[silver] = match
     if missing:
         raise ValueError(f"cost export lacks columns {'; '.join(missing)}; headers found: {headers}")
@@ -247,14 +268,21 @@ def _read_run(spark: SparkSession, run: ExportRun) -> DataFrame:
     # Materialised before the select below: Spark's CSV column pruning would otherwise skip the
     # FAILFAST check for columns nobody selects (the export is small).
     frame = frame.localCheckpoint()
-    return frame.select(*[F.col(f"`{resolved[silver]}`").alias(silver) for silver in COST_COLUMN_ALIASES])
+    return frame.select(
+        *[
+            F.col(f"`{resolved[silver]}`").alias(silver)
+            if silver in resolved
+            else F.lit(None).cast("string").alias(silver)  # an optional column this export lacks
+            for silver in SILVER_INPUTS
+        ]
+    )
 
 
 def read_export_runs(spark: SparkSession, runs: list[ExportRun]) -> DataFrame:
     """The part files of `runs` as strings under silver names (empty when no run has a part file)."""
     frames = [_read_run(spark, run) for run in runs if run.blobs]
     if not frames:
-        empty = StructType([StructField(name, StringType()) for name in COST_COLUMN_ALIASES])
+        empty = StructType([StructField(name, StringType()) for name in SILVER_INPUTS])
         return spark.createDataFrame([], empty)
     return reduce(DataFrame.unionByName, frames)
 
@@ -270,12 +298,18 @@ def read_cost_export(spark: SparkSession, export_root: str) -> tuple[DataFrame, 
 
 
 def _select_silver_inputs(export_df: DataFrame) -> DataFrame:
-    """The export's silver-named columns as strings; ValueError naming any that is missing."""
+    """The export's silver-named columns as strings; ValueError naming any required one that is
+    missing. An optional column that is missing becomes a null column."""
     missing = [name for name in COST_COLUMN_ALIASES if name not in export_df.columns]
     if missing:
         raise ValueError(f"cost export lacks columns {missing}; found {export_df.columns}")
     return export_df.select(
-        *[F.col(f"`{name}`").cast("string").alias(name) for name in COST_COLUMN_ALIASES]
+        *[
+            F.col(f"`{name}`").cast("string").alias(name)
+            if name in export_df.columns
+            else F.lit(None).cast("string").alias(name)
+            for name in SILVER_INPUTS
+        ]
     )
 
 
@@ -289,21 +323,41 @@ def _parsed_date(column: str) -> Column:
 
 
 def _require_readable(raw: DataFrame) -> None:
-    """ValueError if a row's Cost is empty or unreadable, or its Date text is unreadable.
+    """ValueError if a row's Cost is empty or unreadable, its Date text is unreadable, or its
+    exchange-rate text is non-empty and not a positive finite number (an empty rate is null; NaN,
+    an infinity, zero and a negative rate are unreadable).
 
     Done with non-raising casts so the answer does not depend on the session's ANSI setting.
     """
+    rate = F.trim("fx_pricing_to_billing").try_cast("double")
     counts = raw.agg(
         F.count(F.when(F.trim("cost").try_cast("double").isNull(), 1)).alias("cost"),
         F.count(
             F.when((F.trim("cost_date") != "") & _parsed_date("cost_date").isNull(), 1)
         ).alias("cost_date"),
+        F.count(
+            F.when(
+                (F.trim("fx_pricing_to_billing") != "")
+                & (
+                    rate.isNull()
+                    | F.isnan(rate)
+                    | (rate <= 0)
+                    | (rate == F.lit(float("inf")))  # NaN sorts above everything, so test it first
+                ),
+                1,
+            )
+        ).alias("fx_pricing_to_billing"),
     ).first()
     problems = []
     if counts["cost"]:
         problems.append(f"{counts['cost']} row(s) have a cost that is empty or not a number")
     if counts["cost_date"]:
         problems.append(f"{counts['cost_date']} row(s) have a cost_date that is not a date")
+    if counts["fx_pricing_to_billing"]:
+        problems.append(
+            f"{counts['fx_pricing_to_billing']} row(s) have a fx_pricing_to_billing that is not a "
+            "positive finite number"
+        )
     if problems:
         raise ValueError("cost export is not readable: " + "; ".join(problems))
 
@@ -318,8 +372,9 @@ def normalise_costs(
 
     Every export row is kept. A row whose Cost is empty or not a number, or whose Date has text
     that is not a date, raises ValueError naming the count and the column (whatever the session's
-    ANSI setting, so a total can never lose a row without a word); an unattributable row gets
-    project `untagged`.
+    ANSI setting, so a total can never lose a row without a word); so does a row whose exchange
+    rate has text that is not a number. An empty rate or pricing currency is null, and an export
+    without those columns gives null columns. An unattributable row gets project `untagged`.
     """
     # plain lambda: Spark warns when it cannot infer an eval type from parse_tags's type hints
     parse_tags_udf = F.udf(lambda raw: parse_tags(raw), MapType(StringType(), StringType()))
@@ -342,6 +397,11 @@ def normalise_costs(
             ),
         )
         .withColumn("cost", F.trim("cost").cast("double"))
+        .withColumn("pricing_currency", F.when(F.trim("pricing_currency") != "", F.trim("pricing_currency")))
+        .withColumn(
+            "fx_pricing_to_billing",
+            F.when(F.trim("fx_pricing_to_billing") != "", F.trim("fx_pricing_to_billing").try_cast("double")),
+        )
         .withColumn("tags", parse_tags_udf("tags"))
         .withColumn("billing_month", F.date_format("cost_date", "yyyy-MM"))
         .withColumn("_attr", attribute_udf("resource_group", "cost_date", "tags"))
@@ -355,10 +415,16 @@ def replace_month(spark: SparkSession, df: DataFrame, table_path: str, billing_m
     """Replace one billing month of the Delta table with df; other months are untouched.
 
     Raises ValueError, before writing anything, if df holds any month other than
-    `billing_month`. A restated month that lost rows loses them from the table too.
+    `billing_month` or any column that is not in COST_COLUMNS (the schema merge would otherwise
+    let a stray column into the table; a subset of COST_COLUMNS is fine). A restated month that
+    lost rows loses them from the table too. The write merges the schema, so a table written before `pricing_currency` and `fx_pricing_to_billing`
+    existed gains them (null for the months not restated).
     """
     if not _MONTH.fullmatch(billing_month):
         raise ValueError(f"billing_month must be YYYY-MM, got {billing_month!r}")
+    stray = [column for column in df.columns if column not in COST_COLUMNS]
+    if stray:
+        raise ValueError(f"silver costs has no column {stray}; expected a subset of {COST_COLUMNS}")
     months = {r["billing_month"] for r in df.select("billing_month").distinct().collect()}
     foreign = sorted(months - {billing_month}, key=str)
     if foreign:
@@ -368,5 +434,6 @@ def replace_month(spark: SparkSession, df: DataFrame, table_path: str, billing_m
         .mode("overwrite")
         .partitionBy("billing_month")
         .option("replaceWhere", f"billing_month = '{billing_month}'")
+        .option("mergeSchema", "true")
         .save(table_path)
     )

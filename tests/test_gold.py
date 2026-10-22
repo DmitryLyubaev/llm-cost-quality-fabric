@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import re
+import shutil
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -79,13 +80,13 @@ def _silver_attempts(spark, paths, attempts):
     merge_eval_attempts(spark, df, paths.table("silver", "eval_attempts"))
 
 
-def _silver_costs(spark, paths, tmp_path):
+def _silver_costs(spark, paths, tmp_path, style="mosa"):
     rules = load_rg_rules(SEEDS)
     windows = load_session_windows(SEEDS)
     export = tmp_path / "export"  # one run: the 11 October rows
     cost_export_maker.write_run(
         export, cost_export_maker.OCT, cost_export_maker.RUN_B, "2026-10-21T03:30:09Z",
-        [cost_export_maker.OCTOBER_ROWS],
+        [cost_export_maker.OCTOBER_ROWS], style=style,
     )
     frame = normalise_costs(spark, read_cost_export(spark, str(export))[0], rules, windows)
     replace_month(spark, frame, paths.table("silver", "daily_cost"), "2026-10")
@@ -296,6 +297,33 @@ def test_cost_fact_hides_resource_ids(spark, silver):
     assert {"cost_date", "resource_group", "meter_name", "cost", "billing_currency", "project"} <= set(fact.columns)
 
 
+def test_cost_fact_carries_the_export_rate_and_keeps_its_grain(spark, tmp_lake, tmp_path):
+    _silver_deployments(spark, tmp_lake)
+    _silver_attempts(spark, tmp_lake, [_attempt("p1-three-arm", "Z", _utc(2026, 10, 3))])
+    cost_rows = _silver_costs(spark, tmp_lake, tmp_path, style="new")
+
+    counts = build_gold(spark, tmp_lake, SEEDS)
+
+    fact = _gold(spark, tmp_lake, "fact_daily_cost")
+    columns = fact.columns
+    assert columns[columns.index("billing_currency") + 1 : columns.index("billing_currency") + 3] == [
+        "pricing_currency", "fx_pricing_to_billing",
+    ]
+    assert counts["fact_daily_cost"] == cost_rows == fact.count()
+    assert {(r["pricing_currency"], r["fx_pricing_to_billing"]) for r in fact.collect()} == {("USD", 1.5)}
+    assert "resource_id" not in columns
+
+
+def test_cost_fact_rate_is_null_for_an_export_without_it(spark, silver):
+    paths, _ = silver  # the MOSA-style October export has no pricing currency or rate
+    build_gold(spark, paths, SEEDS)
+
+    fact = _gold(spark, paths, "fact_daily_cost")
+
+    assert {"pricing_currency", "fx_pricing_to_billing"} <= set(fact.columns)
+    assert fact.filter(F.col("pricing_currency").isNotNull() | F.col("fx_pricing_to_billing").isNotNull()).count() == 0
+
+
 def test_live_check_fact_matches_seed(spark, silver):
     paths, _ = silver
     counts = build_gold(spark, paths, SEEDS)
@@ -306,6 +334,20 @@ def test_live_check_fact_matches_seed(spark, silver):
 
     assert counts["fact_live_check"] == len(seed) == fact.count()
     assert {r["verdict"] for r in fact.collect()} == {"pass", "fail", "not-run"}
+
+
+def test_a_null_or_empty_verdict_in_the_live_checks_seed_is_refused(spark, silver, tmp_path):
+    """A blank verdict cell is null, which `isin` would let through: the guard names the row."""
+    paths, _ = silver
+    seeds = tmp_path / "seeds"
+    shutil.copytree(SEEDS, seeds)
+    with open(seeds / "live_checks.csv", "a", encoding="utf-8", newline="") as seed:
+        seed.write("p4,2026-10-09,session-x,check-y,,,,docs/gateway-report.md," + "0" * 40 + "\n")
+
+    with pytest.raises(ValueError, match=r"null or empty verdict.*p4.*session-x.*check-y"):
+        build_gold(spark, paths, str(seeds))
+
+    assert not DeltaTable.isDeltaTable(spark, paths.table("gold", "fact_live_check"))
 
 
 def test_every_table_has_a_grain():
