@@ -1,6 +1,7 @@
 """Checks on the Fabric item files under fabric/ (what git sync and fabric-cicd read)."""
 import json
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,11 @@ import yaml
 
 from check_hygiene import check_hygiene
 
-FABRIC = Path(__file__).resolve().parents[1] / "fabric"
+ROOT = Path(__file__).resolve().parents[1]
+FABRIC = ROOT / "fabric"
+CELL_MARKER = "# CELL ********************"
+PARAMETERS_MARKER = "# PARAMETERS CELL ********************"
+MARKDOWN_MARKER = "# MARKDOWN ********************"
 EMPTY_GUID = "00000000-0000-0000-0000-000000000000"
 GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 NOTEBOOKS = ["nb_ingest_public", "nb_load"]
@@ -103,20 +108,40 @@ def test_lakehouse_has_default_schema_and_no_shortcut_tracking():
     assert set(subtypes.values()) == {"Disabled"}
 
 
+def _cells(text: str) -> list[tuple[str, list[str]]]:
+    """(marker, code lines) for each cell, in order; comments and blank lines dropped."""
+    cells = []
+    for line in text.splitlines():
+        if line in (CELL_MARKER, PARAMETERS_MARKER, MARKDOWN_MARKER):
+            cells.append((line, []))
+        elif line.startswith("# METADATA"):
+            cells.append(("# METADATA", []))  # ends the cell before it
+        elif cells and line.strip() and not line.startswith("#"):
+            cells[-1][1].append(line)
+    return [(marker, code) for marker, code in cells if marker != "# METADATA"]
+
+
+def _wheel_name() -> str:
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return f"lakehouse-{pyproject['project']['version']}-py3-none-any.whl"
+
+
 @pytest.mark.parametrize("name", NOTEBOOKS)
-def test_notebook_has_a_parameter_cell(name):
+def test_notebook_installs_the_wheel_first_then_takes_load_date(name):
     text = _notebook(name)
     assert text.startswith("# Fabric notebook source\n")
-    lines = text.splitlines()
-    start = lines.index("# PARAMETERS CELL ********************")
-    cell = []
-    for line in lines[start + 1:]:
-        if line.startswith("# METADATA") or line.startswith("# CELL"):
-            break
-        cell.append(line)
-    assert 'load_date = ""' in cell
-    assert 'wheel = "lakehouse-0.1.0-py3-none-any.whl"' in cell
-    assert "%pip install /lakehouse/default/Files/wheels/{wheel}" in lines
+    code_cells = [(m, code) for m, code in _cells(text) if m != MARKDOWN_MARKER]
+    # %pip restarts Python, so it must run before the parameters cell sets anything.
+    install = f"%pip install /lakehouse/default/Files/wheels/{_wheel_name()}"
+    assert code_cells[0] == (CELL_MARKER, [install])
+    assert code_cells[1] == (PARAMETERS_MARKER, ['load_date = ""'])
+    assert [m for m, _ in code_cells].count(PARAMETERS_MARKER) == 1
+
+
+@pytest.mark.parametrize("name", NOTEBOOKS)
+def test_notebook_wheel_name_matches_the_package_version(name):
+    installs = re.findall(r"^%pip install \S*/([^/\s]+\.whl)$", _notebook(name), re.MULTILINE)
+    assert installs == [_wheel_name()]
 
 
 @pytest.mark.parametrize("name", NOTEBOOKS)
@@ -186,7 +211,6 @@ def test_pipeline_runs_ingest_then_load_with_retries():
         assert settings["workspaceId"] == EMPTY_GUID
         assert settings["parameters"] == {
             "load_date": {"value": {"value": expression, "type": "Expression"}, "type": "string"},
-            "wheel": {"value": "lakehouse-0.1.0-py3-none-any.whl", "type": "string"},
             "_inlineInstallationEnabled": {"value": True, "type": "bool"},
         }
 
@@ -202,6 +226,8 @@ def test_schedule_is_daily_brisbane_and_disabled_in_git():
     assert config["type"] == "Daily"
     assert config["times"] == ["06:00"]
     assert config["localTimeZoneId"] == "E. Australia Standard Time"
+    # A start in the past fires a run at once; plan 3 moves it if it has passed by deploy time.
+    assert config["startDateTime"] == "2026-11-01T06:00:00"
     assert config["endDateTime"].startswith("2099-01-01")
 
 

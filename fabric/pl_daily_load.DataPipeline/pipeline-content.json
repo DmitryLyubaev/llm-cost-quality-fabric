@@ -23,10 +23,6 @@
               },
               "type": "string"
             },
-            "wheel": {
-              "value": "lakehouse-0.1.0-py3-none-any.whl",
-              "type": "string"
-            },
             "_inlineInstallationEnabled": {
               "value": true,
               "type": "bool"
@@ -61,10 +57,6 @@
                 "value": "@if(empty(pipeline().parameters.load_date), formatDateTime(pipeline().TriggerTime, 'yyyy-MM-dd'), pipeline().parameters.load_date)",
                 "type": "Expression"
               },
-              "type": "string"
-            },
-            "wheel": {
-              "value": "lakehouse-0.1.0-py3-none-any.whl",
               "type": "string"
             },
             "_inlineInstallationEnabled": {

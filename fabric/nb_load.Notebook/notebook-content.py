@@ -20,6 +20,21 @@
 # META   }
 # META }
 
+# CELL ********************
+
+# The wheel's file name follows pyproject.toml's version (tests/test_fabric_items.py checks it).
+# This cell comes first because %pip restarts the Python interpreter and drops earlier variables.
+# verify in plan 3: that the pipeline-injected parameters cell still lands (and keeps load_date)
+# after this restart.
+%pip install /lakehouse/default/Files/wheels/lakehouse-0.1.0-py3-none-any.whl
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "synapse_pyspark"
+# META }
+
 # MARKDOWN ********************
 
 # # nb_load
@@ -30,22 +45,6 @@
 # PARAMETERS CELL ********************
 
 load_date = ""
-wheel = "lakehouse-0.1.0-py3-none-any.whl"
-
-# METADATA ********************
-
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
-
-# CELL ********************
-
-# verify in plan 3: that %pip expands {wheel} here (else use
-# get_ipython().run_line_magic("pip", f"install /lakehouse/default/Files/wheels/{wheel}")), and
-# that the Python restart %pip triggers keeps load_date (Microsoft documents that variables
-# defined before an inline install are lost).
-%pip install /lakehouse/default/Files/wheels/{wheel}
 
 # METADATA ********************
 
