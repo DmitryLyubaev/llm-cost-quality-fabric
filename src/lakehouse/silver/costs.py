@@ -67,6 +67,7 @@ _MONTH = re.compile(r"\d{4}-\d{2}")
 
 
 _MONTH_FOLDER = re.compile(r"(\d{8})-(\d{8})")
+BOM = "\ufeff"  # a UTF-8 byte order mark, decoded
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,15 @@ def month_range(month_folder: str) -> tuple[date, date]:
     except ValueError as error:
         raise ValueError(f"export folder {month_folder!r} is not YYYYMMDD-YYYYMMDD: {error}") from error
     return first, last
+
+
+def calendar_month(month_folder: str) -> str:
+    """The `YYYY-MM` an export folder's range lies in; ValueError naming the folder if the range
+    spans more than one calendar month (or ends before it starts)."""
+    first, last = month_range(month_folder)
+    if last < first or (first.year, first.month) != (last.year, last.month):
+        raise ValueError(f"export folder {month_folder!r} does not lie within one calendar month")
+    return f"{first:%Y-%m}"
 
 
 def resolve_cost_headers(headers: list[str]) -> dict[str, str]:
@@ -124,7 +134,7 @@ def _uri_path(uri: str) -> str:
 def _parse_manifest(text: str, where: str) -> tuple[datetime, str, int, list[str]]:
     """(submitted, run id, data row count, blob names) of a manifest; ValueError if it lacks them."""
     try:
-        manifest = json.loads(text)
+        manifest = json.loads(text.removeprefix(BOM))
         info = manifest["runInfo"]
         submitted = datetime.fromisoformat(info["submittedTime"])
         if submitted.tzinfo is None:
@@ -143,13 +153,17 @@ def _parse_manifest(text: str, where: str) -> tuple[datetime, str, int, list[str
 
 
 def find_latest_runs(spark: SparkSession, export_root: str) -> list[ExportRun]:
-    """The latest run of each month folder under `export_root`, oldest month first.
+    """The latest run of each calendar month under `export_root`, oldest month first.
 
     Reads every `manifest.json` below the root (layout `<root>/<ExportName>/<YYYYMMDD-YYYYMMDD>/
-    <RunID>/manifest.json`), groups the runs by month folder and keeps the one with the latest
-    `runInfo.submittedTime` (the greater run id on a tie). Each blob is resolved as its manifest's
-    own folder plus the basename of `blobName`; one missing on disk raises FileNotFoundError naming
-    it. FileNotFoundError naming `export_root` if there is no manifest at all.
+    <RunID>/manifest.json`). Each run's folder range must lie within one calendar month (ValueError
+    naming the folder otherwise). Runs are grouped by that month across ALL export names (a
+    one-time export of part of a month and the daily export of the whole month overlap, so only
+    one may be read) and the one with the latest `runInfo.submittedTime` wins (the greater run id
+    on a tie). Only the winners' blobs are checked: each is resolved as its manifest's own folder
+    plus the basename of `blobName`, and one missing on disk raises FileNotFoundError naming it.
+    FileNotFoundError naming `export_root` if there is no manifest at all. A manifest may start
+    with a UTF-8 byte order mark.
     """
     root = export_root.rstrip("/")
     try:
@@ -170,7 +184,8 @@ def find_latest_runs(spark: SparkSession, export_root: str) -> list[ExportRun]:
     root_path = _hadoop_path(spark, export_root)
     fs = root_path.getFileSystem(spark._jsc.hadoopConfiguration())
     root_dir = _uri_path(fs.makeQualified(root_path).toUri().toString()).rstrip("/")
-    latest: dict[str, tuple[tuple[datetime, str], ExportRun]] = {}
+    # calendar month -> ((submitted, run id), run folder, manifest path, row count, blob names)
+    latest: dict[str, tuple[tuple[datetime, str], str, str, int, list[str]]] = {}
     for row in manifests:
         manifest_path = _uri_path(row["path"])
         if not manifest_path.startswith(root_dir + "/"):
@@ -181,19 +196,23 @@ def find_latest_runs(spark: SparkSession, export_root: str) -> list[ExportRun]:
             raise ValueError(
                 f"manifest {row['path']} is not under <ExportName>/<YYYYMMDD-YYYYMMDD>/<RunID>"
             )
-        month_folder = folders[-2]
-        month_range(month_folder)
+        month = calendar_month(folders[-2])
         submitted, run_id, rows, names = _parse_manifest(row["value"], row["path"])
-        if month_folder in latest and latest[month_folder][0] >= (submitted, run_id):
+        if month in latest and latest[month][0] >= (submitted, run_id):
             continue
+        latest[month] = ((submitted, run_id), run_dir, row["path"], rows, names)
+
+    runs = []
+    for month in sorted(latest):
+        (submitted, run_id), run_dir, manifest, rows, names = latest[month]
         # A real blobName is container-relative, with a prefix we cannot know through a shortcut,
         # so each part file is taken from the manifest's own folder.  # verify in plan 3
         blobs = tuple(f"{root}/{run_dir}/{PurePosixPath(name).name}" for name in names)
         for blob in blobs:
             if not fs.exists(_hadoop_path(spark, blob)):
-                raise FileNotFoundError(f"cost export part file listed in {row['path']} is missing: {blob}")
-        latest[month_folder] = ((submitted, run_id), ExportRun(month_folder, run_id, submitted, blobs, rows))
-    return [latest[month][1] for month in sorted(latest)]
+                raise FileNotFoundError(f"cost export part file listed in {manifest} is missing: {blob}")
+        runs.append(ExportRun(run_dir.split("/")[-2], run_id, submitted, blobs, rows))
+    return runs
 
 
 def _read_header(spark: SparkSession, blob: str) -> list[str]:
@@ -241,9 +260,9 @@ def read_export_runs(spark: SparkSession, runs: list[ExportRun]) -> DataFrame:
 
 
 def read_cost_export(spark: SparkSession, export_root: str) -> tuple[DataFrame, dict[str, int]]:
-    """The latest run of each month under `export_root` as strings under silver names.
+    """The latest run of each calendar month under `export_root` as strings under silver names.
 
-    Returns the rows and `{month_folder: dataRowCount}` from the manifests. A malformed row, part
+    Returns the rows and `{winning run's month folder: dataRowCount}` from the manifests. A malformed row, part
     files whose headers differ, or a header lacking a silver column's name raises.
     """
     runs = find_latest_runs(spark, export_root)

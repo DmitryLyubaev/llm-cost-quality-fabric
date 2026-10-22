@@ -1,3 +1,4 @@
+import codecs
 import gzip
 import json
 from datetime import date
@@ -28,6 +29,7 @@ SILVER_INPUTS = list(COST_COLUMN_ALIASES)
 MOSA_HEADER = list(maker.HEADERS["mosa"].values())
 NEW_HEADER = list(maker.HEADERS["new"].values())
 SUBMITTED = "2026-10-21T03:30:09Z"
+BOM = codecs.BOM_UTF8
 
 
 def _rows(month="2026-10"):
@@ -149,6 +151,68 @@ def test_equal_submitted_time_breaks_the_tie_on_run_id(spark, tmp_path):
     runs = find_latest_runs(spark, str(root))
 
     assert [(r.run_id, r.data_row_count) for r in runs] == [("run-2", 5)]
+
+
+def test_runs_of_one_calendar_month_compete_across_export_names(spark, tmp_path):
+    """A one-time export of 1-22 October submitted earlier and the daily export of the whole of
+    October submitted later overlap: only the daily run is read, so no day is counted twice."""
+    root = tmp_path / "export"
+    maker.write_run(
+        root, "20261001-20261022", "run-onetime", "2026-10-20T03:30:05Z",
+        [_rows()[:3] + [maker.STALE_ROW]], export_name="portfolio-onetime",
+    )
+    maker.write_run(root, maker.OCT, maker.RUN_B, SUBMITTED, [_rows()])
+
+    runs = find_latest_runs(spark, str(root))
+    frame, expected = read_cost_export(spark, str(root))
+
+    assert [(r.month_folder, r.run_id) for r in runs] == [(maker.OCT, maker.RUN_B)]
+    assert expected == {maker.OCT: ROWS} and frame.count() == ROWS
+    assert frame.filter(F.col("meter_id") == "meter-stale").count() == 0
+
+
+def test_a_later_one_time_export_wins_its_month(spark, tmp_path):
+    root = tmp_path / "export"
+    maker.write_run(root, maker.OCT, maker.RUN_B, "2026-10-20T03:30:05Z", [_rows()])
+    maker.write_run(
+        root, "20261001-20261022", "run-onetime", SUBMITTED, [_rows()[:3]], export_name="portfolio-onetime",
+    )
+
+    runs = find_latest_runs(spark, str(root))
+
+    assert [(r.month_folder, r.run_id, r.data_row_count) for r in runs] == [
+        ("20261001-20261022", "run-onetime", 3)
+    ]
+
+
+def test_a_run_spanning_two_calendar_months_raises_naming_it(spark, tmp_path):
+    root = tmp_path / "export"
+    maker.write_run(root, "20260915-20261014", maker.RUN_B, SUBMITTED, [_rows()[:3]])
+
+    with pytest.raises(ValueError, match="20260915-20261014"):
+        find_latest_runs(spark, str(root))
+
+
+def test_a_superseded_run_with_a_missing_part_is_not_checked(spark, tmp_path):
+    root = tmp_path / "export"
+    # the superseded run has the bigger manifest, so Spark lists it first
+    maker.write_run(root, maker.OCT, maker.RUN_A, "2026-10-20T03:30:05Z", [_rows()[:6], _rows()[6:]])
+    maker.write_run(root, maker.OCT, maker.RUN_B, SUBMITTED, [_rows()])
+    (root / maker.EXPORT_NAME / maker.OCT / maker.RUN_A / "part1.csv.gz").unlink()
+
+    runs = find_latest_runs(spark, str(root))
+
+    assert [r.run_id for r in runs] == [maker.RUN_B]
+
+
+def test_a_manifest_with_a_utf8_bom_parses(spark, tmp_path):
+    root = _write(tmp_path)
+    path = root / maker.EXPORT_NAME / maker.OCT / maker.RUN_B / "manifest.json"
+    path.write_bytes(BOM + path.read_bytes())
+
+    runs = find_latest_runs(spark, str(root))
+
+    assert [(r.run_id, r.data_row_count) for r in runs] == [(maker.RUN_B, ROWS)]
 
 
 def test_find_latest_runs_describes_the_run(spark):

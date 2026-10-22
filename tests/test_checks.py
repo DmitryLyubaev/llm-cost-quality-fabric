@@ -132,7 +132,7 @@ def test_manifest_row_count_mismatch_fails_check(spark, tmp_lake, tmp_path):
 
     assert not result.passed
     assert "20261001-20261031" in result.detail
-    assert "11" in result.detail and "10" in result.detail
+    assert "manifest 11 row(s), silver 10" in result.detail
     assert "20260901-20260930" not in result.detail  # September agrees
 
 
