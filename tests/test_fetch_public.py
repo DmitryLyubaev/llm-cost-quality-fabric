@@ -115,6 +115,18 @@ def test_fetch_rejects_traversal(tmp_path, bad):
     assert not list(tmp_path.rglob("*"))
 
 
+@pytest.mark.parametrize("bad", ["../x", "..", "", "/x", "a/b", "a\\x"])
+def test_fetch_rejects_a_repo_that_is_not_one_safe_segment(tmp_path, bad):
+    manifest = {"owner": "octo", "sources": [{"repo": bad, "sha": "a" * 40, "paths": ["two.md"]}]}
+    requested = []
+
+    with pytest.raises(ValueError, match="repo"):
+        fetch_manifest(manifest, str(tmp_path), LOAD_DATE, _fake_get(requested))
+
+    assert requested == []
+    assert not list(tmp_path.rglob("*"))
+
+
 def test_fetch_encodes_spaces(tmp_path):
     manifest = {"owner": "octo", "sources": [{"repo": "repo-a", "sha": "a" * 40, "paths": ["docs/My Report #1.md"]}]}
     requested = []

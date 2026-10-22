@@ -14,7 +14,7 @@ def _local_write(dest: str, body: bytes) -> None:
     target.write_bytes(body)
 
 
-def _checked_segments(path: str) -> list[str]:
+def _checked_segments(path: str, what: str = "path") -> list[str]:
     """The `/`-separated segments of a manifest path; ValueError if it could leave its folder."""
     if (
         not path
@@ -23,11 +23,18 @@ def _checked_segments(path: str) -> list[str]:
         or PurePosixPath(path).is_absolute()
         or PureWindowsPath(path).drive
     ):
-        raise ValueError(f"manifest path must be relative: {path!r}")
+        raise ValueError(f"manifest {what} must be relative: {path!r}")
     segments = path.split("/")
     if any(segment in ("", ".", "..") for segment in segments):
-        raise ValueError(f"manifest path must not contain '..' or empty segments: {path!r}")
+        raise ValueError(f"manifest {what} must not contain '..' or empty segments: {path!r}")
     return segments
+
+
+def _checked_repo(repo: str) -> str:
+    """A manifest repo name: one segment under the same rules as a path; ValueError otherwise."""
+    if len(_checked_segments(repo, "repo")) != 1:
+        raise ValueError(f"manifest repo must be a single name: {repo!r}")
+    return repo
 
 
 def fetch_manifest(
@@ -41,7 +48,8 @@ def fetch_manifest(
 
     Destination: {bronze_root}/public/load_date={YYYY-MM-DD}/{repo}/{path}, passed to `write(dest,
     body)` (default: a local file writer that creates the folders). Re-running overwrites the same
-    files. Raises ValueError for a path that is absolute or has a `..` segment (before any fetch),
+    files. Raises ValueError for a path that is absolute or has a `..` segment, or a repo that is
+    not one such segment (before any fetch),
     and RuntimeError on any non-200. The URL percent-encodes each path segment.
     """
     write = write or _local_write
@@ -49,7 +57,7 @@ def fetch_manifest(
     base = f"{bronze_root.rstrip('/')}/public/load_date={load_date.isoformat()}"
     plan = []
     for source in manifest["sources"]:
-        repo, sha = source["repo"], source["sha"]
+        repo, sha = _checked_repo(source["repo"]), source["sha"]
         for path in source["paths"]:
             segments = _checked_segments(path)
             url_path = "/".join(quote(segment, safe="") for segment in segments)
