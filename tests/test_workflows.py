@@ -249,10 +249,10 @@ def test_ci_hygiene_runs_always_and_fails_on_push_without_the_secret(ci):
     assert script.index("::error::") < script.index("::notice::") < script.index("python tools/check_hygiene.py")
 
 
-def test_ci_validates_both_terraform_stacks(ci):
+def test_ci_validates_all_terraform_stacks(ci):
     runs = "\n".join(str(s.get("run", "")) for s in steps(ci["jobs"]["test"]))
     assert "terraform fmt -check -recursive infra" in runs
-    for stack in ("infra/fabric", "infra/cost-export"):
+    for stack in ("infra/fabric", "infra/cost-export", "infra/event-hubs"):
         assert f"terraform -chdir={stack} init -backend=false" in runs
         assert f"terraform -chdir={stack} validate" in runs
     for forbidden in ("terraform plan", "terraform apply"):
