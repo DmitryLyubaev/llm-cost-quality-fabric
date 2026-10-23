@@ -18,7 +18,14 @@ PARAMETERS_MARKER = "# PARAMETERS CELL ********************"
 MARKDOWN_MARKER = "# MARKDOWN ********************"
 EMPTY_GUID = "00000000-0000-0000-0000-000000000000"
 GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
-NOTEBOOKS = ["nb_ingest_public", "nb_load"]
+NOTEBOOKS = ["nb_ingest_public", "nb_load"]  # the pipeline's, in activity order
+GATEWAY_NOTEBOOK = "nb_gateway_load"  # run by hand after a session, never by the pipeline
+ALL_NOTEBOOKS = NOTEBOOKS + [GATEWAY_NOTEBOOK]
+PARAMETERS = {
+    "nb_ingest_public": ['load_date = ""'],
+    "nb_load": ['load_date = ""'],
+    GATEWAY_NOTEBOOK: ['session = ""', 'eventhouse_count = ""'],
+}
 # Patterns that would mean a storage endpoint or a lake path with real IDs slipped in.
 FORBIDDEN_IN_NOTEBOOKS = [
     re.compile(r"abfss://", re.IGNORECASE),
@@ -78,6 +85,7 @@ def test_expected_items_exist():
         "lh_portfolio.Lakehouse",
         "nb_ingest_public.Notebook",
         "nb_load.Notebook",
+        "nb_gateway_load.Notebook",
         "pl_daily_load.DataPipeline",
     } | REALTIME_ITEMS
 
@@ -138,25 +146,25 @@ def _wheel_name() -> str:
     return f"lakehouse-{pyproject['project']['version']}-py3-none-any.whl"
 
 
-@pytest.mark.parametrize("name", NOTEBOOKS)
-def test_notebook_installs_the_wheel_first_then_takes_load_date(name):
+@pytest.mark.parametrize("name", ALL_NOTEBOOKS)
+def test_notebook_installs_the_wheel_first_then_takes_its_parameters(name):
     text = _notebook(name)
     assert text.startswith("# Fabric notebook source\n")
     code_cells = [(m, code) for m, code in _cells(text) if m != MARKDOWN_MARKER]
     # %pip restarts Python, so it must run before the parameters cell sets anything.
     install = f"%pip install /lakehouse/default/Files/wheels/{_wheel_name()}"
     assert code_cells[0] == (CELL_MARKER, [install])
-    assert code_cells[1] == (PARAMETERS_MARKER, ['load_date = ""'])
+    assert code_cells[1] == (PARAMETERS_MARKER, PARAMETERS[name])
     assert [m for m, _ in code_cells].count(PARAMETERS_MARKER) == 1
 
 
-@pytest.mark.parametrize("name", NOTEBOOKS)
+@pytest.mark.parametrize("name", ALL_NOTEBOOKS)
 def test_notebook_wheel_name_matches_the_package_version(name):
     installs = re.findall(r"^%pip install \S*/([^/\s]+\.whl)$", _notebook(name), re.MULTILINE)
     assert installs == [_wheel_name()]
 
 
-@pytest.mark.parametrize("name", NOTEBOOKS)
+@pytest.mark.parametrize("name", ALL_NOTEBOOKS)
 def test_notebook_default_lakehouse_is_lh_portfolio_in_this_workspace(name):
     lakehouse_id = _logical_ids()["lh_portfolio.Lakehouse"]
     header = _meta_blocks(_notebook(name))[0]
@@ -174,6 +182,10 @@ def test_notebook_default_lakehouse_is_lh_portfolio_in_this_workspace(name):
     [
         ("nb_ingest_public", "lakehouse.fabric_entry.ingest_public("),
         ("nb_load", "lakehouse.fabric_entry.load("),
+        (
+            GATEWAY_NOTEBOOK,
+            "lakehouse.fabric_entry.load_gateway(session, eventhouse_count, notebookutils.runtime.context)",
+        ),
     ],
 )
 def test_notebook_calls_its_entry_point_with_the_runtime_context(name, call):
@@ -183,13 +195,31 @@ def test_notebook_calls_its_entry_point_with_the_runtime_context(name, call):
     assert "print(" in text
 
 
-@pytest.mark.parametrize("name", NOTEBOOKS)
+@pytest.mark.parametrize("name", ALL_NOTEBOOKS)
 def test_notebook_has_no_forbidden_patterns_or_foreign_ids(name):
     text = _notebook(name)
     for pattern in FORBIDDEN_IN_NOTEBOOKS:
         assert not pattern.search(text), pattern.pattern
     allowed = {EMPTY_GUID, _logical_ids()["lh_portfolio.Lakehouse"]}
     assert set(GUID.findall(text)) <= allowed
+
+
+def test_gateway_notebook_says_it_runs_once_after_the_session():
+    text = _notebook(GATEWAY_NOTEBOOK)
+    markdown = text.split(MARKDOWN_MARKER, 1)[1].split("# PARAMETERS CELL", 1)[0].lower()
+    assert "once" in markdown
+    assert "after the session" in markdown
+    assert "never from the pipeline" in markdown
+    assert "json.dumps(" in text
+
+
+def test_pipeline_never_runs_the_gateway_notebook():
+    gateway_id = _logical_ids()[f"{GATEWAY_NOTEBOOK}.Notebook"]
+    for path in (FABRIC / "pl_daily_load.DataPipeline").rglob("*"):
+        if path.is_file():
+            text = path.read_text(encoding="utf-8")
+            assert gateway_id not in text, path
+            assert GATEWAY_NOTEBOOK not in text, path
 
 
 def test_fabric_files_pass_hygiene():
@@ -267,15 +297,17 @@ def test_parameter_file_names_only_items_that_exist():
         assert list(FABRIC.rglob(f"{item_name}.{item_type}")), f"{item_name}.{item_type}"
 
 
-def test_parameter_file_repoints_lakehouse_and_enables_prod_schedule():
+@pytest.mark.parametrize("name", ALL_NOTEBOOKS)
+def test_parameter_file_repoints_lakehouse_and_enables_prod_schedule(name):
     params = _parameters()
     lakehouse_id = _logical_ids()["lh_portfolio.Lakehouse"]
-    text = _notebook("nb_load")
+    text = _notebook(name)
 
     replaced = {}
     notebook_rules = [r for r in params["find_replace"] if r["item_type"] == "Notebook"]
     assert len(notebook_rules) == 3
     for rule in notebook_rules:
+        assert "item_name" not in rule  # so every notebook, the gateway's included, is repointed
         assert set(rule["replace_value"]) == {"PROD"}
         assert rule["is_regex"] == "true"
         match = re.search(rule["find_value"], text)

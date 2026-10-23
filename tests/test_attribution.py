@@ -66,6 +66,11 @@ def test_p9_cost_export_group_is_attributed_to_p9():
     assert attribute("rg-p9-cost-export", date(2026, 10, 25), {}, RULES, WINDOWS) == Attribution("p9", "rg_rule")
 
 
+def test_p10_event_hubs_group_is_attributed_to_p10():
+    assert attribute("rg-p10-event-hubs", date(2026, 11, 12), {}, RULES, WINDOWS) == Attribution("p10", "rg_rule")
+    assert attribute("RG-P10-Event-Hubs", date(2026, 11, 12), {}, RULES, WINDOWS) == Attribution("p10", "rg_rule")
+
+
 def test_rg_rule_date_window():
     rules = [RgRule("rg-x", "p9", False, date(2026, 10, 5), date(2026, 10, 7))]
     assert attribute("rg-x", date(2026, 10, 5), {}, rules, []) == Attribution("p9", "rg_rule")

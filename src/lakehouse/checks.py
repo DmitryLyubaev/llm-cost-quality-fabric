@@ -1,8 +1,9 @@
-"""The four quality checks of spec 3.7, each guarding one claim.
+"""The four quality checks of spec 3.7, each guarding one claim, and project 10's gateway count
+check (its spec 4.4), which the gateway load runs instead of `run_load`.
 
-A check returns a `CheckResult`; it does not raise when the data is wrong (`run_load` raises
-`QualityCheckFailed` once every check has run). A broken configuration, such as a published-figures
-row naming a query that does not exist, is an error, not a failed check.
+A check returns a `CheckResult`; it does not raise when the data is wrong (`run_load` and
+`load_gateway` raise `QualityCheckFailed` once every check has run). A broken configuration, such
+as a published-figures row naming a query that does not exist, is an error, not a failed check.
 """
 
 from collections.abc import Callable
@@ -11,6 +12,7 @@ from dataclasses import dataclass
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
+from lakehouse.gateway.build import GOLD_TABLE as GATEWAY_GOLD_TABLE
 from lakehouse.paths import LakePaths
 from lakehouse.seeding import read_seed_rows
 from lakehouse.silver.costs import month_range, normalise_costs
@@ -196,3 +198,23 @@ def check_rerun_unchanged(before: dict[str, str], after: dict[str, str]) -> Chec
     if problems:
         return CheckResult("rerun_unchanged", False, "; ".join(problems))
     return CheckResult("rerun_unchanged", True, f"{len(after)} table(s) identical")
+
+
+# --- project 10: gold holds each gateway call once, and every call the Eventhouse saw ----------
+
+
+def check_gateway_counts(
+    spark: SparkSession, paths: LakePaths, session: str, eventhouse_count: int
+) -> CheckResult:
+    """Passes only if every gold `fact_gateway_call` `request_id` is unique and the session's
+    gold call count equals `eventhouse_count` (the Eventhouse's distinct count for the session,
+    read by whoever runs the notebook). The detail gives the counts, never a request ID."""
+    facts = spark.read.format("delta").load(paths.table("gold", GATEWAY_GOLD_TABLE))
+    totals = facts.agg(F.count("*").alias("rows"), F.countDistinct("request_id").alias("ids")).first()
+    duplicates = totals["rows"] - totals["ids"]
+    gold_count = facts.where(F.col("session") == session).count()
+    detail = (
+        f"gold {gold_count} call(s) for the session, Eventhouse {eventhouse_count}; "
+        f"{duplicates} duplicate request_id row(s) in gold"
+    )
+    return CheckResult("gateway_counts", duplicates == 0 and gold_count == eventhouse_count, detail)
