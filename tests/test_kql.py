@@ -58,7 +58,7 @@ def _mapping() -> list[dict]:
         r"ingestion\s+json\s+mapping\s+\"gateway_calls_json\"\s+'(.*?)'", _code(TABLE_FILE), re.DOTALL
     )
     assert match, "no json mapping named gateway_calls_json"
-    return json.loads(match.group(1))
+    return json.loads(match.group(1))  # the documented form: {"column", "datatype", "Properties": {"Path"}}
 
 
 def test_table_columns_equal_event_fields():
@@ -74,24 +74,36 @@ def test_table_command_creates_gateway_calls_only():
 def test_mapping_is_json_paths_for_every_field_in_order():
     mapping = _mapping()
     assert [(m["column"], m["datatype"]) for m in mapping] == EVENT_FIELDS
-    assert [m["path"] for m in mapping] == [f"$.{name}" for name, _ in EVENT_FIELDS]
+    assert [m["Properties"]["Path"] for m in mapping] == [f"$.{name}" for name, _ in EVENT_FIELDS]
+    assert all(set(m) == {"column", "datatype", "Properties"} for m in mapping)
     assert ".create-or-alter table gateway_calls ingestion json mapping" in _code(TABLE_FILE)
 
 
 def test_function_filters_replay_and_dedups_on_ingestion_time():
     body = _function_body()
     assert 'session != "replay"' in body
-    assert re.search(r"summarize\s+arg_max\(\s*ingested\s*,\s*\*\s*\)\s+by\s+request_id", body)
+    assert re.search(r"summarize\s+arg_max\(\s*ingested\s*,\s*\*\s*\)[^|]*\bby\s+request_id", body)
     assert re.search(r"extend\s+ingested\s*=\s*ingestion_time\(\)", body)
     assert body.index("ingestion_time()") < body.index("arg_max")
 
 
-def test_function_returns_event_fields_then_ingested():
+def test_function_filters_replay_before_the_dedup():
+    body = _function_body()
+    assert body.index('session != "replay"') < body.index("arg_max")
+
+
+def test_function_keeps_first_availability():
+    body = _function_body()
+    assert re.search(r"first_ingested\s*=\s*min\(ingested\)", body)
+    assert re.search(r"summarize\s+arg_max\(ingested,\s*\*\)\s*,\s*first_ingested\s*=\s*min\(ingested\)\s+by\s+request_id", body)
+
+
+def test_function_returns_event_fields_then_ingested_then_first_ingested():
     body = _function_body()
     match = re.search(r"\|\s*project\s+(.*)$", body.strip(), re.DOTALL)
     assert match, "the function must end with a project that fixes the column order"
     projected = [c.strip() for c in match.group(1).split(",")]
-    assert projected == [name for name, _ in EVENT_FIELDS] + ["ingested"]
+    assert projected == [name for name, _ in EVENT_FIELDS] + ["ingested", "first_ingested"]
 
 
 def test_published_ids_match_files_and_table():
@@ -131,6 +143,10 @@ def test_refusals_count_the_refused_flag_only():
     assert "answered_by" not in code
 
 
+def test_answered_by_per_minute_leaves_out_calls_with_no_backend():
+    assert "isnotempty(answered_by)" in _code(QUERIES_DIR / "answered_by_per_minute.kql")
+
+
 def test_failover_minutes_are_secondary_answers():
     code = _code(QUERIES_DIR / "failover_minutes.kql")
     assert 'answered_by == "secondary"' in code
@@ -146,14 +162,16 @@ def test_token_spike_threshold_is_a_let_at_the_top():
 
 def test_delay_query_measures_ingestion_minus_event_time_in_seconds():
     code = _code(QUERIES_DIR / "delay_p50_p95_max.kql")
-    assert re.search(r"\(ingested\s*-\s*event_time\)\s*/\s*1s", code)
+    assert re.search(r"\(first_ingested\s*-\s*event_time\)\s*/\s*1s", code)
+    assert not re.search(r"\(ingested\s*-", code), "the delay is to first availability, not the last duplicate"
     assert "percentile(" in code and ", 50)" in code and ", 95)" in code
     assert "max(" in code and "n = count()" in code
 
 
 def test_session_counts_are_distinct_requests_by_session_and_caller():
     code = _code(QUERIES_DIR / "session_counts.kql")
-    assert re.search(r"dcount\(request_id\)", code)
+    assert re.search(r"calls\s*=\s*count\(\)", code), "GatewayCalls() is one row per request_id, so count() is exact"
+    assert "dcount" not in code
     assert re.search(r"by\s+session\s*,\s*caller", code)
 
 
@@ -164,6 +182,19 @@ def test_no_guid_or_url_in_any_kql_or_published_file():
         text = path.read_text(encoding="utf-8")
         assert not guid.search(text), path.name
         assert not re.search(r"https?://|\.kusto\.|\.servicebus\.", text, re.IGNORECASE), path.name
+
+
+def test_published_notes_estimates_and_clock_skew():
+    text = PUBLISHED.read_text(encoding="utf-8")
+    assert "estimated (T-Digest)" in text
+    assert "max is exact" in text
+    assert "negative" in text and "first_ingested" in text
+
+
+def test_comment_blocks_are_separated_from_the_next_command():
+    lines = TABLE_FILE.read_text(encoding="utf-8").splitlines()
+    for before, after in zip(lines, lines[1:]):
+        assert not (before.startswith("//") and after.startswith(".")), after[:40]
 
 
 def test_files_use_lf_endings():
