@@ -49,6 +49,14 @@ key_value_replace:
       item_type: "KQLDashboard"
       item_name: "rtd_gateway"
       file_path: "**/RealTimeDashboard.json"
+    # Activator rules are off in git (dev never alerts by itself); PROD runs them, since a fired alert is
+    # the session's evidence. ReflexEntities.json is a JSON array of entities; this selects every rule.
+    - find_key: $[?(@.payload.definition.type=="Rule")].payload.definition.settings.shouldRun
+      replace_value:
+        PROD: true
+      item_type: "Reflex"
+      item_name: "act_gateway"
+      file_path: "**/ReflexEntities.json"
     # The Event Hubs source names a Fabric connection, not the namespace or hub: the namespace, the hub
     # and the workspace-identity credential live in that connection. Git holds the empty GUID; PROD gets
     # the connection's id from the environment (a GitHub environment secret).

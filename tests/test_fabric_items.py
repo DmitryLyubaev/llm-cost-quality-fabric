@@ -297,6 +297,17 @@ ALERT_FIGURES = {"failover_minutes", "token_spike_minutes"}
 # ending at the start of the current minute so Activator never reads a bin that is still filling.
 ALERT_FILTER = "| where minute >= _startTime and minute < bin(_endTime, 1m)\n"
 TIME_VARIABLES = {"_startTime", "_endTime"}
+# fabric-cicd (the deployer) keeps a KQL database inside its Eventhouse's `.children` folder.
+KQL_DATABASE_DIR = "eh_gateway.Eventhouse/.children/kql_gateway.KQLDatabase"
+
+
+def _item_dir(item: str) -> Path:
+    return FABRIC / (KQL_DATABASE_DIR if item == "kql_gateway.KQLDatabase" else item)
+
+
+def _item_files(item: str) -> list[Path]:
+    """The item's own files (child items' folders, such as `.children`, are left out)."""
+    return [p for p in _item_dir(item).iterdir() if p.is_file()]
 
 
 def _json(relative: str):
@@ -320,10 +331,12 @@ def test_eventhouse_has_no_properties():
 
 def test_kql_database_sits_in_eh_gateway_and_its_schema_is_the_table_file():
     ids = _logical_ids()
-    props = _json("kql_gateway.KQLDatabase/DatabaseProperties.json")
+    assert not (FABRIC / "kql_gateway.KQLDatabase").exists()
+    assert (FABRIC / KQL_DATABASE_DIR / ".platform").is_file()
+    props = _json(f"{KQL_DATABASE_DIR}/DatabaseProperties.json")
     assert props["databaseType"] == "ReadWrite"
     assert props["parentEventhouseItemId"] == ids["eh_gateway.Eventhouse"]
-    schema = (FABRIC / "kql_gateway.KQLDatabase" / "DatabaseSchema.kql").read_bytes()
+    schema = (FABRIC / KQL_DATABASE_DIR / "DatabaseSchema.kql").read_bytes()
     assert schema == (KQL_DIR / "gateway_calls.kql").read_bytes()
 
 
@@ -486,7 +499,7 @@ def test_reflex_has_exactly_two_rules_on_the_alert_tiles():
         figure_id = next(f for f in ALERT_FIGURES if query.endswith(tiles[f][1]["text"]))
         assert query == "let _startTime = ago(1h);\nlet _endTime = now();\n" + tiles[figure_id][1]["text"]
         watched[figure_id] = rule
-        # Off in git: dev never alerts by itself (design 4.3); the runbook turns rules on.
+        # Off in git, so dev never alerts by itself (design 4.3); parameter.yml turns them on in PROD.
         assert rule["payload"]["definition"]["settings"]["shouldRun"] is False
     assert set(watched) == ALERT_FIGURES
 
@@ -560,7 +573,7 @@ def _declared_ids(node) -> set[str]:
 @pytest.mark.parametrize("item", sorted(REALTIME_ITEMS))
 def test_realtime_item_holds_no_foreign_ids_or_hosts(item):
     allowed = set(_logical_ids().values()) | {EMPTY_GUID}
-    files = [p for p in (FABRIC / item).iterdir() if p.name != ".platform"]
+    files = [p for p in _item_files(item) if p.name != ".platform"]
     assert files
     for path in files:
         text = path.read_text(encoding="utf-8")
@@ -572,12 +585,43 @@ def test_realtime_item_holds_no_foreign_ids_or_hosts(item):
 
 def test_realtime_files_use_lf_line_endings():
     for item in REALTIME_ITEMS:
-        for path in (FABRIC / item).iterdir():
+        for path in _item_files(item):
             assert b"\r\n" not in path.read_bytes(), path
 
 
 def _key_rules(item_type: str) -> list[dict]:
     return [r for r in _parameters()["key_value_replace"] if r["item_type"] == item_type]
+
+
+def _select_rules(find_key: str, entities: list[dict]) -> list[dict]:
+    """The `settings` objects the Reflex rule's JSONPath selects, evaluated for the one form it uses
+    (jsonpath_ng, which fabric-cicd uses, is a deploy-only dependency)."""
+    match = re.fullmatch(
+        r'\$\[\?\(@\.payload\.definition\.type=="(\w+)"\)\]\.payload\.definition\.settings\.shouldRun', find_key
+    )
+    assert match, find_key
+    return [
+        e["payload"]["definition"]["settings"]
+        for e in entities
+        if e.get("payload", {}).get("definition", {}).get("type") == match.group(1)
+    ]
+
+
+def test_parameter_file_turns_every_activator_rule_on_in_prod_only():
+    [rule] = _key_rules("Reflex")
+    assert rule["item_name"] == "act_gateway"
+    assert rule["file_path"] == "**/ReflexEntities.json"
+    assert rule["replace_value"] == {"PROD": True}
+
+    entities = _json("act_gateway.Reflex/ReflexEntities.json")
+    all_rules = [
+        e for e in entities
+        if e["type"] == "timeSeriesView-v1" and e["payload"]["definition"]["type"] == "Rule"
+    ]
+    selected = _select_rules(rule["find_key"], entities)
+    assert len(selected) == len(all_rules) == 2
+    for settings in selected:
+        assert settings["shouldRun"] is False  # git (dev) value; PROD gets True
 
 
 def test_parameter_file_points_queryset_and_dashboard_at_the_deployed_eventhouse():
