@@ -1,0 +1,5 @@
+// Calls by the backend that answered, per minute. Calls with no backend (refused or failed) are left out.
+GatewayCalls()
+| where isnotempty(answered_by)
+| summarize calls = count() by minute = bin(event_time, 1m), answered_by
+| order by minute asc

@@ -1,0 +1,7 @@
+let threshold = 5000;
+// Caller-minutes whose summed tokens exceed the threshold (the Activator rule's condition).
+GatewayCalls()
+| where isnotnull(tokens)
+| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller
+| where tokens > threshold
+| order by minute asc, caller asc

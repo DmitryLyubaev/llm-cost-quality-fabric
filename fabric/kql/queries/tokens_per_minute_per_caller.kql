@@ -1,0 +1,5 @@
+// Tokens consumed per caller per minute. Calls with no token count are left out.
+GatewayCalls()
+| where isnotnull(tokens)
+| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller
+| order by minute asc, caller asc

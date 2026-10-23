@@ -1,0 +1,4 @@
+// End-to-end delay: ingestion time minus event time, in seconds, over all calls.
+GatewayCalls()
+| extend delay_s = (ingested - event_time) / 1s
+| summarize p50 = percentile(delay_s, 50), p95 = percentile(delay_s, 95), max_s = max(delay_s), n = count()

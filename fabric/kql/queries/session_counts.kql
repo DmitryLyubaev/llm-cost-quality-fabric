@@ -1,0 +1,4 @@
+// Distinct requests by session and caller.
+GatewayCalls()
+| summarize calls = dcount(request_id) by session, caller
+| order by session asc, caller asc
