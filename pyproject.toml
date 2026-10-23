@@ -38,6 +38,11 @@ deploy = [
     "azure-identity",
     "azure-storage-file-datalake",
 ]
+# Development only: tools/replay_gateway_events.py (the tests inject a fake sender and need neither).
+replay = [
+    "azure-eventhub>=5.11,<6",
+    "azure-identity",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
