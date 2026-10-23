@@ -1,7 +1,10 @@
-# Checks for plan 3 (live Fabric)
+# Checks for live Fabric
 
 JSON files cannot hold comments, so the points in them that no Microsoft or fabric-cicd source
-confirmed are listed here. Python files carry their own `# verify in plan 3` comments.
+confirmed are listed here. Python files carry their own `# verify in plan 3` comments (project 9)
+or `# verify in project 10 plan 2` comments.
+
+## Project 9, plan 3 (the live runbook)
 
 | File | Key | What to check |
 |---|---|---|
@@ -14,7 +17,14 @@ confirmed are listed here. Python files carry their own `# verify in plan 3` com
 | `pl_daily_load.DataPipeline/pipeline-content.json` | `load_date` expression | Ruled: `load_date` is the UTC date of the trigger (`pipeline().TriggerTime` is UTC), so a 06:00 Brisbane (UTC+10) run loads the previous Brisbane calendar day. Check only that the expression evaluates to `yyyy-MM-dd`. |
 | `pl_daily_load.DataPipeline/.schedules` | `configuration.localTimeZoneId` | `E. Australia Standard Time` is the Windows time zone ID for Brisbane (the REST API takes Windows IDs). Check the portal shows Brisbane, 06:00. |
 | `pl_daily_load.DataPipeline/.schedules` | `configuration.startDateTime` | Set to `2026-11-01T06:00:00` (06:00 Brisbane, the first run; no `Z`, as in the git samples) so it is in the future at commit time: the REST docs say a start time in the past "will trigger a job instantly". Plan 3 moves it forward if it has passed by the first PROD deploy, and checks the portal reads it as Brisbane local time, not UTC. |
-| `parameter.yml` | `find_replace[*].file_path` | Glob `**/notebook-content.py` combined with `item_type: Notebook`; check fabric-cicd's log shows the three replacements in both notebooks. |
+| `parameter.yml` | `find_replace[*].file_path` | Glob `**/notebook-content.py` combined with `item_type: Notebook`; check fabric-cicd's log shows the three replacements in all three notebooks (`nb_gateway_load` is project 10's). |
+
+## Project 10, plan 2 (the live session runbook)
+
+| File | Key | What to check |
+|---|---|---|
+| `fabric/` (all six real-time items) | dev git sync | The R13 gate covers prod only: dev syncs every item in `fabric/`, so project 9's first dev "Update from Git" (its plan 3, step 10) also creates `eh_gateway`, `kql_gateway`, `kq_gateway`, `rtd_gateway`, `act_gateway` and `es_gateway` (its connection is the empty GUID; the Activator rules have `shouldRun: false`). If the sync fails on `es_gateway` or `act_gateway`, record Fabric's error, move those two folders out of `fabric/` on a branch for project 9's run, and bring them back in project 10 plan 2. Pause or leave the dev Eventhouse idle so it does not hold capacity. |
+| `nb_gateway_load.Notebook/notebook-content.py` | parameters | `session` and `eventhouse_count` are set by hand when the notebook is run once after the session (no pipeline injects them). Check both reach the call cell after the `%pip` restart. |
 | `eh_gateway.Eventhouse/.children/kql_gateway.KQLDatabase/` | folder location | Nested in the Eventhouse as fabric-cicd 1.4.0 (the deployer) expects: its samples and item notes put a KQL database under `<eventhouse>.Eventhouse/.children/`, and it leaves `.children` out of the Eventhouse's own definition. Learn's Eventhouse git page (2025) shows the database beside the Eventhouse instead. Check dev git sync picks the nested database up, and that Fabric's first commit keeps it there. |
 | `eh_gateway.Eventhouse/.children/kql_gateway.KQLDatabase/DatabaseProperties.json` | `oneLakeCachingPeriod`, `oneLakeStandardStoragePeriod` | `P30D` / `P365D`, the values in fabric-cicd's `TaxiDB` sample (Learn's examples use `P36500D`). The retention also applies to the OneLake copy. Check both are applied and that `parentEventhouseItemId` as a logicalId binds the database to `eh_gateway` on git sync. |
 | `eh_gateway.Eventhouse/.children/kql_gateway.KQLDatabase/DatabaseSchema.kql` | whole file | A byte copy of `kql/gateway_calls.kql` (a test enforces it): `//` comments, commands separated by blank lines, a single-quoted JSON mapping and a function with `with (docstring, folder)`. All three commands are on Learn's supported list. Fabric regenerates this script on commit, so check git sync runs it and compare what Fabric writes back; if it rewrites the text, decide in plan 2 whether the copy test follows Fabric or the other way round. |

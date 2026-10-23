@@ -24,7 +24,7 @@
 
 # The wheel's file name follows pyproject.toml's version (tests/test_fabric_items.py checks it).
 # This cell comes first because %pip restarts the Python interpreter and drops earlier variables.
-# verify in plan 3: that the parameters set for the run still land after this restart.
+# verify in project 10 plan 2: that the parameters set for the run still land after this restart.
 %pip install /lakehouse/default/Files/wheels/lakehouse-0.1.0-py3-none-any.whl
 
 # METADATA ********************

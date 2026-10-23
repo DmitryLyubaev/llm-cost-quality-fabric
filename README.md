@@ -71,10 +71,11 @@ Cost Management export ──► storage ─┘   via OneLake shortcut, read thr
 | `fact_daily_cost` | cost-export line: resource × meter × day |
 | `fact_live_check` | check × session |
 | `dim_model_deployment` | deployment version (Type 2, from Terraform's git history) |
-| `dim_project` | project 1–9, plus `releaselens-shared` and `untagged` |
+| `dim_project` | project 1–10, plus `releaselens-shared` and `untagged` |
 | `dim_study` | study run |
 | `dim_arm` | arm within a study |
 | `dim_date` | day |
+| `fact_gateway_call` | gateway call (project 10's session data, loaded by its own notebook) |
 | `reject.eval_unresolved` | eval attempt that resolves to no deployment version, or to several |
 
 The Type 2 dimension joins every result to the deployment version live when it was measured. A
