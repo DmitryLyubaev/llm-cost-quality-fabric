@@ -1,4 +1,5 @@
 """Checks on the Fabric item files under fabric/ (what git sync and fabric-cicd read)."""
+import fnmatch
 import json
 import re
 import tomllib
@@ -6,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from jsonpath_ng.ext import parse as jsonpath_parse  # the parser fabric-cicd 1.4.0 uses
 
 from check_hygiene import check_hygiene
 
@@ -422,6 +424,10 @@ def test_alert_tiles_are_stat_or_column_with_a_predefined_time_range():
     assert durations[0]["defaultValue"]["kind"] == "dynamic"
 
 
+REFLEX_TIME_BINDING = "let _startTime = ago(1h);\nlet _endTime = now();\n"
+REFLEX_FUNCTION = 'database("kql_gateway").GatewayCalls()'
+
+
 def _reflex() -> dict[str, dict]:
     entities = _json("act_gateway.Reflex/ReflexEntities.json")
     by_id = {e["uniqueIdentifier"]: e for e in entities}
@@ -494,10 +500,14 @@ def test_reflex_has_exactly_two_rules_on_the_alert_tiles():
         source = _rule_source(entities, rule)
         assert source["type"] == "kqlSource-v1"
         assert source["payload"]["eventhouseItem"]["targetUniqueIdentifier"] == eventhouse_id
-        # The tile's query, with the tile's time range bound the way the dashboard binds it.
+        # The tile's query with two differences only: the tile's time range bound the way the dashboard
+        # binds it, and the function named in kql_gateway (the Eventhouse also has a default database).
         query = source["payload"]["query"]["queryString"]
-        figure_id = next(f for f in ALERT_FIGURES if query.endswith(tiles[f][1]["text"]))
-        assert query == "let _startTime = ago(1h);\nlet _endTime = now();\n" + tiles[figure_id][1]["text"]
+        assert query.startswith(REFLEX_TIME_BINDING)
+        figure_id = next(f for f in ALERT_FIGURES if query.endswith(tiles[f][1]["text"].split("GatewayCalls()")[1]))
+        tile_text = tiles[figure_id][1]["text"]
+        assert tile_text.count("GatewayCalls()") == 1
+        assert query == REFLEX_TIME_BINDING + tile_text.replace("GatewayCalls()", REFLEX_FUNCTION)
         watched[figure_id] = rule
         # Off in git, so dev never alerts by itself (design 4.3); parameter.yml turns them on in PROD.
         assert rule["payload"]["definition"]["settings"]["shouldRun"] is False
@@ -593,35 +603,88 @@ def _key_rules(item_type: str) -> list[dict]:
     return [r for r in _parameters()["key_value_replace"] if r["item_type"] == item_type]
 
 
-def _select_rules(find_key: str, entities: list[dict]) -> list[dict]:
-    """The `settings` objects the Reflex rule's JSONPath selects, evaluated for the one form it uses
-    (jsonpath_ng, which fabric-cicd uses, is a deploy-only dependency)."""
-    match = re.fullmatch(
-        r'\$\[\?\(@\.payload\.definition\.type=="(\w+)"\)\]\.payload\.definition\.settings\.shouldRun', find_key
-    )
-    assert match, find_key
-    return [
-        e["payload"]["definition"]["settings"]
-        for e in entities
-        if e.get("payload", {}).get("definition", {}).get("type") == match.group(1)
+def _rule_files(rule: dict) -> list[Path]:
+    """The files a key_value_replace rule applies to: its item (by type and name) and its file glob."""
+    folders = [
+        path.parent for path, doc in _platforms().items()
+        if doc["metadata"] == {"type": rule["item_type"], "displayName": rule["item_name"]}
     ]
+    assert len(folders) == 1, rule
+    return [
+        p for p in folders[0].iterdir()
+        if p.is_file() and fnmatch.fnmatch(p.relative_to(FABRIC).as_posix(), rule["file_path"])
+    ]
+
+
+def _leaves(node, path=()) -> dict[tuple, object]:
+    """{path: value} for every scalar in a JSON document."""
+    if isinstance(node, dict):
+        return {k: v for key, value in node.items() for k, v in _leaves(value, path + (key,)).items()}
+    if isinstance(node, list):
+        return {k: v for i, value in enumerate(node) for k, v in _leaves(value, path + (i,)).items()}
+    return {path: node}
+
+
+# What each key_value_replace rule must change, worked out from the documents without JSONPath.
+EXPECTED_KEY_LEAVES = {
+    "act_gateway": lambda doc: [
+        (i, "payload", "definition", "settings", "shouldRun")
+        for i, e in enumerate(doc)
+        if e["type"] == "timeSeriesView-v1" and e["payload"]["definition"]["type"] == "Rule"
+    ],
+    "pl_daily_load": lambda doc: [
+        ("schedules", i, "enabled") for i, s in enumerate(doc["schedules"]) if s["jobType"] == "Execute"
+    ],
+    "kq_gateway": lambda doc: [("queryset", "dataSources", 0, "clusterUri")],
+    "rtd_gateway": lambda doc: [("dataSources", 0, "clusterUri")],
+    "es_gateway": lambda doc: [("sources", 0, "properties", "dataConnectionId")],
+}
+EXPECTED_KEY_MATCHES = {"act_gateway": 2, "pl_daily_load": 1, "kq_gateway": 1, "rtd_gateway": 1, "es_gateway": 1}
+
+
+def _key_value_rules() -> list[dict]:
+    return _parameters()["key_value_replace"]
+
+
+def test_every_key_value_rule_is_checked_and_matches_something():
+    rules = _key_value_rules()
+    assert sorted(r["item_name"] for r in rules) == sorted(EXPECTED_KEY_MATCHES)
+    for rule in rules:
+        files = _rule_files(rule)
+        assert files, rule
+        for path in files:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            assert jsonpath_parse(rule["find_key"]).find(doc), (rule["find_key"], path)
+
+
+@pytest.mark.parametrize("rule", _key_value_rules(), ids=lambda r: r["item_name"])
+def test_key_value_rule_changes_exactly_its_leaves_in_prod(rule):
+    """Apply the rule as fabric-cicd 1.4.0 does (jsonpath_ng.ext parse, find, full_path.update)."""
+    [path] = _rule_files(rule)
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    before = _leaves(doc)
+    expected = EXPECTED_KEY_LEAVES[rule["item_name"]](doc)
+
+    matches = jsonpath_parse(rule["find_key"]).find(doc)
+    assert len(matches) == EXPECTED_KEY_MATCHES[rule["item_name"]] == len(expected)
+    value = rule["replace_value"]["PROD"]
+    for match in matches:
+        match.full_path.update(doc, value)
+
+    after = _leaves(doc)
+    assert set(after) == set(before)
+    changed = {key for key in before if before[key] != after[key]}
+    assert changed == set(expected)
+    assert all(after[key] == value for key in expected)
 
 
 def test_parameter_file_turns_every_activator_rule_on_in_prod_only():
     [rule] = _key_rules("Reflex")
     assert rule["item_name"] == "act_gateway"
-    assert rule["file_path"] == "**/ReflexEntities.json"
     assert rule["replace_value"] == {"PROD": True}
-
     entities = _json("act_gateway.Reflex/ReflexEntities.json")
-    all_rules = [
-        e for e in entities
-        if e["type"] == "timeSeriesView-v1" and e["payload"]["definition"]["type"] == "Rule"
-    ]
-    selected = _select_rules(rule["find_key"], entities)
-    assert len(selected) == len(all_rules) == 2
-    for settings in selected:
-        assert settings["shouldRun"] is False  # git (dev) value; PROD gets True
+    for key in EXPECTED_KEY_LEAVES["act_gateway"](entities):
+        assert _leaves(entities)[key] is False  # git (dev) value; PROD gets True
 
 
 def test_parameter_file_points_queryset_and_dashboard_at_the_deployed_eventhouse():

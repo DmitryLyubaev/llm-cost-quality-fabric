@@ -15,7 +15,7 @@
         "executionIntervalInSeconds": 300
       },
       "query": {
-        "queryString": "let _startTime = ago(1h);\nlet _endTime = now();\n// Minutes in which at least one call was answered by the secondary backend.\nGatewayCalls()\n| where answered_by == \"secondary\"\n| summarize secondary_calls = count() by minute = bin(event_time, 1m)\n| order by minute asc\n| where minute >= _startTime and minute < bin(_endTime, 1m)\n"
+        "queryString": "let _startTime = ago(1h);\nlet _endTime = now();\n// Minutes in which at least one call was answered by the secondary backend.\ndatabase(\"kql_gateway\").GatewayCalls()\n| where answered_by == \"secondary\"\n| summarize secondary_calls = count() by minute = bin(event_time, 1m)\n| order by minute asc\n| where minute >= _startTime and minute < bin(_endTime, 1m)\n"
       },
       "eventhouseItem": {
         "targetUniqueIdentifier": "84a9c8b1-b26d-47ce-9b29-4cf9e1244570"
@@ -99,7 +99,7 @@
         "executionIntervalInSeconds": 300
       },
       "query": {
-        "queryString": "let _startTime = ago(1h);\nlet _endTime = now();\nlet threshold = 5000;\n// Caller-minutes whose summed tokens exceed the threshold (the Activator rule's condition).\nGatewayCalls()\n| where isnotnull(tokens)\n| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller\n| where tokens > threshold\n| order by minute asc, caller asc\n| where minute >= _startTime and minute < bin(_endTime, 1m)\n"
+        "queryString": "let _startTime = ago(1h);\nlet _endTime = now();\nlet threshold = 5000;\n// Caller-minutes whose summed tokens exceed the threshold (the Activator rule's condition).\ndatabase(\"kql_gateway\").GatewayCalls()\n| where isnotnull(tokens)\n| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller\n| where tokens > threshold\n| order by minute asc, caller asc\n| where minute >= _startTime and minute < bin(_endTime, 1m)\n"
       },
       "eventhouseItem": {
         "targetUniqueIdentifier": "84a9c8b1-b26d-47ce-9b29-4cf9e1244570"

@@ -30,6 +30,8 @@ dev = [
     "pytest-cov>=5",
     "build>=1.2",
     "pyyaml>=6.0.3",
+    # fabric-cicd 1.4.0's own pin: the tests evaluate parameter.yml's key_value_replace paths with it.
+    "jsonpath-ng>=1.7.0,<1.8.0",
 ]
 deploy = [
     "fabric-cicd==1.4.0",
