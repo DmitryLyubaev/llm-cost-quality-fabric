@@ -2,8 +2,9 @@
 # Only PROD is deployed by fabric-cicd; the dev workspace syncs from git, so it has no key here.
 # Regexes follow fabric-cicd's sample/workspace/parameter.yml; capture group 1 is what is replaced.
 # $ENV: values come from the deploy's OS environment (plain name, no prefix) and need fabric-cicd's
-# feature flag enable_environment_variable_replacement. An unset variable is left as the literal token,
-# which the Fabric API rejects, so a missing secret fails the deploy instead of passing silently.
+# feature flag enable_environment_variable_replacement. fabric-cicd 1.4.0 refuses the parameter file when
+# a PROD $ENV: token's variable is unset, so a missing secret fails the deploy instead of passing silently;
+# .deploy/deploy.py stands in the empty GUID while the real-time items are out of scope (see VERIFY.md).
 
 find_replace:
     # The notebooks' default lakehouse: lh_portfolio's logicalId in git -> its deployed id.

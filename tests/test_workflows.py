@@ -111,12 +111,50 @@ def test_dev_uploads_and_shortcuts_but_does_not_publish(deploy):
 
 def test_prod_publishes_then_uploads_then_shortcuts(deploy):
     # publish first: on a first deploy the lakehouse the wheel and the shortcut go into exists
-    # only after it
+    # only after it. OneLake availability comes before the gateway shortcut, which targets the
+    # table that availability exposes.
     assert deploy_commands(deploy["jobs"]["prod"]) == [
         "publish",
         "upload-wheel",
         "ensure-shortcut",
+        "onelake-availability",
+        "ensure-gateway-shortcut",
     ]
+
+
+GATE = "P10_EVENTHUB_CONNECTION_ID"
+GATE_SECRET = "${{ secrets.P10_EVENTHUB_CONNECTION_ID }}"
+
+
+def prod_step(deploy, command):
+    return next(
+        s for s in steps(deploy["jobs"]["prod"]) if f"deploy.py {command}" in str(s.get("run", ""))
+    )
+
+
+def test_prod_publish_gets_the_eventhub_connection_gate(deploy):
+    assert prod_step(deploy, "publish")["env"][GATE] == GATE_SECRET
+
+
+@pytest.mark.parametrize("command, name", [
+    ("onelake-availability", "Make the gateway table available in OneLake"),
+    ("ensure-gateway-shortcut", "Ensure the gateway shortcut"),
+])
+def test_prod_realtime_steps_take_the_workspace_and_the_gate_at_step_scope(deploy, command, name):
+    step = prod_step(deploy, command)
+    assert step["name"] == name
+    assert step["env"] == {
+        "FABRIC_WORKSPACE_ID": "${{ secrets.FABRIC_WORKSPACE_ID }}",
+        GATE: GATE_SECRET,
+    }
+    assert step["run"].strip() == f"python .deploy/deploy.py {command}"
+
+
+def test_the_dev_job_has_no_realtime_steps(deploy):
+    for step in steps(deploy["jobs"]["dev"]):
+        assert GATE not in (step.get("env") or {})
+        assert "onelake-availability" not in str(step.get("run", ""))
+        assert "ensure-gateway-shortcut" not in str(step.get("run", ""))
 
 
 @pytest.mark.parametrize("job", ["dev", "prod"])
