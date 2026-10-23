@@ -193,6 +193,24 @@ def test_an_unreadable_event_time_is_refused(spark, tmp_lake):
         build_gateway_calls(spark, source)
 
 
+def test_a_malformed_replay_row_does_not_block_the_session(spark, tmp_lake):
+    rows = [_call("req-01"), _call("req-02", "not a time", session="replay")]
+    source = _source(spark, tmp_lake, rows)
+
+    assert [r["request_id"] for r in build_gateway_calls(spark, source).collect()] == ["req-01"]
+    assert count_duplicate_request_ids(spark, source) == 0
+
+
+def test_the_build_refuses_a_session_that_is_not_utc(spark, tmp_lake):
+    source = _source(spark, tmp_lake, [_call("req-01")])
+    spark.conf.set("spark.sql.session.timeZone", "Australia/Brisbane")
+    try:
+        with pytest.raises(ValueError, match="UTC"):
+            build_gateway_calls(spark, source)
+    finally:
+        spark.conf.set("spark.sql.session.timeZone", "UTC")
+
+
 def test_merge_creates_the_table_then_a_rerun_writes_nothing(spark, tmp_lake):
     source = _source(spark, tmp_lake, [_call("req-01"), _call("req-01"), _refused("req-02")])
     table = tmp_lake.table("silver", "gateway_calls")
@@ -214,6 +232,20 @@ def test_merge_updates_only_rows_whose_values_differ(spark, tmp_lake):
 
     assert counts == {"inserted": 1, "updated": 1}
     assert _silver_rows(spark, tmp_lake)["req-02"]["latency_ms"] == 1
+
+
+def test_merge_updates_a_value_that_was_null(spark, tmp_lake):
+    """The update condition is null-safe: null -> a value counts as a change."""
+    table = tmp_lake.table("silver", "gateway_calls")
+    before = [_call("req-01", answered_by=None, tokens=None, status=502)]
+    merge_gateway_calls(spark, build_gateway_calls(spark, _source(spark, tmp_lake, before)), table)
+
+    after = [_call("req-01", answered_by="secondary", tokens=90, status=502)]
+    counts = merge_gateway_calls(spark, build_gateway_calls(spark, _source(spark, tmp_lake, after)), table)
+
+    assert counts == {"inserted": 0, "updated": 1}
+    row = _silver_rows(spark, tmp_lake)["req-01"]
+    assert (row["answered_by"], row["tokens"]) == ("secondary", 90)
 
 
 # --- gold ------------------------------------------------------------------------------------
@@ -362,10 +394,28 @@ def test_cost_per_call_keeps_each_billing_currency_apart(spark, tmp_lake):
     assert answer[(date(2026, 11, 12), "USD")]["cost_per_call"] == pytest.approx(0.5)
 
 
+def test_a_session_across_utc_midnight_gives_each_day_its_own_row(spark, tmp_lake):
+    rows = [
+        _call("req-01", "2026-11-12T23:30:00Z"),
+        _refused("req-02", "2026-11-12T23:45:00Z"),
+        _call("req-03", "2026-11-13T00:30:00Z"),
+    ]
+    costs = [_cost(date(2026, 11, 12), 6.0), _cost(date(2026, 11, 13), 5.0)]
+    _load(spark, tmp_lake, rows, costs)
+
+    answer = _answer(spark, tmp_lake)
+
+    assert set(answer) == {(date(2026, 11, 12), "AUD"), (date(2026, 11, 13), "AUD")}
+    first, second = answer[(date(2026, 11, 12), "AUD")], answer[(date(2026, 11, 13), "AUD")]
+    assert (first["calls"], first["apim_cost"], first["cost_per_call"]) == (2, 6.0, 3.0)
+    assert (second["calls"], second["apim_cost"], second["cost_per_call"]) == (1, 5.0, 5.0)
+
+
 def test_cost_per_call_docstring_says_when_and_in_what_currency():
     doc = cost_per_gateway_call.__doc__.lower()
     assert "day after" in doc
     assert "billing currency" in doc and "convert" in doc
+    assert "never sum them across rows" in " ".join(doc.split())
 
 
 # --- the notebook's entry point --------------------------------------------------------------

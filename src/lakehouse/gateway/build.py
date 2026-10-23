@@ -60,19 +60,20 @@ def _typed_events(spark: SparkSession, source_path: str) -> DataFrame:
             columns.append(F.try_to_timestamp(F.col(name)).alias(name))
         else:
             columns.append(F.col(name).cast(SPARK_TYPES[kind]).alias(name))
-    typed = source.select(*columns)
+    # Replay rows go first, so a malformed replay row can never block a session's load.
+    typed = source.select(*columns).where(~F.col("session").eqNullSafe(F.lit(REPLAY_SESSION)))
 
     unreadable = typed.where(F.col("event_time").isNull()).count()
     if unreadable:
         raise ValueError(f"gateway source has {unreadable} row(s) with a null or unreadable event_time")
-    return typed.where(~F.col("session").eqNullSafe(F.lit(REPLAY_SESSION)))
+    return typed
 
 
 def build_gateway_calls(spark: SparkSession, source_path: str) -> DataFrame:
     """Silver's rows: exactly `EVENT_FIELDS`, no replay events, one row per `request_id` (R15).
 
-    ValueError naming the columns if the source lacks any contract field, or if a row's
-    `event_time` is null or cannot be read.
+    ValueError naming the columns if the source lacks any contract field, or if a non-replay
+    row's `event_time` is null or cannot be read.
     """
     events = _typed_events(spark, source_path)
     rest = [name for name in FIELDS if name not in (KEY, "event_time")]

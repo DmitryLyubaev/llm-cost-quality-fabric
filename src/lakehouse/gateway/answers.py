@@ -24,7 +24,9 @@ def cost_per_gateway_call(spark: SparkSession, paths: LakePaths, session: str) -
 
     Computed the day after the session, because the cost export lags up to a day. A day with no
     cost rows yet keeps its row, with `billing_currency`, `apim_cost` and `cost_per_call` null.
-    Costs stay in the billing currency, one row per currency; nothing is converted.
+    Costs stay in the billing currency, one row per currency; nothing is converted. A day billed
+    in more than one currency has one row per currency, and `calls`, `tokens_total` and
+    `tokens_per_call` repeat on each of them: never sum them across rows.
     """
     calls = (
         _gold(spark, paths, GOLD_TABLE)
