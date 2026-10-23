@@ -6,8 +6,12 @@ generator are all written against it. Types are `datetime` (an ISO 8601 string w
 or `+hh:mm`), `string`, `int` and `bool`.
 
 The event carries no client IP, no request or response body and no deployment or model field.
-`caller` is a label, never an object ID, and no value anywhere may be shaped like a GUID.
-`answered_by` and `tokens` are null exactly when the gateway itself refused the call.
+`caller` is a label, never an object ID, and no string value may be shaped like a GUID, except
+`request_id`: API Management's `context.RequestId` is a random per-request GUID (not a user, tenant
+or resource identifier) and the dedup needs it as is.
+A call the gateway itself refused has `answered_by` and `tokens` null. A null `answered_by` also
+forces `tokens` null, but a call that was not refused may still have a null `answered_by`: a backend
+failure or timeout that reached `on-error` (for example status 502).
 """
 import re
 from datetime import datetime
@@ -29,8 +33,11 @@ EVENT_FIELDS: list[tuple[str, str]] = [
 CALLERS = ("owner", "deploy", "webapp", "other")
 BACKENDS = ("primary", "secondary")
 
-# Fields that may be null (only when the gateway refused the call).
+# Fields that may be null (see the module docstring for when).
 NULLABLE = ("answered_by", "tokens")
+
+# The one field allowed to hold a GUID.
+GUID_EXEMPT = "request_id"
 
 _DATETIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 _GUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
@@ -82,14 +89,13 @@ def validate_event(event: dict) -> list[str]:
         problems.append(f"answered_by must be one of {', '.join(BACKENDS)} or null, got {answered_by!r}")
 
     for name, value in event.items():
-        if isinstance(value, str) and _GUID.search(value):
+        if name != GUID_EXEMPT and isinstance(value, str) and _GUID.search(value):
             problems.append(f"{name} holds a GUID-shaped value")
 
-    refused = event.get("refused_by_gateway")
-    if isinstance(refused, bool):
+    if event.get("refused_by_gateway") is True:
         for name in NULLABLE:
-            if name in event and (event[name] is None) != refused:
-                problems.append(
-                    f"{name} must be null when refused_by_gateway is true, and set when it is false"
-                )
+            if event.get(name) is not None:
+                problems.append(f"{name} must be null when refused_by_gateway is true")
+    if "answered_by" in event and event["answered_by"] is None and event.get("tokens") is not None:
+        problems.append("tokens must be null when answered_by is null")
     return problems

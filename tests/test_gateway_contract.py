@@ -45,19 +45,32 @@ def test_refused_call_has_null_backend_and_tokens():
     refused = _event(status=429, refused_by_gateway=True, answered_by=None, tokens=None)
     assert validate_event(refused) == []
 
-    # refused but a backend or a token count is present
+    # a refused call with a backend or a token count fails
     assert validate_event(_event(status=429, refused_by_gateway=True, tokens=None)) != []
     assert validate_event(_event(status=429, refused_by_gateway=True, answered_by=None)) != []
-    # answered but the backend or the token count is null
-    assert validate_event(_event(answered_by=None)) != []
-    assert validate_event(_event(tokens=None)) != []
+
+
+def test_backend_failure_has_null_backend_and_tokens_without_refusal():
+    # a backend failure or timeout that reached on-error: not refused, no backend answered
+    failed = _event(status=502, answered_by=None, tokens=None)
+    assert validate_event(failed) == []
+
+
+def test_null_backend_with_tokens_rejected():
+    assert validate_event(_event(status=502, answered_by=None)) != []
 
 
 def test_guid_value_rejected():
     guid = "3f2b8c1e-9a4d-4e57-8b6a-1c2d3e4f5a6b"
-    assert validate_event(_event(request_id=guid)) != []
     assert validate_event(_event(session=f"p10-{guid.upper()}")) != []
     assert validate_event(_event(operation=f"op/{guid}")) != []
+    assert validate_event(_event(api=guid)) != []
+    assert validate_event(_event(session=guid)) != []
+
+
+def test_guid_request_id_accepted():
+    guid = "3f2b8c1e-9a4d-4e57-8b6a-1c2d3e4f5a6b"
+    assert validate_event(_event(request_id=guid)) == []
 
 
 def test_unknown_key_rejected():
