@@ -53,13 +53,14 @@ GATEWAY_TABLE = "gateway_calls"
 GATEWAY_SHORTCUT_PATH = "Tables/dbo"
 GATEWAY_SHORTCUT_NAME = "gateway_calls"
 # OneLake availability for one table, with the shortest write delay Learn allows (5 minutes to 3
-# hours). The command text is Learn's own example, minus its trailing `;`:
+# hours). Learn's OneLake-availability example (minus its trailing `;`) plus `Backfill=true` (default
+# false), so rows ingested before a first or re-run step still reach OneLake; no cost on an empty table:
 # https://learn.microsoft.com/en-us/fabric/real-time-intelligence/event-house-onelake-availability
 # https://learn.microsoft.com/en-us/kusto/management/alter-merge-mirroring-policy-command?view=microsoft-fabric
 # alter-merge merges these properties into the table's policy, so a second run changes nothing.
 MIRRORING_COMMAND = (
     f".alter-merge table {GATEWAY_TABLE} policy mirroring dataformat=parquet "
-    "with (IsEnabled=true, TargetLatencyInMinutes=5)"
+    "with (IsEnabled=true, TargetLatencyInMinutes=5, Backfill=true)"
 )
 # Management commands are a POST to /v1/rest/mgmt with a JSON body {db, csl}:
 # https://learn.microsoft.com/en-us/kusto/api/rest/request?view=microsoft-fabric
@@ -253,6 +254,7 @@ def publish():
     else:
         item_types = [t for t in ITEM_TYPES_IN_SCOPE if t not in REALTIME_ITEM_TYPES]
         os.environ[REALTIME_GATE] = EMPTY_GUID  # see EMPTY_GUID; only this process sees it
+        # Never raise fabric-cicd to debug (change_log_level): it logs substituted $ENV values there.
         print(f"publish: real-time items skipped (no {REALTIME_GATE})")
     # fabric-cicd validates parameter.yml, $ENV: tokens included, when the workspace is built.
     _enable_feature_flag(ENV_REPLACEMENT_FLAG)

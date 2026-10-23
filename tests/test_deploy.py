@@ -28,7 +28,7 @@ FABRIC_SCOPE = "https://api.fabric.microsoft.com/.default"
 KUSTO_SCOPE = "https://api.kusto.windows.net/.default"
 MIRRORING_COMMAND = (
     ".alter-merge table gateway_calls policy mirroring dataformat=parquet "
-    "with (IsEnabled=true, TargetLatencyInMinutes=5)"
+    "with (IsEnabled=true, TargetLatencyInMinutes=5, Backfill=true)"
 )
 REALTIME_TYPES = ["Eventhouse", "KQLDatabase", "KQLQueryset", "KQLDashboard", "Reflex", "Eventstream"]
 SKIP_REASON = "(no P10_EVENTHUB_CONNECTION_ID)"
@@ -317,7 +317,7 @@ def test_ensure_shortcut_subpath_must_start_with_slash(deploy, env, seams, monke
 
 
 def test_an_unexpected_error_in_publish_prints_only_its_type(deploy, env, realtime, monkeypatch, capsys):
-    # realtime: with the gate off, publish would also print its skip line before the failure
+    # gate on (realtime): nothing on stdout; the gate-off case is the next test
     url = f"https://x/workspaces/{WS}/items"
 
     def failing_publish(workspace):
@@ -330,6 +330,22 @@ def test_an_unexpected_error_in_publish_prints_only_its_type(deploy, env, realti
     assert err.strip() == "publish: failed (RuntimeError)"
     assert out == ""
     for value in (url, WS, "https://x", "Traceback", EVENTHUB_CONNECTION):
+        assert value not in out + err
+
+
+def test_an_unexpected_error_in_publish_with_the_gate_off(deploy, env, seams, monkeypatch, capsys):
+    url = f"https://x/workspaces/{WS}/items"
+
+    def failing_publish(workspace):
+        raise RuntimeError(f"publish to {url} failed")
+
+    monkeypatch.setattr(deploy, "_publish", failing_publish)
+
+    assert deploy.main(["publish"]) == 1
+    out, err = capsys.readouterr()
+    assert out == "publish: real-time items skipped (no P10_EVENTHUB_CONNECTION_ID)\n"
+    assert err == "publish: failed (RuntimeError)\n"
+    for value in (url, WS, "https://x", "Traceback", "00000000-0000-0000-0000-000000000000"):
         assert value not in out + err
 
 
