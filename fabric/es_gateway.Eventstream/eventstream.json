@@ -1,0 +1,54 @@
+{
+  "sources": [
+    {
+      "id": "2c6a6b2e-2ddc-446d-bb6e-4a9f21345519",
+      "name": "gateway-events",
+      "type": "AzureEventHub",
+      "properties": {
+        "dataConnectionId": "00000000-0000-0000-0000-000000000000",
+        "consumerGroupName": "fabric",
+        "inputSerialization": {
+          "type": "Json",
+          "properties": {
+            "encoding": "UTF8"
+          }
+        }
+      }
+    }
+  ],
+  "destinations": [
+    {
+      "id": "0b96cf3a-4ff8-4d3d-be26-213954bd42ff",
+      "name": "kql-gateway-table",
+      "type": "Eventhouse",
+      "properties": {
+        "dataIngestionMode": "DirectIngestion",
+        "workspaceId": "00000000-0000-0000-0000-000000000000",
+        "itemId": "70675b27-fc20-40ec-8234-e5a6bc7ad1cf",
+        "tableName": "gateway_calls",
+        "connectionName": "es-gateway-kql",
+        "mappingRuleName": "gateway_calls_json"
+      },
+      "inputNodes": [
+        {
+          "name": "es_gateway-stream"
+        }
+      ]
+    }
+  ],
+  "streams": [
+    {
+      "id": "de1eb68d-da80-4728-bd6a-f9d0dd97b4fd",
+      "name": "es_gateway-stream",
+      "type": "DefaultStream",
+      "properties": {},
+      "inputNodes": [
+        {
+          "name": "gateway-events"
+        }
+      ]
+    }
+  ],
+  "operators": [],
+  "compatibilityLevel": "1.1"
+}

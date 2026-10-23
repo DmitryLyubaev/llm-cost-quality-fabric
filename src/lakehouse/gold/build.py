@@ -40,13 +40,18 @@ GOLD_TABLES = [
     "fact_live_check",
 ]
 
+# Gold tables built by project 10's gateway load (lakehouse.gateway.build) after a session, not by
+# build_gold: they stay out of GOLD_TABLES, so project 9's re-run fingerprint never sees them.
+SESSION_TABLES = ["fact_gateway_call"]
+
 # One row per ... (spec 3.3). Plan 2 renders this into the README.
 GRAINS: dict[str, str] = {
     "fact_eval_attempt": "study x item x arm x pass x repeat",
     "fact_daily_cost": "cost-export line: resource x meter x day",
     "fact_live_check": "check x session",
+    "fact_gateway_call": "gateway call",
     "dim_model_deployment": "deployment version (Type 2)",
-    "dim_project": "project 1-9, plus releaselens-shared and untagged",
+    "dim_project": "project 1-10, plus releaselens-shared and untagged",
     "dim_study": "study run",
     "dim_arm": "arm within a study",
     "dim_date": "day",
@@ -65,6 +70,7 @@ PROJECTS = [
     ("p7", "Short-lived build agents on Container Apps jobs"),
     ("p8", "Azure Pipelines delivery for project 2"),
     ("p9", "Fabric lakehouse and batch pipelines"),
+    ("p10", "Fabric Real-Time Intelligence"),
     ("releaselens-shared", "ReleaseLens shared resources"),
     ("untagged", "Untagged spend"),
 ]

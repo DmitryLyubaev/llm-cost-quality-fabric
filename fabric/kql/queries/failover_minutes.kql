@@ -1,0 +1,5 @@
+// Minutes in which at least one call was answered by the secondary backend.
+GatewayCalls()
+| where answered_by == "secondary"
+| summarize secondary_calls = count() by minute = bin(event_time, 1m)
+| order by minute asc

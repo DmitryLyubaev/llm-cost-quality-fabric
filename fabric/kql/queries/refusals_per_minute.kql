@@ -1,0 +1,5 @@
+// Calls the gateway itself refused (throttling), by status, per minute. Refused calls have no answered_by.
+GatewayCalls()
+| where refused_by_gateway == true
+| summarize refusals = count() by minute = bin(event_time, 1m), status
+| order by minute asc

@@ -1,0 +1,4 @@
+// Requests by session and caller. GatewayCalls() is one row per request_id, so count() is exact.
+GatewayCalls()
+| summarize calls = count() by session, caller
+| order by session asc, caller asc

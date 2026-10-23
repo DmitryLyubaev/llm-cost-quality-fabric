@@ -11,7 +11,7 @@ from pyspark.sql import functions as F
 
 from lake_helpers import cost_export_maker
 from lakehouse.attribution import load_rg_rules, load_session_windows
-from lakehouse.gold.build import GOLD_TABLES, GRAINS, build_gold
+from lakehouse.gold.build import GOLD_TABLES, GRAINS, PROJECTS, SESSION_TABLES, build_gold
 from lakehouse.gold.fingerprint import gold_fingerprint
 from lakehouse.seeding import SEEDS_DIR
 from lakehouse.silver.costs import normalise_costs, read_cost_export, replace_month
@@ -246,11 +246,14 @@ def test_dimensions(spark, silver):
     counts = build_gold(spark, paths, SEEDS)
 
     projects = {r["project"]: r["name"] for r in _gold(spark, paths, "dim_project").collect()}
-    assert sorted(projects) == ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "releaselens-shared", "untagged"]
+    assert sorted(projects) == [
+        "p1", "p10", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "releaselens-shared", "untagged",
+    ]
     assert projects["p1"] == "Azure OpenAI, keyless"
     assert projects["p8"] == "Azure Pipelines delivery for project 2"
     assert projects["p9"] == "Fabric lakehouse and batch pipelines"
-    assert len(projects) == 11
+    assert projects["p10"] == "Fabric Real-Time Intelligence"
+    assert len(projects) == 12
 
     studies = {
         (r["study"], r["run_id"]): r["started_at"]
@@ -351,7 +354,10 @@ def test_a_null_or_empty_verdict_in_the_live_checks_seed_is_refused(spark, silve
 
 
 def test_every_table_has_a_grain():
-    assert set(GRAINS) == set(GOLD_TABLES) | {REJECT}
+    assert set(GRAINS) == set(GOLD_TABLES) | set(SESSION_TABLES) | {REJECT}
+    assert not set(SESSION_TABLES) & set(GOLD_TABLES)  # outside project 9's re-run fingerprint
+    assert GRAINS["fact_gateway_call"] == "gateway call"
+    assert GRAINS["dim_project"] == "project 1-10, plus releaselens-shared and untagged"
     assert GRAINS["fact_eval_attempt"].startswith("study x item x arm x pass")
     assert all(text for text in GRAINS.values())
 
@@ -381,6 +387,11 @@ def test_fingerprint_detects_change(spark, silver):
     after = gold_fingerprint(spark, paths)
 
     assert {t for t in before if before[t] != after[t]} == {"dim_project"}
+
+
+def test_p10_sits_before_the_pseudo_projects():
+    names = [p for p, _ in PROJECTS]
+    assert names[-3:] == ["p10", "releaselens-shared", "untagged"]
 
 
 def test_live_checks_seed_valid():

@@ -178,7 +178,7 @@ deploy time (`fabric-cicd` `$ENV:` replacements from GitHub environment secrets,
 - New quality check: every gold `fact_gateway_call` row's `request_id` is unique, and the session's
   call count in gold equals the count in the Eventhouse.
 
-### 4.5 The measured session (runbook in plan 3 of project 10)
+### 4.5 The measured session (runbook in plan 2 of project 10)
 
 1. Pre-checks: Fabric capacity on; Eventstream running (it stops when a capacity pauses); a replay
    test passes end to end.

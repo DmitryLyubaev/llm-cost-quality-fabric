@@ -1,6 +1,10 @@
 # fabric-cicd 1.4.0 parameter file (https://microsoft.github.io/fabric-cicd/latest/how_to/parameterization/).
 # Only PROD is deployed by fabric-cicd; the dev workspace syncs from git, so it has no key here.
 # Regexes follow fabric-cicd's sample/workspace/parameter.yml; capture group 1 is what is replaced.
+# $ENV: values come from the deploy's OS environment (plain name, no prefix) and need fabric-cicd's
+# feature flag enable_environment_variable_replacement. fabric-cicd 1.4.0 refuses the parameter file when
+# a PROD $ENV: token's variable is unset, so a missing secret fails the deploy instead of passing silently;
+# .deploy/deploy.py stands in the empty GUID while the real-time items are out of scope (see VERIFY.md).
 
 find_replace:
     # The notebooks' default lakehouse: lh_portfolio's logicalId in git -> its deployed id.
@@ -32,3 +36,34 @@ key_value_replace:
       item_type: "DataPipeline"
       item_name: "pl_daily_load"
       file_path: "**/.schedules"
+    # The queryset and dashboard keep an empty cluster URI in git (the same-workspace form Fabric writes);
+    # PROD points them at the deployed Eventhouse's query service URI.
+    - find_key: $.queryset.dataSources[*].clusterUri
+      replace_value:
+        PROD: "$items.Eventhouse.eh_gateway.$queryserviceuri"
+      item_type: "KQLQueryset"
+      item_name: "kq_gateway"
+      file_path: "**/RealTimeQueryset.json"
+    - find_key: $.dataSources[*].clusterUri
+      replace_value:
+        PROD: "$items.Eventhouse.eh_gateway.$queryserviceuri"
+      item_type: "KQLDashboard"
+      item_name: "rtd_gateway"
+      file_path: "**/RealTimeDashboard.json"
+    # Activator rules are off in git (dev never alerts by itself); PROD runs them, since a fired alert is
+    # the session's evidence. ReflexEntities.json is a JSON array of entities; this selects every rule.
+    - find_key: $[?(@.payload.definition.type=="Rule")].payload.definition.settings.shouldRun
+      replace_value:
+        PROD: true
+      item_type: "Reflex"
+      item_name: "act_gateway"
+      file_path: "**/ReflexEntities.json"
+    # The Event Hubs source names a Fabric connection, not the namespace or hub: the namespace, the hub
+    # and the workspace-identity credential live in that connection. Git holds the empty GUID; PROD gets
+    # the connection's id from the environment (a GitHub environment secret).
+    - find_key: $.sources[?(@.type=="AzureEventHub")].properties.dataConnectionId
+      replace_value:
+        PROD: "$ENV:P10_EVENTHUB_CONNECTION_ID"
+      item_type: "Eventstream"
+      item_name: "es_gateway"
+      file_path: "**/eventstream.json"

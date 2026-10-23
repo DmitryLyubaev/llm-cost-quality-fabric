@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "KQLDashboard",
+    "displayName": "rtd_gateway"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "f85ffd38-c1ed-4a04-bb3f-8c800e18a9f8"
+  }
+}

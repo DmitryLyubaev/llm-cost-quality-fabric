@@ -1,0 +1,28 @@
+// The gateway call table, its JSON ingestion mapping and the shared function every query starts from.
+// Run each command on its own (they are separated by blank lines). The columns are the gateway event
+// contract's fields (src/lakehouse/gateway/contract.py, EVENT_FIELDS), in the same order. `answered_by`
+// and `tokens` are nullable, as in the contract. Ingestion time comes from ingestion_time(), which
+// needs the table's IngestionTime policy (on by default for a new table), not from a column.
+
+.create-merge table gateway_calls (event_time:datetime, request_id:string, session:string, api:string, operation:string, caller:string, answered_by:string, status:int, refused_by_gateway:bool, tokens:int, latency_ms:int)
+
+// Events arrive from Event Hubs as one JSON object each; event_time is an ISO 8601 string with Z.
+
+.create-or-alter table gateway_calls ingestion json mapping "gateway_calls_json" '[{"column":"event_time","datatype":"datetime","Properties":{"Path":"$.event_time"}},{"column":"request_id","datatype":"string","Properties":{"Path":"$.request_id"}},{"column":"session","datatype":"string","Properties":{"Path":"$.session"}},{"column":"api","datatype":"string","Properties":{"Path":"$.api"}},{"column":"operation","datatype":"string","Properties":{"Path":"$.operation"}},{"column":"caller","datatype":"string","Properties":{"Path":"$.caller"}},{"column":"answered_by","datatype":"string","Properties":{"Path":"$.answered_by"}},{"column":"status","datatype":"int","Properties":{"Path":"$.status"}},{"column":"refused_by_gateway","datatype":"bool","Properties":{"Path":"$.refused_by_gateway"}},{"column":"tokens","datatype":"int","Properties":{"Path":"$.tokens"}},{"column":"latency_ms","datatype":"int","Properties":{"Path":"$.latency_ms"}}]'
+
+// GatewayCalls(): the one source for every published figure.
+//  - drops replay events (session "replay"), which never feed a published figure;
+//  - keeps one row per request_id, the latest ingested (Event Hubs delivers at least once);
+//  - returns the contract's columns in order, then `ingested` (ingestion time of the kept row) and
+//    `first_ingested` (the earliest ingestion time of any copy of the request). The delay figure uses
+//    first_ingested: a duplicate delivered later must not stretch the delay of a call that was already
+//    available. ingestion_time() is read into `ingested` first because it can only be evaluated
+//    against the table and arg_max needs an expression over the rows.
+
+.create-or-alter function with (docstring = "Gateway calls: no replay events, one row per request_id, plus ingested and first_ingested", folder = "gateway") GatewayCalls() {
+    gateway_calls
+    | where session != "replay"
+    | extend ingested = ingestion_time()
+    | summarize arg_max(ingested, *), first_ingested = min(ingested) by request_id
+    | project event_time, request_id, session, api, operation, caller, answered_by, status, refused_by_gateway, tokens, latency_ms, ingested, first_ingested
+}

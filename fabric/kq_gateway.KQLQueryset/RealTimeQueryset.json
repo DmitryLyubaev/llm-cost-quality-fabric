@@ -1,0 +1,58 @@
+{
+  "queryset": {
+    "version": "1.0.0",
+    "dataSources": [
+      {
+        "id": "de3a8075-7dfe-4c77-b711-a042e0d3ebbc",
+        "clusterUri": "",
+        "type": "Fabric",
+        "databaseItemId": "70675b27-fc20-40ec-8234-e5a6bc7ad1cf",
+        "databaseItemName": "kql_gateway"
+      }
+    ],
+    "tabs": [
+      {
+        "id": "f6c423c4-dc5b-4861-b752-c108a7f0a21a",
+        "content": "// Calls by the backend that answered, per minute. Calls with no backend (refused or failed) are left out.\nGatewayCalls()\n| where isnotempty(answered_by)\n| summarize calls = count() by minute = bin(event_time, 1m), answered_by\n| order by minute asc\n",
+        "title": "answered_by_per_minute",
+        "dataSourceId": "de3a8075-7dfe-4c77-b711-a042e0d3ebbc"
+      },
+      {
+        "id": "84043249-9415-45d9-86fd-a948405ad959",
+        "content": "// End-to-end delay to first availability: the earliest ingestion time of the request minus event time, in seconds.\nGatewayCalls()\n| extend delay_s = (first_ingested - event_time) / 1s\n| summarize p50 = percentile(delay_s, 50), p95 = percentile(delay_s, 95), max_s = max(delay_s), n = count()\n",
+        "title": "delay_p50_p95_max",
+        "dataSourceId": "de3a8075-7dfe-4c77-b711-a042e0d3ebbc"
+      },
+      {
+        "id": "f76b0aee-1005-4546-9614-7284342b3de3",
+        "content": "// Minutes in which at least one call was answered by the secondary backend.\nGatewayCalls()\n| where answered_by == \"secondary\"\n| summarize secondary_calls = count() by minute = bin(event_time, 1m)\n| order by minute asc\n",
+        "title": "failover_minutes",
+        "dataSourceId": "de3a8075-7dfe-4c77-b711-a042e0d3ebbc"
+      },
+      {
+        "id": "6e150ab3-8c97-4a58-abb5-d7e11dc7b9ee",
+        "content": "// Calls the gateway itself refused (throttling), by status, per minute. Refused calls have no answered_by.\nGatewayCalls()\n| where refused_by_gateway == true\n| summarize refusals = count() by minute = bin(event_time, 1m), status\n| order by minute asc\n",
+        "title": "refusals_per_minute",
+        "dataSourceId": "de3a8075-7dfe-4c77-b711-a042e0d3ebbc"
+      },
+      {
+        "id": "70540f4d-6c2e-49e3-89c4-0d0a708f8880",
+        "content": "// Requests by session and caller. GatewayCalls() is one row per request_id, so count() is exact.\nGatewayCalls()\n| summarize calls = count() by session, caller\n| order by session asc, caller asc\n",
+        "title": "session_counts",
+        "dataSourceId": "de3a8075-7dfe-4c77-b711-a042e0d3ebbc"
+      },
+      {
+        "id": "30fc036b-7b07-4cb3-b619-4a1f35ba9c4b",
+        "content": "let threshold = 5000;\n// Caller-minutes whose summed tokens exceed the threshold (the Activator rule's condition).\nGatewayCalls()\n| where isnotnull(tokens)\n| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller\n| where tokens > threshold\n| order by minute asc, caller asc\n",
+        "title": "token_spike_minutes",
+        "dataSourceId": "de3a8075-7dfe-4c77-b711-a042e0d3ebbc"
+      },
+      {
+        "id": "0af2f03b-a7ff-4e87-b5bf-27e35e2189ad",
+        "content": "// Tokens consumed per caller per minute. Calls with no token count are left out.\nGatewayCalls()\n| where isnotnull(tokens)\n| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller\n| order by minute asc, caller asc\n",
+        "title": "tokens_per_minute_per_caller",
+        "dataSourceId": "de3a8075-7dfe-4c77-b711-a042e0d3ebbc"
+      }
+    ]
+  }
+}

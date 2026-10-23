@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Reflex",
+    "displayName": "act_gateway"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "911382bc-f185-4f7b-af52-ac05aba41c31"
+  }
+}

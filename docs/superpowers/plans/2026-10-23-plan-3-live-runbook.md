@@ -172,6 +172,8 @@ Nothing in this runbook pushes until this is answered.
   (decide now; it can't be migrated), the notebooks bind to `lh_portfolio`, the pipeline resolves
   its notebooks, and shortcut tracking is off. Record every difference and fix it offline on a
   branch (Fabric's own commit shape wins where it differs).
+- The sync also creates project 10's six real-time items (dev has no R13 gate). If it fails on
+  `es_gateway` or `act_gateway`, follow `fabric/VERIFY.md`'s project 10 dev-sync row.
 - Push any change to `dev` → the dev deploy job uploads the wheel and creates the shortcut.
 
 ### Step 11: The private extracts 🔒 (Claude, after a yes)

@@ -84,8 +84,10 @@ jobs:
         run: python .deploy/deploy.py ensure-shortcut
 
   # prod: publish the Fabric items first (on a first deploy that creates lh_portfolio), then the
-  # wheel, then the shortcut. The `prod` environment's required reviewer (configured in plan 3)
-  # gates this job.
+  # wheel, then the cost shortcut, then OneLake availability for the gateway table, then the gateway
+  # shortcut (it targets the table that availability exposes). The real-time items and both
+  # gateway steps run only when P10_EVENTHUB_CONNECTION_ID is set; without it they are skipped.
+  # The `prod` environment's required reviewer (configured in plan 3) gates this job.
   prod:
     if: github.ref == 'refs/heads/main'
     needs: build
@@ -119,6 +121,7 @@ jobs:
         env:
           FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
           FABRIC_ENVIRONMENT: PROD
+          P10_EVENTHUB_CONNECTION_ID: ${{ secrets.P10_EVENTHUB_CONNECTION_ID }}
         run: python .deploy/deploy.py publish
       # The lakehouse lh_portfolio is looked up by name in the workspace.
       - name: Upload the wheel
@@ -135,3 +138,13 @@ jobs:
           COST_EXPORT_LOCATION: ${{ secrets.COST_EXPORT_LOCATION }}
           COST_EXPORT_SUBPATH: ${{ secrets.COST_EXPORT_SUBPATH }}
         run: python .deploy/deploy.py ensure-shortcut
+      - name: Make the gateway table available in OneLake
+        env:
+          FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
+          P10_EVENTHUB_CONNECTION_ID: ${{ secrets.P10_EVENTHUB_CONNECTION_ID }}
+        run: python .deploy/deploy.py onelake-availability
+      - name: Ensure the gateway shortcut
+        env:
+          FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
+          P10_EVENTHUB_CONNECTION_ID: ${{ secrets.P10_EVENTHUB_CONNECTION_ID }}
+        run: python .deploy/deploy.py ensure-gateway-shortcut

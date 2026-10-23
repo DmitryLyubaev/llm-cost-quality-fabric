@@ -2,7 +2,9 @@
 
 Fabric rules: a Fabric `notebook-content.py` must hold no cell-output marker, and a lakehouse
 `shortcuts.metadata.json` must be an empty JSON array (a shortcut's target serialises the storage
-account URL; the deploy creates the shortcut instead, so it never lands in git).
+account URL; the deploy creates the shortcut instead, so it never lands in git). No file may hold a
+named Event Hubs namespace host (`<name>.servicebus.windows.net`) or Eventhouse query host
+(`<name>.kusto.fabric.microsoft.com`): the deploy injects both.
 
 Forbidden values (for example a tenant ID or storage account name) come from the
 HYGIENE_FORBIDDEN environment variable, comma-separated, so they never live in the repo.
@@ -10,6 +12,7 @@ GUIDs are not checked for: Fabric workspace and item IDs may be committed.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -40,6 +43,19 @@ def _fabric_notebook_has_outputs(text: str) -> bool:
     return any(line.startswith(FABRIC_OUTPUT_MARKERS) for line in text.splitlines())
 
 
+# A named Event Hubs namespace or Eventhouse (Kusto) host: identifiers that the deploy injects and git
+# never holds. A bare suffix, or one after a template placeholder such as `${var.x}.` or `<namespace>.`,
+# is not a host and passes.
+FORBIDDEN_HOSTS = {
+    "an Event Hubs namespace host": re.compile(
+        r"(?<![\w.-])[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.servicebus\.windows\.net", re.IGNORECASE
+    ),
+    "a Kusto query host": re.compile(
+        r"(?<![\w.-])[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.kusto\.fabric\.microsoft\.com", re.IGNORECASE
+    ),
+}
+
+
 def _shortcuts_problem(text: str) -> str | None:
     try:
         shortcuts = json.loads(text)
@@ -67,6 +83,9 @@ def check_hygiene(paths: list[Path], forbidden: list[str]) -> list[str]:
             problem = _shortcuts_problem(text)
             if problem:
                 problems.append(f"{path}: {problem}")
+        for what, pattern in FORBIDDEN_HOSTS.items():
+            if pattern.search(text):
+                problems.append(f"{path}: contains {what}")
         lowered = text.lower()
         for index, needle in enumerate(needles, start=1):
             if needle in lowered:
