@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gateway event",
+  "description": "One JSON object per AI gateway call. Mirrors EVENT_FIELDS in lakehouse.gateway.contract; answered_by and tokens are null exactly when refused_by_gateway is true.",
+  "type": "object",
+  "properties": {
+    "event_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the gateway handled the call (UTC), ISO 8601 with an offset."
+    },
+    "request_id": {
+      "type": "string",
+      "description": "Opaque per-call identifier; never a GUID."
+    },
+    "session": {
+      "type": "string",
+      "description": "Named per live session, or 'replay' for generated events that never feed a published figure."
+    },
+    "api": {
+      "type": "string",
+      "description": "The gateway API name."
+    },
+    "operation": {
+      "type": "string",
+      "description": "The gateway operation ID."
+    },
+    "caller": {
+      "type": "string",
+      "enum": [
+        "owner",
+        "deploy",
+        "webapp",
+        "other"
+      ],
+      "description": "A label for who called; raw object IDs never leave the gateway."
+    },
+    "answered_by": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "primary",
+        "secondary",
+        null
+      ],
+      "description": "The backend that answered; null when the gateway refused the call."
+    },
+    "status": {
+      "type": "integer",
+      "description": "Final HTTP status code."
+    },
+    "refused_by_gateway": {
+      "type": "boolean",
+      "description": "True for the gateway's own 401/403/429."
+    },
+    "tokens": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Tokens consumed; null when the gateway refused the call."
+    },
+    "latency_ms": {
+      "type": "integer",
+      "description": "Elapsed time in the gateway, milliseconds."
+    }
+  },
+  "required": [
+    "event_time",
+    "request_id",
+    "session",
+    "api",
+    "operation",
+    "caller",
+    "answered_by",
+    "status",
+    "refused_by_gateway",
+    "tokens",
+    "latency_ms"
+  ],
+  "additionalProperties": false
+}
