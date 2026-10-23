@@ -1,0 +1,326 @@
+{
+  "schema_version": 75,
+  "title": "rtd_gateway",
+  "autoRefresh": {
+    "enabled": false
+  },
+  "tiles": [
+    {
+      "id": "63e831dc-f206-4e11-9787-58412d9dc12e",
+      "title": "Gateway refusals by status per minute",
+      "visualType": "column",
+      "pageId": "a02adaec-23dc-4cfd-8112-61e25c0407f9",
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 9,
+        "height": 7
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "952eb301-6293-4864-9806-bac6109d23d6"
+      },
+      "visualOptions": {
+        "xColumn": "minute",
+        "yColumns": [
+          "refusals"
+        ],
+        "seriesColumns": [
+          "status"
+        ],
+        "hideLegend": false,
+        "legendLocation": "bottom",
+        "xColumnTitle": "",
+        "yColumnTitle": "",
+        "selectedDataOnLoad": {
+          "all": true,
+          "limit": 10
+        }
+      }
+    },
+    {
+      "id": "51f22cad-5d13-43b0-8df3-464d9be8a583",
+      "title": "Calls by backend per minute",
+      "visualType": "column",
+      "pageId": "a02adaec-23dc-4cfd-8112-61e25c0407f9",
+      "layout": {
+        "x": 9,
+        "y": 0,
+        "width": 9,
+        "height": 7
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "b3355483-a8ea-4d4f-a15f-4e9f1d130cfe"
+      },
+      "visualOptions": {
+        "xColumn": "minute",
+        "yColumns": [
+          "calls"
+        ],
+        "seriesColumns": [
+          "answered_by"
+        ],
+        "hideLegend": false,
+        "legendLocation": "bottom",
+        "xColumnTitle": "",
+        "yColumnTitle": "",
+        "selectedDataOnLoad": {
+          "all": true,
+          "limit": 10
+        }
+      }
+    },
+    {
+      "id": "b47dcdd2-72e1-4c5d-bae3-05949ed9bcdc",
+      "title": "Tokens per caller per minute",
+      "visualType": "line",
+      "pageId": "a02adaec-23dc-4cfd-8112-61e25c0407f9",
+      "layout": {
+        "x": 0,
+        "y": 7,
+        "width": 9,
+        "height": 7
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "92a22189-b910-40db-a36c-47c06b2c73f1"
+      },
+      "visualOptions": {
+        "xColumn": "minute",
+        "yColumns": [
+          "tokens"
+        ],
+        "seriesColumns": [
+          "caller"
+        ],
+        "hideLegend": false,
+        "legendLocation": "bottom",
+        "xColumnTitle": "",
+        "yColumnTitle": "",
+        "selectedDataOnLoad": {
+          "all": true,
+          "limit": 10
+        }
+      }
+    },
+    {
+      "id": "12a25db3-1907-4016-a943-a91cc0507b84",
+      "title": "End-to-end delay, p95 (seconds)",
+      "visualType": "card",
+      "pageId": "a02adaec-23dc-4cfd-8112-61e25c0407f9",
+      "layout": {
+        "x": 9,
+        "y": 7,
+        "width": 9,
+        "height": 7
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "9de24d62-5bc6-4e10-94be-835177e68c5e"
+      },
+      "visualOptions": {
+        "multiStat__textSize": "auto",
+        "multiStat__valueColumn": "p95",
+        "selectedDataOnLoad": {
+          "all": true,
+          "limit": 10
+        }
+      }
+    },
+    {
+      "id": "cd0df801-a700-4c71-9928-58747029e352",
+      "title": "Requests by session and caller",
+      "visualType": "table",
+      "pageId": "a02adaec-23dc-4cfd-8112-61e25c0407f9",
+      "layout": {
+        "x": 0,
+        "y": 14,
+        "width": 9,
+        "height": 7
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "059e93dc-b153-4d80-9c09-e0010605989d"
+      },
+      "visualOptions": {
+        "selectedDataOnLoad": {
+          "all": true,
+          "limit": 10
+        }
+      }
+    },
+    {
+      "id": "18582cbf-5b4c-437c-a68f-1a49ebd75584",
+      "title": "Alert: minutes answered by the secondary backend",
+      "visualType": "column",
+      "pageId": "a02adaec-23dc-4cfd-8112-61e25c0407f9",
+      "layout": {
+        "x": 9,
+        "y": 14,
+        "width": 9,
+        "height": 7
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "e265b4b0-5a35-449e-84aa-986872f5b3ea"
+      },
+      "visualOptions": {
+        "xColumn": "minute",
+        "yColumns": [
+          "secondary_calls"
+        ],
+        "seriesColumns": null,
+        "hideLegend": false,
+        "legendLocation": "bottom",
+        "xColumnTitle": "",
+        "yColumnTitle": "",
+        "selectedDataOnLoad": {
+          "all": true,
+          "limit": 10
+        }
+      }
+    },
+    {
+      "id": "85311876-8642-427b-8ea0-0c66e95a5152",
+      "title": "Alert: caller-minutes above the token threshold",
+      "visualType": "column",
+      "pageId": "a02adaec-23dc-4cfd-8112-61e25c0407f9",
+      "layout": {
+        "x": 0,
+        "y": 21,
+        "width": 9,
+        "height": 7
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "9f30d17f-2cac-44a8-8ea6-e703c315a10f"
+      },
+      "visualOptions": {
+        "xColumn": "minute",
+        "yColumns": [
+          "tokens"
+        ],
+        "seriesColumns": [
+          "caller"
+        ],
+        "hideLegend": false,
+        "legendLocation": "bottom",
+        "xColumnTitle": "",
+        "yColumnTitle": "",
+        "selectedDataOnLoad": {
+          "all": true,
+          "limit": 10
+        }
+      }
+    }
+  ],
+  "baseQueries": [],
+  "parameters": [
+    {
+      "kind": "duration",
+      "id": "0d0e66bd-2a01-4116-a9c4-3f3ea5f94219",
+      "displayName": "Time range",
+      "description": "",
+      "beginVariableName": "_startTime",
+      "endVariableName": "_endTime",
+      "defaultValue": {
+        "kind": "dynamic",
+        "count": 1,
+        "unit": "hours"
+      },
+      "showOnPages": {
+        "kind": "all"
+      }
+    }
+  ],
+  "dataSources": [
+    {
+      "kind": "kusto-trident",
+      "clusterUri": "",
+      "name": "kql_gateway",
+      "databaseArtifactId": "70675b27-fc20-40ec-8234-e5a6bc7ad1cf",
+      "database": "70675b27-fc20-40ec-8234-e5a6bc7ad1cf",
+      "workspace": "00000000-0000-0000-0000-000000000000",
+      "id": "6c37d6bb-6d6f-48e1-a132-88cb509b456f"
+    }
+  ],
+  "pages": [
+    {
+      "name": "Gateway session",
+      "id": "a02adaec-23dc-4cfd-8112-61e25c0407f9"
+    }
+  ],
+  "queries": [
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "6c37d6bb-6d6f-48e1-a132-88cb509b456f"
+      },
+      "text": "// Calls the gateway itself refused (throttling), by status, per minute. Refused calls have no answered_by.\nGatewayCalls()\n| where refused_by_gateway == true\n| summarize refusals = count() by minute = bin(event_time, 1m), status\n| order by minute asc\n",
+      "id": "952eb301-6293-4864-9806-bac6109d23d6",
+      "usedVariables": []
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "6c37d6bb-6d6f-48e1-a132-88cb509b456f"
+      },
+      "text": "// Calls by the backend that answered, per minute. Calls with no backend (refused or failed) are left out.\nGatewayCalls()\n| where isnotempty(answered_by)\n| summarize calls = count() by minute = bin(event_time, 1m), answered_by\n| order by minute asc\n",
+      "id": "b3355483-a8ea-4d4f-a15f-4e9f1d130cfe",
+      "usedVariables": []
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "6c37d6bb-6d6f-48e1-a132-88cb509b456f"
+      },
+      "text": "// Tokens consumed per caller per minute. Calls with no token count are left out.\nGatewayCalls()\n| where isnotnull(tokens)\n| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller\n| order by minute asc, caller asc\n",
+      "id": "92a22189-b910-40db-a36c-47c06b2c73f1",
+      "usedVariables": []
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "6c37d6bb-6d6f-48e1-a132-88cb509b456f"
+      },
+      "text": "// End-to-end delay to first availability: the earliest ingestion time of the request minus event time, in seconds.\nGatewayCalls()\n| extend delay_s = (first_ingested - event_time) / 1s\n| summarize p50 = percentile(delay_s, 50), p95 = percentile(delay_s, 95), max_s = max(delay_s), n = count()\n",
+      "id": "9de24d62-5bc6-4e10-94be-835177e68c5e",
+      "usedVariables": []
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "6c37d6bb-6d6f-48e1-a132-88cb509b456f"
+      },
+      "text": "// Requests by session and caller. GatewayCalls() is one row per request_id, so count() is exact.\nGatewayCalls()\n| summarize calls = count() by session, caller\n| order by session asc, caller asc\n",
+      "id": "059e93dc-b153-4d80-9c09-e0010605989d",
+      "usedVariables": []
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "6c37d6bb-6d6f-48e1-a132-88cb509b456f"
+      },
+      "text": "// Minutes in which at least one call was answered by the secondary backend.\nGatewayCalls()\n| where answered_by == \"secondary\"\n| summarize secondary_calls = count() by minute = bin(event_time, 1m)\n| order by minute asc\n| where minute >= _startTime and minute < bin(_endTime, 1m)\n",
+      "id": "e265b4b0-5a35-449e-84aa-986872f5b3ea",
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "6c37d6bb-6d6f-48e1-a132-88cb509b456f"
+      },
+      "text": "let threshold = 5000;\n// Caller-minutes whose summed tokens exceed the threshold (the Activator rule's condition).\nGatewayCalls()\n| where isnotnull(tokens)\n| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller\n| where tokens > threshold\n| order by minute asc, caller asc\n| where minute >= _startTime and minute < bin(_endTime, 1m)\n",
+      "id": "9f30d17f-2cac-44a8-8ea6-e703c315a10f",
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    }
+  ],
+  "embeddedApps": []
+}

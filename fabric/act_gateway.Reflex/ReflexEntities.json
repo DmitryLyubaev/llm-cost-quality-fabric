@@ -1,0 +1,178 @@
+[
+  {
+    "uniqueIdentifier": "3ef637cb-b4e2-417a-b1d1-0b0b348f3da0",
+    "payload": {
+      "name": "Gateway session alerts",
+      "type": "kqlQueries"
+    },
+    "type": "container-v1"
+  },
+  {
+    "uniqueIdentifier": "000828dc-c080-4189-9618-ea430ba30247",
+    "payload": {
+      "name": "failover_minutes tile",
+      "runSettings": {
+        "executionIntervalInSeconds": 300
+      },
+      "query": {
+        "queryString": "let _startTime = ago(1h);\nlet _endTime = now();\n// Minutes in which at least one call was answered by the secondary backend.\nGatewayCalls()\n| where answered_by == \"secondary\"\n| summarize secondary_calls = count() by minute = bin(event_time, 1m)\n| order by minute asc\n| where minute >= _startTime and minute < bin(_endTime, 1m)\n"
+      },
+      "eventhouseItem": {
+        "targetUniqueIdentifier": "84a9c8b1-b26d-47ce-9b29-4cf9e1244570"
+      },
+      "parentContainer": {
+        "targetUniqueIdentifier": "3ef637cb-b4e2-417a-b1d1-0b0b348f3da0"
+      }
+    },
+    "type": "kqlSource-v1"
+  },
+  {
+    "uniqueIdentifier": "93c96847-6f15-4ea0-babd-537663d483dd",
+    "payload": {
+      "name": "failover_minutes events",
+      "parentContainer": {
+        "targetUniqueIdentifier": "3ef637cb-b4e2-417a-b1d1-0b0b348f3da0"
+      },
+      "definition": {
+        "type": "Event",
+        "instance": "{\"templateId\":\"SourceEvent\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"SourceEventStep\",\"id\":\"4f141650-94fd-4478-ace9-1f37a8c4e7ca\",\"rows\":[{\"name\":\"SourceSelector\",\"kind\":\"SourceReference\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"000828dc-c080-4189-9618-ea430ba30247\"}]}]}]}"
+      }
+    },
+    "type": "timeSeriesView-v1"
+  },
+  {
+    "uniqueIdentifier": "83672708-0b33-4c11-a5c2-6dd3616662b3",
+    "payload": {
+      "name": "Failover minute",
+      "parentContainer": {
+        "targetUniqueIdentifier": "3ef637cb-b4e2-417a-b1d1-0b0b348f3da0"
+      },
+      "definition": {
+        "type": "Object"
+      }
+    },
+    "type": "timeSeriesView-v1"
+  },
+  {
+    "uniqueIdentifier": "3e9d33c0-1e24-41c2-8006-52a4b1c73e5c",
+    "payload": {
+      "name": "secondary_calls",
+      "parentObject": {
+        "targetUniqueIdentifier": "83672708-0b33-4c11-a5c2-6dd3616662b3"
+      },
+      "parentContainer": {
+        "targetUniqueIdentifier": "3ef637cb-b4e2-417a-b1d1-0b0b348f3da0"
+      },
+      "definition": {
+        "type": "Attribute",
+        "instance": "{\"templateId\":\"BasicEventAttribute\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"EventSelectStep\",\"id\":\"17ca882c-07e7-4c5f-b554-34df282ad5a8\",\"rows\":[{\"name\":\"EventSelector\",\"kind\":\"Event\",\"arguments\":[{\"kind\":\"EventReference\",\"type\":\"complex\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"93c96847-6f15-4ea0-babd-537663d483dd\"}],\"name\":\"event\"}]},{\"name\":\"EventFieldSelector\",\"kind\":\"EventField\",\"arguments\":[{\"name\":\"fieldName\",\"type\":\"string\",\"value\":\"secondary_calls\"}]}]},{\"name\":\"EventComputeStep\",\"id\":\"cc4e3e39-b63a-4e04-8452-0eb2abc8486e\",\"rows\":[{\"name\":\"TypeAssertion\",\"kind\":\"TypeAssertion\",\"arguments\":[{\"name\":\"op\",\"type\":\"string\",\"value\":\"Number\"},{\"name\":\"format\",\"type\":\"string\",\"value\":\"\"}]}]}]}"
+      }
+    },
+    "type": "timeSeriesView-v1"
+  },
+  {
+    "uniqueIdentifier": "b0c5269a-2897-4047-a75f-cac9e831e31f",
+    "payload": {
+      "name": "Call answered by the secondary backend",
+      "parentObject": {
+        "targetUniqueIdentifier": "83672708-0b33-4c11-a5c2-6dd3616662b3"
+      },
+      "parentContainer": {
+        "targetUniqueIdentifier": "3ef637cb-b4e2-417a-b1d1-0b0b348f3da0"
+      },
+      "definition": {
+        "type": "Rule",
+        "instance": "{\"templateId\":\"AttributeTrigger\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"ScalarSelectStep\",\"id\":\"18084901-bc74-4a24-8df5-54cea6968ad5\",\"rows\":[{\"name\":\"AttributeSelector\",\"kind\":\"Attribute\",\"arguments\":[{\"kind\":\"AttributeReference\",\"type\":\"complex\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"3e9d33c0-1e24-41c2-8006-52a4b1c73e5c\"}],\"name\":\"attribute\"}]}]},{\"name\":\"ScalarDetectStep\",\"id\":\"fea2d924-9763-4b23-9ea2-9e78c19858c9\",\"rows\":[{\"name\":\"NumberBecomes\",\"kind\":\"NumberBecomes\",\"arguments\":[{\"name\":\"op\",\"type\":\"string\",\"value\":\"BecomesGreaterThan\"},{\"name\":\"value\",\"type\":\"number\",\"value\":0.0}]},{\"name\":\"OccurrenceOption\",\"kind\":\"EachTime\",\"arguments\":[]}]}]}",
+        "settings": {
+          "shouldRun": false,
+          "shouldApplyRuleOnUpdate": false
+        }
+      }
+    },
+    "type": "timeSeriesView-v1"
+  },
+  {
+    "uniqueIdentifier": "4260b1f6-0244-4c59-b1c3-10ef821b0c41",
+    "payload": {
+      "name": "token_spike_minutes tile",
+      "runSettings": {
+        "executionIntervalInSeconds": 300
+      },
+      "query": {
+        "queryString": "let _startTime = ago(1h);\nlet _endTime = now();\nlet threshold = 5000;\n// Caller-minutes whose summed tokens exceed the threshold (the Activator rule's condition).\nGatewayCalls()\n| where isnotnull(tokens)\n| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller\n| where tokens > threshold\n| order by minute asc, caller asc\n| where minute >= _startTime and minute < bin(_endTime, 1m)\n"
+      },
+      "eventhouseItem": {
+        "targetUniqueIdentifier": "84a9c8b1-b26d-47ce-9b29-4cf9e1244570"
+      },
+      "parentContainer": {
+        "targetUniqueIdentifier": "3ef637cb-b4e2-417a-b1d1-0b0b348f3da0"
+      }
+    },
+    "type": "kqlSource-v1"
+  },
+  {
+    "uniqueIdentifier": "f2466931-2455-4a34-8427-5051756e51d3",
+    "payload": {
+      "name": "token_spike_minutes events",
+      "parentContainer": {
+        "targetUniqueIdentifier": "3ef637cb-b4e2-417a-b1d1-0b0b348f3da0"
+      },
+      "definition": {
+        "type": "Event",
+        "instance": "{\"templateId\":\"SourceEvent\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"SourceEventStep\",\"id\":\"4611ea4e-8d9f-4933-923a-3b182a07be94\",\"rows\":[{\"name\":\"SourceSelector\",\"kind\":\"SourceReference\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"4260b1f6-0244-4c59-b1c3-10ef821b0c41\"}]}]}]}"
+      }
+    },
+    "type": "timeSeriesView-v1"
+  },
+  {
+    "uniqueIdentifier": "14d59f64-1c35-40b4-8061-4f37801c5abf",
+    "payload": {
+      "name": "Caller minute",
+      "parentContainer": {
+        "targetUniqueIdentifier": "3ef637cb-b4e2-417a-b1d1-0b0b348f3da0"
+      },
+      "definition": {
+        "type": "Object"
+      }
+    },
+    "type": "timeSeriesView-v1"
+  },
+  {
+    "uniqueIdentifier": "2de2839e-35ab-4674-a624-b973a3f4cf91",
+    "payload": {
+      "name": "tokens",
+      "parentObject": {
+        "targetUniqueIdentifier": "14d59f64-1c35-40b4-8061-4f37801c5abf"
+      },
+      "parentContainer": {
+        "targetUniqueIdentifier": "3ef637cb-b4e2-417a-b1d1-0b0b348f3da0"
+      },
+      "definition": {
+        "type": "Attribute",
+        "instance": "{\"templateId\":\"BasicEventAttribute\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"EventSelectStep\",\"id\":\"bd99d73d-09ad-4294-8cd2-9103cf123c95\",\"rows\":[{\"name\":\"EventSelector\",\"kind\":\"Event\",\"arguments\":[{\"kind\":\"EventReference\",\"type\":\"complex\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"f2466931-2455-4a34-8427-5051756e51d3\"}],\"name\":\"event\"}]},{\"name\":\"EventFieldSelector\",\"kind\":\"EventField\",\"arguments\":[{\"name\":\"fieldName\",\"type\":\"string\",\"value\":\"tokens\"}]}]},{\"name\":\"EventComputeStep\",\"id\":\"debe342c-62d4-4596-8264-ab55ac3c7903\",\"rows\":[{\"name\":\"TypeAssertion\",\"kind\":\"TypeAssertion\",\"arguments\":[{\"name\":\"op\",\"type\":\"string\",\"value\":\"Number\"},{\"name\":\"format\",\"type\":\"string\",\"value\":\"\"}]}]}]}"
+      }
+    },
+    "type": "timeSeriesView-v1"
+  },
+  {
+    "uniqueIdentifier": "8c811008-6136-42f3-98c4-bd0d62fa33e8",
+    "payload": {
+      "name": "Caller tokens in a minute above the threshold",
+      "parentObject": {
+        "targetUniqueIdentifier": "14d59f64-1c35-40b4-8061-4f37801c5abf"
+      },
+      "parentContainer": {
+        "targetUniqueIdentifier": "3ef637cb-b4e2-417a-b1d1-0b0b348f3da0"
+      },
+      "definition": {
+        "type": "Rule",
+        "instance": "{\"templateId\":\"AttributeTrigger\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"ScalarSelectStep\",\"id\":\"7177146d-44ba-4c12-932e-a0d98245c96c\",\"rows\":[{\"name\":\"AttributeSelector\",\"kind\":\"Attribute\",\"arguments\":[{\"kind\":\"AttributeReference\",\"type\":\"complex\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"2de2839e-35ab-4674-a624-b973a3f4cf91\"}],\"name\":\"attribute\"}]}]},{\"name\":\"ScalarDetectStep\",\"id\":\"e2e464a6-88ef-41bb-9c1a-944ddbd16e94\",\"rows\":[{\"name\":\"NumberBecomes\",\"kind\":\"NumberBecomes\",\"arguments\":[{\"name\":\"op\",\"type\":\"string\",\"value\":\"BecomesGreaterThan\"},{\"name\":\"value\",\"type\":\"number\",\"value\":5000.0}]},{\"name\":\"OccurrenceOption\",\"kind\":\"EachTime\",\"arguments\":[]}]}]}",
+        "settings": {
+          "shouldRun": false,
+          "shouldApplyRuleOnUpdate": false
+        }
+      }
+    },
+    "type": "timeSeriesView-v1"
+  }
+]

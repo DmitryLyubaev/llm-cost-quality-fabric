@@ -102,3 +102,42 @@ def test_ignores_guid_patterns(tmp_path):
     f.write_text(f"itemId = {uuid.uuid4()}\n", encoding="utf-8")
 
     assert check_hygiene([f], forbidden=[]) == []
+
+
+# Joined at run time so this file does not itself hold a host the repo-wide check would flag.
+SERVICEBUS = "." + "servicebus.windows.net"
+KUSTO = "." + "kusto.fabric.microsoft.com"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f"endpoint = sb://evh-demo-01{SERVICEBUS}/",
+        f'"clusterUri": "https://trd-abc123.z4{KUSTO}"',
+        f"host: EVH-DEMO{SERVICEBUS.upper()}",
+    ],
+)
+def test_flags_event_hubs_and_kusto_hosts(tmp_path, line):
+    f = tmp_path / "item.json"
+    f.write_text(line + "\n", encoding="utf-8")
+
+    problems = check_hygiene([f], forbidden=[])
+
+    assert len(problems) == 1
+    assert "item.json" in problems[0]
+    assert "evh-demo" not in problems[0].lower() and "trd-abc123" not in problems[0]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f"Reject any committed `{SERVICEBUS[1:]}` or `{KUSTO[1:]}` host.",
+        f'endpoint = "${{var.event_hub_namespace}}{SERVICEBUS}"',
+        f"<namespace>{SERVICEBUS}",
+    ],
+)
+def test_allows_host_suffixes_without_a_name(tmp_path, line):
+    f = tmp_path / "notes.md"
+    f.write_text(line + "\n", encoding="utf-8")
+
+    assert check_hygiene([f], forbidden=[]) == []
