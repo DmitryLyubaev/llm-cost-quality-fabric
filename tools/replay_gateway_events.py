@@ -9,6 +9,7 @@ P10_EVENTHUB_NAME (the hub). Both are required; the script prints neither. Sign 
 """
 import argparse
 import json
+import logging
 import os
 import random
 import sys
@@ -24,6 +25,8 @@ SESSION = "replay"
 API = "azure-openai-v1"
 OPERATION = "chat-completions"
 REFUSAL_STATUSES = (401, 403, 429)
+MAX_STEP_MS = 1500  # the longest gap between two events
+INSTALL_HINT = "install the replay extra: pip install -e .[replay]"
 
 ENV_NAMESPACE = "P10_EVENTHUB_NAMESPACE"
 ENV_HUB = "P10_EVENTHUB_NAME"
@@ -39,8 +42,10 @@ def make_events(n: int, start: datetime, seed: int) -> list[dict]:
     """Return `n` valid gateway events, deterministic for `seed`, with increasing event_time.
 
     The first events cover every caller and both backends, and every tenth event is a refusal
-    (401, 403 or 429, answered_by and tokens null), so a count of 10 or more holds all of them. An
-    occasional 502 is a backend failure that reached on-error: answered_by null, not refused.
+    (401, 403 or 429, answered_by and tokens null), so a count of 10 or more holds all of them. A
+    502 (every twentieth event from the fifteenth, and now and then another) is a backend failure
+    that reached on-error: answered_by null, tokens null, not refused. The last event is at most
+    `MAX_STEP_MS * n` after `start`.
     """
     if start.tzinfo is None or start.utcoffset() is None:
         raise ValueError("start must be timezone-aware")
@@ -49,9 +54,9 @@ def make_events(n: int, start: datetime, seed: int) -> list[dict]:
     moment = moment.replace(microsecond=moment.microsecond // 1000 * 1000)
     events = []
     for i in range(n):
-        moment += timedelta(milliseconds=rng.randint(1, 1500))
+        moment += timedelta(milliseconds=rng.randint(1, MAX_STEP_MS))
         refused = i % 10 == 9
-        failed = not refused and i > 1 and rng.random() < 0.03
+        failed = not refused and i > 1 and (i % 20 == 14 or rng.random() < 0.03)
         caller = CALLERS[i] if i < len(CALLERS) else rng.choice(CALLERS)
         if refused or failed:
             answered_by = None
@@ -97,9 +102,10 @@ class _HubSender:
         def add(self, body: str) -> None:
             self.batch.add(self._event_data(body))
 
-    def __init__(self, client, event_data):
+    def __init__(self, client, event_data, credential):
         self._client = client
         self._event_data = event_data
+        self._credential = credential
 
     def create_batch(self):
         return self._Batch(self._client.create_batch(), self._event_data)
@@ -108,7 +114,10 @@ class _HubSender:
         self._client.send_batch(batch.batch)
 
     def close(self) -> None:
-        self._client.close()
+        try:
+            self._client.close()
+        finally:
+            self._credential.close()
 
 
 def _make_sender(namespace: str, hub: str):
@@ -116,12 +125,13 @@ def _make_sender(namespace: str, hub: str):
     from azure.eventhub import EventData, EventHubProducerClient
     from azure.identity import AzureCliCredential
 
+    credential = AzureCliCredential()
     client = EventHubProducerClient(
         fully_qualified_namespace=_host(namespace),
         eventhub_name=hub,
-        credential=AzureCliCredential(),
+        credential=credential,
     )
-    return _HubSender(client, EventData)
+    return _HubSender(client, EventData, credential)
 
 
 def send(events: list[dict], namespace: str, hub: str, sender=None) -> int:
@@ -161,6 +171,11 @@ def _positive_int(text: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # The SDK's warnings can carry the namespace host, and with no handler configured Python's
+    # last-resort handler would print them to stderr.
+    azure_logger = logging.getLogger("azure")
+    azure_logger.setLevel(logging.CRITICAL + 1)
+    azure_logger.propagate = False
     parser = argparse.ArgumentParser(description=NOTICE)
     parser.add_argument("--count", type=_positive_int, default=50, help="events to send (default 50)")
     parser.add_argument("--seed", type=int, default=1, help="random seed (default 1)")
@@ -172,9 +187,17 @@ def main(argv: list[str] | None = None) -> int:
         if not value:
             print(name, file=sys.stderr)
             return 2
+    if "." in namespace:
+        print(f"{ENV_NAMESPACE} must be a namespace name, not a host", file=sys.stderr)
+        return 2
     try:
-        events = make_events(args.count, datetime.now(timezone.utc), args.seed)
+        # Start early enough that the last event is not in the future.
+        now = datetime.now(timezone.utc)
+        events = make_events(args.count, now - timedelta(milliseconds=MAX_STEP_MS * args.count), args.seed)
         sent = send(events, namespace, hub)
+    except ImportError:
+        print(INSTALL_HINT, file=sys.stderr)
+        return 1
     except Exception as error:  # never print the message: it may hold the namespace or hub
         print(type(error).__name__, file=sys.stderr)
         return 1

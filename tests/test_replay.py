@@ -4,8 +4,12 @@ No test imports azure-eventhub: `send` takes an injected sender, and the CLI is 
 module's `_make_sender` seam.
 """
 import json
+import logging
 import re
+import subprocess
 import sys
+import types
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -54,6 +58,8 @@ def test_the_mix_covers_every_caller_both_backends_and_a_refusal():
     assert {e["answered_by"] for e in events if e["answered_by"]} == set(BACKENDS)
     refusals = [e for e in events if e["refused_by_gateway"]]
     assert refusals
+    # A backend failure that reached on-error: not refused, but nothing answered.
+    assert any(not e["refused_by_gateway"] and e["answered_by"] is None for e in events)
     for event in refusals:
         assert event["status"] in (401, 403, 429)
         assert event["answered_by"] is None
@@ -141,12 +147,102 @@ def test_send_with_no_events_sends_nothing():
 
 
 def test_importing_the_module_does_not_import_azure_eventhub():
-    assert "azure.eventhub" not in sys.modules
+    code = (
+        "import sys; sys.path.insert(0, 'tools'); import replay_gateway_events; "
+        "assert 'azure.eventhub' not in sys.modules"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", code], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
 
 
-def test_the_default_host_is_built_from_the_namespace():
-    host = replay._host("ns")
-    assert host.startswith("ns.servicebus") and host.endswith(".windows.net")
+def test_an_oversize_event_raises_sends_nothing_and_closes_the_sender():
+    sender = FakeSender(capacity=0)
+    with pytest.raises(ValueError):
+        replay.send(replay.make_events(3, START, seed=1), "ns", "hub", sender=sender)
+    assert sender.sent == []
+    assert sender.closed
+
+
+def test_a_failing_retry_after_a_full_batch_raises_and_closes_the_sender():
+    class OneBatchThenNone(FakeSender):
+        def create_batch(self):
+            batch = FakeBatch(self.capacity)
+            self.capacity = 0  # every later batch holds nothing
+            return batch
+
+    sender = OneBatchThenNone(capacity=2)
+    with pytest.raises(ValueError):
+        replay.send(replay.make_events(5, START, seed=1), "ns", "hub", sender=sender)
+    assert [len(batch) for batch in sender.sent] == [2]
+    assert sender.closed
+
+
+class _FakeAzure:
+    """Stands in for azure.eventhub and azure.identity, and records what the real sender does."""
+
+    def __init__(self, monkeypatch):
+        outer = self
+        self.clients, self.credentials, self.bodies = [], [], []
+
+        class EventData:
+            def __init__(self, body):
+                outer.bodies.append(body)
+
+        class Batch:
+            def __init__(self):
+                self.items = []
+
+            def add(self, item):
+                self.items.append(item)
+
+        class EventHubProducerClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.batches, self.closed = [], False
+                outer.clients.append(self)
+
+            def create_batch(self):
+                return Batch()
+
+            def send_batch(self, batch):
+                self.batches.append(batch)
+
+            def close(self):
+                self.closed = True
+
+        class AzureCliCredential:
+            def __init__(self):
+                self.closed = False
+                outer.credentials.append(self)
+
+            def close(self):
+                self.closed = True
+
+        eventhub = types.ModuleType("azure.eventhub")
+        eventhub.EventData, eventhub.EventHubProducerClient = EventData, EventHubProducerClient
+        identity = types.ModuleType("azure.identity")
+        identity.AzureCliCredential = AzureCliCredential
+        monkeypatch.setitem(sys.modules, "azure", types.ModuleType("azure"))
+        monkeypatch.setitem(sys.modules, "azure.eventhub", eventhub)
+        monkeypatch.setitem(sys.modules, "azure.identity", identity)
+
+
+def test_the_real_client_wrapper_builds_the_client_and_forwards_the_events_and_close(monkeypatch):
+    fake = _FakeAzure(monkeypatch)
+    events = replay.make_events(3, START, seed=1)
+    assert replay.send(events, "ns1", "hub1") == 3
+    (client,) = fake.clients
+    (credential,) = fake.credentials
+    assert set(client.kwargs) == {"fully_qualified_namespace", "eventhub_name", "credential"}
+    assert client.kwargs["fully_qualified_namespace"] == "ns1" + ".servicebus" + ".windows.net"
+    assert client.kwargs["eventhub_name"] == "hub1"
+    assert client.kwargs["credential"] is credential
+    assert [json.loads(body) for body in fake.bodies] == events
+    assert [len(batch.items) for batch in client.batches] == [3]
+    assert client.closed
+    assert credential.closed
 
 
 def _cli_env(monkeypatch, sender):
@@ -207,3 +303,67 @@ def test_help_says_development_only(capsys):
     assert "published figure" in text
     assert "development only" in replay.__doc__.lower()
     assert "published figure" in " ".join(replay.__doc__.split())
+
+
+@pytest.fixture
+def azure_logger_state():
+    logger = logging.getLogger("azure")
+    saved = (logger.level, logger.propagate)
+    yield logger
+    logger.setLevel(saved[0])
+    logger.propagate = saved[1]
+
+
+def test_the_cli_silences_the_sdk_loggers(monkeypatch, capsys, azure_logger_state):
+    host = "secret-namespace" + ".servicebus" + ".windows.net"
+
+    class Warning_(FakeSender):
+        def send_batch(self, batch):
+            logging.getLogger("azure.eventhub.x").warning("could not reach %s", host)
+            super().send_batch(batch)
+
+    _cli_env(monkeypatch, Warning_())
+    # An application-configured handler on the root logger, as the SDK's warnings would reach.
+    root_handler = logging.StreamHandler(sys.stderr)
+    logging.getLogger().addHandler(root_handler)
+    try:
+        assert replay.main([]) == 0
+    finally:
+        logging.getLogger().removeHandler(root_handler)
+    out, err = capsys.readouterr()
+    assert "secret-namespace" not in out + err
+    assert err == ""
+
+
+def test_the_cli_rejects_a_namespace_that_is_a_host(monkeypatch, capsys):
+    _cli_env(monkeypatch, FakeSender())
+    monkeypatch.setenv("P10_EVENTHUB_NAMESPACE", "secret-namespace" + ".servicebus" + ".windows.net")
+    assert replay.main([]) == 2
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "P10_EVENTHUB_NAMESPACE" in err
+    assert "secret-namespace" not in err
+
+
+def test_a_missing_extra_prints_the_install_hint(monkeypatch, capsys):
+    _cli_env(monkeypatch, FakeSender())
+
+    def no_extra(namespace, hub):
+        raise ImportError("No module named 'azure.eventhub' secret-namespace")
+
+    monkeypatch.setattr(replay, "_make_sender", no_extra)
+    assert replay.main([]) == 1
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert err.strip() == "install the replay extra: pip install -e .[replay]"
+
+
+def test_the_cli_does_not_produce_future_event_times(monkeypatch, capsys):
+    sender = FakeSender()
+    _cli_env(monkeypatch, sender)
+    before = datetime.now(timezone.utc)
+    assert replay.main(["--count", "5000"]) == 0
+    sent = [json.loads(item) for batch in sender.sent for item in batch]
+    last = datetime.fromisoformat(sent[-1]["event_time"])
+    assert last <= datetime.now(timezone.utc)
+    assert before - last < timedelta(milliseconds=replay.MAX_STEP_MS * 5000)
