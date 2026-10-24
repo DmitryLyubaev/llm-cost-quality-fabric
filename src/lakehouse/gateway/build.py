@@ -10,13 +10,23 @@ so a re-run writes nothing.
 Gold `fact_gateway_call` is one row per call, rebuilt from silver each run, keyed to project 9's
 `dim_date` (`call_date`, the UTC date) and `dim_project` (`p4`, the gateway's project). A key the
 dimensions lack is an error (ruling R16), never a dropped call. The table is not in project 9's
-`GOLD_TABLES`, so its re-run fingerprint never sees this one-off session dataset.
+`GOLD_TABLES`, so its re-run fingerprint never sees this one-off session dataset. Its schema is
+`FACT_GATEWAY_CALL_SCHEMA` (project 11's ruling R2): project 9's gold build creates the table empty
+with the same schema before any session has run, because the Direct Lake model needs it to exist.
 """
 
 from delta.tables import DeltaTable
 from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
-from pyspark.sql.types import StringType
+from pyspark.sql.types import (
+    BooleanType,
+    DateType,
+    IntegerType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
+)
 
 from lakehouse.gateway.contract import EVENT_FIELDS
 from lakehouse.paths import LakePaths
@@ -29,6 +39,15 @@ KEY = "request_id"
 FIELDS = [name for name, _ in EVENT_FIELDS]
 # The contract's types as Spark types (the Eventhouse table uses the same: int is 32-bit).
 SPARK_TYPES = {"datetime": "timestamp", "string": "string", "int": "int", "bool": "boolean"}
+_SPARK_TYPE_OBJECTS = {"timestamp": TimestampType(), "string": StringType(), "int": IntegerType(),
+                       "boolean": BooleanType()}
+# Gold `fact_gateway_call` as the writer stores it: the contract's fields, the UTC call date and the
+# project. Every column is nullable, as a Delta write from a DataFrame leaves it (ruling R2: the
+# writer casts to this schema, and the always-present step creates the empty table with it).
+FACT_GATEWAY_CALL_SCHEMA = StructType(
+    [StructField(name, _SPARK_TYPE_OBJECTS[SPARK_TYPES[kind]]) for name, kind in EVENT_FIELDS]
+    + [StructField("call_date", DateType()), StructField("project", StringType())]
+)
 
 
 def require_utc(spark: SparkSession, what: str) -> None:
@@ -131,9 +150,11 @@ def build_fact_gateway_call(spark: SparkSession, paths: LakePaths) -> int:
     if dim_project.where(F.col("project") == GATEWAY_PROJECT).limit(1).count() == 0:
         raise ValueError(f"gold dim_project has no {GATEWAY_PROJECT!r}: run project 9's load first")
 
-    facts = silver.select(
+    built = silver.select(
         *FIELDS, F.to_date("event_time").alias("call_date"), F.lit(GATEWAY_PROJECT).alias("project")
     )
+    # Ruling R2: the columns and types come from the one schema the always-present step also uses.
+    facts = built.select(*[F.col(f.name).cast(f.dataType).alias(f.name) for f in FACT_GATEWAY_CALL_SCHEMA])
     missing = (
         facts.select("call_date")
         .distinct()

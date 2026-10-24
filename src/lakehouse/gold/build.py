@@ -13,6 +13,12 @@ Keys for relationships: `dim_study.study_key` (`study|run_id`) and `dim_arm.arm_
 are single-column keys that `fact_eval_attempt` carries as `study_key` and `arm_key` (with
 `deployment_sk` already there). Each of the three also carries `project`, read from the
 `study_projects.csv` seed; a study the seed does not name fails the build.
+
+Always-present tables (project 11): the Direct Lake model errors on a missing table, so the build
+also creates `fact_gateway_call` and `security.user_project` empty when they are absent
+(`lakehouse.security.ensure_table`). It never touches them once they exist, so project 10's
+gateway load and the access loader keep their rows, and neither is in `GOLD_TABLES`, the counts
+or the re-run fingerprint.
 """
 
 from datetime import date
@@ -22,7 +28,10 @@ from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 from pyspark.sql.types import DateType, DoubleType, StringType, StructField, StructType
 
+from lakehouse.gateway.build import FACT_GATEWAY_CALL_SCHEMA
+from lakehouse.gateway.build import GOLD_TABLE as GATEWAY_GOLD_TABLE
 from lakehouse.paths import LakePaths
+from lakehouse.security import USER_PROJECT_LAYER, USER_PROJECT_SCHEMA, USER_PROJECT_TABLE, ensure_table
 from lakehouse.seeding import read_study_projects, seed_df
 from lakehouse.silver.deployments import read_dim_arm
 from lakehouse.silver.eval_attempts import EVAL_COLUMNS, EVAL_KEY
@@ -47,7 +56,9 @@ GOLD_TABLES = [
 
 # Gold tables built by project 10's gateway load (lakehouse.gateway.build) after a session, not by
 # build_gold: they stay out of GOLD_TABLES, so project 9's re-run fingerprint never sees them.
-SESSION_TABLES = ["fact_gateway_call"]
+SESSION_TABLES = [GATEWAY_GOLD_TABLE]
+# The access table for row-level security (lakehouse.security); never in git, never fingerprinted.
+USER_PROJECT_NAME = f"{USER_PROJECT_LAYER}.{USER_PROJECT_TABLE}"
 
 # One row per ... (spec 3.3). Plan 2 renders this into the README.
 GRAINS: dict[str, str] = {
@@ -61,6 +72,7 @@ GRAINS: dict[str, str] = {
     "dim_arm": "arm within a study",
     "dim_date": "day",
     REJECT_NAME: "eval attempt that resolves to no deployment version or to several",
+    USER_PROJECT_NAME: "user (UPN) x project the user may see",
 }
 
 # Project names from the portfolio tracker's project table; the two pseudo-projects are
@@ -152,11 +164,23 @@ def _project_map(mapping: dict[str, str]):
     return F.create_map(*[F.lit(x) for pair in mapping.items() for x in pair])
 
 
-def _require_projects(mapping: dict[str, str], *frames: DataFrame) -> None:
-    """ValueError naming every study in `frames` that the study_projects seed does not name."""
+def _require_projects(mapping: dict[str, str], *named_frames: tuple[str, DataFrame]) -> None:
+    """ValueError unless every study in the (name, frame) pairs is one the seed maps to a project.
+
+    A null or blank study is refused, naming the frame. A study with leading or trailing spaces is
+    refused as such, not stripped: the project lookup (`_project_map`) matches the study exactly,
+    so a stripped comparison would pass a padded study here and leave its rows with a null project.
+    The seed's own studies are stripped when it is read (`read_study_projects`).
+    """
     studies: set[str] = set()
-    for frame in frames:
-        studies.update(r["study"] for r in frame.select("study").distinct().collect())
+    for name, frame in named_frames:
+        found = {r["study"] for r in frame.select("study").distinct().collect()}
+        if any(study is None or not study.strip() for study in found):
+            raise ValueError(f"rows with a null or blank study in {name}")
+        studies |= found
+    padded = sorted(s for s in studies if s != s.strip())
+    if padded:
+        raise ValueError(f"study names with leading or trailing spaces: {padded!r}")
     missing = sorted(s for s in studies if s not in mapping)
     if missing:
         raise ValueError(f"study_projects.csv does not name the project of study {missing}")
@@ -189,7 +213,9 @@ def _latest(*frames_and_columns) -> date:
 def build_gold(spark: SparkSession, paths: LakePaths, seeds_dir: str) -> dict[str, int]:
     """Rebuild every gold table and the reject table; return table -> row count.
 
-    Gold tables are keyed by plain name, the reject table by `reject.eval_unresolved`.
+    Gold tables are keyed by plain name, the reject table by `reject.eval_unresolved`. Then creates
+    the always-present tables (`SESSION_TABLES` and `security.user_project`) empty if absent; they
+    are never overwritten here and are not in the returned counts.
     """
     attempts = _silver(spark, paths.table("silver", "eval_attempts"))
     costs = _silver(spark, paths.table("silver", "daily_cost"))
@@ -207,7 +233,7 @@ def build_gold(spark: SparkSession, paths: LakePaths, seeds_dir: str) -> dict[st
     if bad:
         raise ValueError(f"live_checks.csv has verdicts outside {VERDICTS}: {bad}")
 
-    _require_projects(study_projects, attempts, dim_arm)
+    _require_projects(study_projects, ("silver eval_attempts", attempts), ("dim_arm.csv", dim_arm))
     project_of = _project_map(study_projects)
     study_key = F.concat_ws("|", "study", "run_id")
     arm_key = F.concat_ws("|", "study", "arm")
@@ -254,4 +280,7 @@ def build_gold(spark: SparkSession, paths: LakePaths, seeds_dir: str) -> dict[st
     }
     counts = {name: _write(df, paths.table("gold", name)) for name, df in tables.items()}
     counts[REJECT_NAME] = _write(unresolved, paths.table("reject", "eval_unresolved"))
+    # Last, so a failed build above leaves them as they were. Created only when absent.
+    ensure_table(spark, paths.table("gold", GATEWAY_GOLD_TABLE), FACT_GATEWAY_CALL_SCHEMA)
+    ensure_table(spark, paths.table(USER_PROJECT_LAYER, USER_PROJECT_TABLE), USER_PROJECT_SCHEMA)
     return counts

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from pyspark.sql import SparkSession
 
+from lakehouse import security
 from lakehouse.bronze.fetch_public import fetch_manifest
 from lakehouse.checks import QualityCheckFailed, check_gateway_counts
 from lakehouse.gateway.answers import cost_per_gateway_call
@@ -23,6 +24,7 @@ from lakehouse.gateway.build import (
     count_duplicate_request_ids,
     merge_gateway_calls,
 )
+from lakehouse.gold.build import PROJECTS
 from lakehouse.paths import LakePaths
 from lakehouse.run import RunSummary, run_load
 from lakehouse.seeding import SEEDS_DIR
@@ -163,3 +165,20 @@ def load_gateway(session: str, eventhouse_count: str, context: dict) -> dict:
         "checks": [asdict(check)],
         "cost_per_call": answer,
     }
+
+
+def load_access(context: dict, csv_dir: str = "Files/private/access") -> dict:
+    """Overwrite `security.user_project` from the single CSV in `csv_dir` (under the lakehouse's Files).
+
+    The file is git-ignored `private/access.csv` (`upn,project`), uploaded by hand; it is read
+    through the Files mount. ValueError, before anything is written, if the folder does not hold
+    exactly one `.csv` file, or (from `security.load_access`) for a bad row, naming its line
+    number only. Returns counts only (`rows`, `users`, `projects`), never a UPN.
+    """
+    paths = fabric_paths(context)
+    folder = Path(paths.files_mount or paths.files_root) / csv_dir.removeprefix("Files/")
+    files = sorted(folder.glob("*.csv")) if folder.is_dir() else []
+    if len(files) != 1:
+        raise ValueError(f"{csv_dir} must hold exactly one .csv file, found {len(files)}")
+    projects = [project for project, _ in PROJECTS]
+    return security.load_access(get_active_spark(), paths, str(files[0]), projects)

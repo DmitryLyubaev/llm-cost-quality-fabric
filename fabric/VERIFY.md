@@ -17,7 +17,14 @@ or `# verify in project 10 plan 2` comments.
 | `pl_daily_load.DataPipeline/pipeline-content.json` | `load_date` expression | Ruled: `load_date` is the UTC date of the trigger (`pipeline().TriggerTime` is UTC), so a 06:00 Brisbane (UTC+10) run loads the previous Brisbane calendar day. Check only that the expression evaluates to `yyyy-MM-dd`. |
 | `pl_daily_load.DataPipeline/.schedules` | `configuration.localTimeZoneId` | `E. Australia Standard Time` is the Windows time zone ID for Brisbane (the REST API takes Windows IDs). Check the portal shows Brisbane, 06:00. |
 | `pl_daily_load.DataPipeline/.schedules` | `configuration.startDateTime` | Set to `2026-11-01T06:00:00` (06:00 Brisbane, the first run; no `Z`, as in the git samples) so it is in the future at commit time: the REST docs say a start time in the past "will trigger a job instantly". Plan 3 moves it forward if it has passed by the first PROD deploy, and checks the portal reads it as Brisbane local time, not UTC. |
-| `parameter.yml` | `find_replace[*].file_path` | Glob `**/notebook-content.py` combined with `item_type: Notebook`; check fabric-cicd's log shows the three replacements in all three notebooks (`nb_gateway_load` is project 10's). |
+| `parameter.yml` | `find_replace[*].file_path` | Glob `**/notebook-content.py` combined with `item_type: Notebook`; check fabric-cicd's log shows the three replacements in every notebook (`nb_gateway_load` is project 10's, `nb_access_load` project 11's). |
+
+## Project 11 (the semantic model and security)
+
+| File | Key | What to check |
+|---|---|---|
+| `nb_access_load.Notebook/notebook-content.py` | `load_access` | The loader finds the access file through the Files mount (`/lakehouse/default/Files/private/access/`) and writes `Tables/security/user_project` by path, as the load writes `silver`, `gold` and `reject`. Check that a path write creates the `security` schema in the schema-enabled lakehouse, that the table keeps its NOT NULL columns, and that the run prints counts only. |
+| `src/lakehouse/security.py` | `ensure_table` | Creates the empty `gold.fact_gateway_call` and `security.user_project` with Delta's table builder at a OneLake path (`DeltaTable.createIfNotExists().location(...)`). Check that this works against `abfss://` in Fabric and that the lakehouse lists both tables after the first daily load. |
 
 ## Project 10, plan 2 (the live session runbook)
 

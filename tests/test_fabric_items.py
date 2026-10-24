@@ -20,11 +20,14 @@ EMPTY_GUID = "00000000-0000-0000-0000-000000000000"
 GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 NOTEBOOKS = ["nb_ingest_public", "nb_load"]  # the pipeline's, in activity order
 GATEWAY_NOTEBOOK = "nb_gateway_load"  # run by hand after a session, never by the pipeline
-ALL_NOTEBOOKS = NOTEBOOKS + [GATEWAY_NOTEBOOK]
-PARAMETERS = {
+ACCESS_NOTEBOOK = "nb_access_load"  # run by hand after access.csv is uploaded, never by the pipeline
+HAND_RUN_NOTEBOOKS = [GATEWAY_NOTEBOOK, ACCESS_NOTEBOOK]
+ALL_NOTEBOOKS = NOTEBOOKS + HAND_RUN_NOTEBOOKS
+PARAMETERS = {  # None: the notebook has no parameters cell
     "nb_ingest_public": ['load_date = ""'],
     "nb_load": ['load_date = ""'],
     GATEWAY_NOTEBOOK: ['session = ""', 'eventhouse_count = ""'],
+    ACCESS_NOTEBOOK: None,
 }
 # Patterns that would mean a storage endpoint or a lake path with real IDs slipped in.
 FORBIDDEN_IN_NOTEBOOKS = [
@@ -86,6 +89,7 @@ def test_expected_items_exist():
         "nb_ingest_public.Notebook",
         "nb_load.Notebook",
         "nb_gateway_load.Notebook",
+        "nb_access_load.Notebook",
         "pl_daily_load.DataPipeline",
     } | REALTIME_ITEMS
 
@@ -154,6 +158,10 @@ def test_notebook_installs_the_wheel_first_then_takes_its_parameters(name):
     # %pip restarts Python, so it must run before the parameters cell sets anything.
     install = f"%pip install /lakehouse/default/Files/wheels/{_wheel_name()}"
     assert code_cells[0] == (CELL_MARKER, [install])
+    if PARAMETERS[name] is None:
+        assert PARAMETERS_MARKER not in text
+        assert [m for m, _ in code_cells] == [CELL_MARKER, CELL_MARKER]  # the install, then the call
+        return
     assert code_cells[1] == (PARAMETERS_MARKER, PARAMETERS[name])
     assert [m for m, _ in code_cells].count(PARAMETERS_MARKER) == 1
 
@@ -186,6 +194,7 @@ def test_notebook_default_lakehouse_is_lh_portfolio_in_this_workspace(name):
             GATEWAY_NOTEBOOK,
             "lakehouse.fabric_entry.load_gateway(session, eventhouse_count, notebookutils.runtime.context)",
         ),
+        (ACCESS_NOTEBOOK, "lakehouse.fabric_entry.load_access(notebookutils.runtime.context)"),
     ],
 )
 def test_notebook_calls_its_entry_point_with_the_runtime_context(name, call):
@@ -213,13 +222,27 @@ def test_gateway_notebook_says_it_runs_once_after_the_session():
     assert "json.dumps(" in text
 
 
-def test_pipeline_never_runs_the_gateway_notebook():
-    gateway_id = _logical_ids()[f"{GATEWAY_NOTEBOOK}.Notebook"]
+def test_access_notebook_runs_by_hand_and_prints_counts_only():
+    text = _notebook(ACCESS_NOTEBOOK)
+    markdown = text.split(MARKDOWN_MARKER, 1)[1].split(CELL_MARKER, 1)[0].lower()
+    assert "files/private/access/" in markdown
+    assert "security.user_project" in markdown
+    assert "never from the pipeline" in markdown
+    assert "counts" in markdown
+    call_cell = text.rsplit(CELL_MARKER, 1)[1]
+    assert call_cell.count("print(") == 1
+    assert "print(json.dumps(summary" in call_cell
+    assert "@" not in text
+
+
+@pytest.mark.parametrize("name", HAND_RUN_NOTEBOOKS)
+def test_pipeline_never_runs_the_hand_run_notebooks(name):
+    notebook_id = _logical_ids()[f"{name}.Notebook"]
     for path in (FABRIC / "pl_daily_load.DataPipeline").rglob("*"):
         if path.is_file():
             text = path.read_text(encoding="utf-8")
-            assert gateway_id not in text, path
-            assert GATEWAY_NOTEBOOK not in text, path
+            assert notebook_id not in text, path
+            assert name not in text, path
 
 
 def test_fabric_files_pass_hygiene():

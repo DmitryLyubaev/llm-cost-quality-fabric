@@ -77,6 +77,7 @@ Cost Management export ──► storage ─┘   via OneLake shortcut, read thr
 | `dim_date` | day |
 | `fact_gateway_call` | gateway call (project 10's session data, loaded by its own notebook) |
 | `reject.eval_unresolved` | eval attempt that resolves to no deployment version, or to several |
+| `security.user_project` | user (UPN) × project the user may see (row-level security; loaded from git-ignored `private/access.csv`, never committed) |
 
 The Type 2 dimension joins every result to the deployment version live when it was measured. A
 result that resolves to none, or to several, goes to the reject table and fails a check. It is

@@ -14,6 +14,7 @@ from lakehouse import fabric_entry
 from lakehouse.checks import CheckResult, QualityCheckFailed, check_gateway_counts
 from lakehouse.gateway.answers import cost_per_gateway_call
 from lakehouse.gateway.build import (
+    FACT_GATEWAY_CALL_SCHEMA,
     build_fact_gateway_call,
     build_gateway_calls,
     count_duplicate_request_ids,
@@ -257,6 +258,7 @@ def test_gold_is_one_row_per_call_with_call_date_and_project_p4(spark, tmp_lake)
     gold = spark.read.format("delta").load(tmp_lake.table("gold", "fact_gateway_call"))
     assert count == 3
     assert gold.columns == FIELDS + ["call_date", "project"]
+    assert gold.schema == FACT_GATEWAY_CALL_SCHEMA  # ruling R2: the always-present step uses it too
     assert {r["project"] for r in gold.collect()} == {"p4"}
     assert dict(gold.dtypes)["call_date"] == "date"
 

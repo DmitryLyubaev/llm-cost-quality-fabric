@@ -10,10 +10,20 @@ from delta.tables import DeltaTable
 from pyspark.sql import functions as F
 
 from lake_helpers import cost_export_maker
-from lakehouse.attribution import load_rg_rules, load_session_windows
-from lakehouse.gold.build import GOLD_TABLES, GRAINS, PROJECTS, SESSION_TABLES, build_gold
-from lakehouse.gold.fingerprint import gold_fingerprint
 from lakehouse.answers import cost_per_result
+from lakehouse.attribution import load_rg_rules, load_session_windows
+from lakehouse.gateway.build import FACT_GATEWAY_CALL_SCHEMA
+from lakehouse.gold.build import (
+    GOLD_TABLES,
+    GRAINS,
+    PROJECTS,
+    SESSION_TABLES,
+    USER_PROJECT_NAME,
+    _require_projects,
+    build_gold,
+)
+from lakehouse.gold.fingerprint import gold_fingerprint
+from lakehouse.security import USER_PROJECT_SCHEMA
 from lakehouse.seeding import SEEDS_DIR, read_study_projects
 from lakehouse.silver.costs import normalise_costs, read_cost_export, replace_month
 from lakehouse.silver.deployments import (
@@ -355,7 +365,8 @@ def test_a_null_or_empty_verdict_in_the_live_checks_seed_is_refused(spark, silve
 
 
 def test_every_table_has_a_grain():
-    assert set(GRAINS) == set(GOLD_TABLES) | set(SESSION_TABLES) | {REJECT}
+    assert set(GRAINS) == set(GOLD_TABLES) | set(SESSION_TABLES) | {REJECT, USER_PROJECT_NAME}
+    assert USER_PROJECT_NAME == "security.user_project"
     assert not set(SESSION_TABLES) & set(GOLD_TABLES)  # outside project 9's re-run fingerprint
     assert GRAINS["fact_gateway_call"] == "gateway call"
     assert GRAINS["dim_project"] == "project 1-10, plus releaselens-shared and untagged"
@@ -510,3 +521,68 @@ def test_cost_per_result_is_unchanged_by_the_project_column(spark, loaded_lake):
         assert row["actual_currency"] == "AUD", project
         assert row["fx_month"] == "2026-10", project
         assert row["fx_usd_to_billing"] is None and row["estimated_in_billing_total"] is None, project
+
+
+# --- always-present tables (project 11: Direct Lake on OneLake errors on a missing table) --------
+
+
+def test_build_gold_leaves_an_empty_gateway_table_when_no_session_ran(spark, silver):
+    paths, _ = silver
+
+    counts = build_gold(spark, paths, SEEDS)
+
+    gateway = _gold(spark, paths, "fact_gateway_call")
+    assert gateway.count() == 0
+    assert gateway.schema == FACT_GATEWAY_CALL_SCHEMA
+    access = _gold(spark, paths, "user_project", "security")
+    assert access.count() == 0
+    assert access.schema == USER_PROJECT_SCHEMA
+    # Session and security tables stay out of the counts and project 9's re-run fingerprint.
+    assert set(counts) == set(GOLD_TABLES) | {REJECT}
+    assert set(gold_fingerprint(spark, paths)) == set(GOLD_TABLES) | {REJECT}
+
+
+def test_build_gold_never_empties_a_filled_session_or_access_table(spark, silver):
+    """Review Focus 3: project 10's load and the access loader ran before this rebuild."""
+    paths, _ = silver
+    gateway_path = paths.table("gold", "fact_gateway_call")
+    row = {field.name: None for field in FACT_GATEWAY_CALL_SCHEMA}
+    row.update(request_id="req-01", session="p10-2026-11-12", call_date=date(2026, 11, 12), project="p4")
+    spark.createDataFrame([tuple(row.values())], FACT_GATEWAY_CALL_SCHEMA).write.format("delta").save(gateway_path)
+    access_path = paths.table("security", "user_project")
+    spark.createDataFrame([("lead@example.invalid", "p4")], USER_PROJECT_SCHEMA).write.format("delta").save(
+        access_path
+    )
+
+    build_gold(spark, paths, SEEDS)
+    build_gold(spark, paths, SEEDS)
+
+    assert [r["request_id"] for r in _gold(spark, paths, "fact_gateway_call").collect()] == ["req-01"]
+    assert [r["upn"] for r in _gold(spark, paths, "user_project", "security").collect()] == ["lead@example.invalid"]
+
+
+def test_the_gold_gateway_schema_is_the_contract_plus_call_date_and_project():
+    """Ruling R2: one schema for the gateway writer and the always-present step."""
+    from lakehouse.gateway.contract import EVENT_FIELDS
+
+    assert FACT_GATEWAY_CALL_SCHEMA.fieldNames() == [n for n, _ in EVENT_FIELDS] + ["call_date", "project"]
+    assert all(field.nullable for field in FACT_GATEWAY_CALL_SCHEMA)
+
+
+@pytest.mark.parametrize("study", [None, "", "   "])
+def test_a_null_or_blank_study_is_a_value_error(spark, study):
+    """Carried from Task 1's review: sorted() over None and str raised TypeError."""
+    attempts = spark.createDataFrame([("p1-three-arm",), (study,)], "study string")
+    dim_arm = spark.createDataFrame([("p1-three-arm",)], "study string")
+
+    with pytest.raises(ValueError, match=r"null or blank study.*silver eval_attempts"):
+        _require_projects({"p1-three-arm": "p1"}, ("silver eval_attempts", attempts), ("dim_arm.csv", dim_arm))
+
+
+def test_a_padded_study_is_named_as_padded_not_missing(spark):
+    """The project lookup matches the study exactly, so a padded study is refused, never stripped."""
+    attempts = spark.createDataFrame([("p1-three-arm ",)], "study string")
+    dim_arm = spark.createDataFrame([("p1-three-arm",)], "study string")
+
+    with pytest.raises(ValueError, match=r"leading or trailing spaces.*'p1-three-arm '"):
+        _require_projects({"p1-three-arm": "p1"}, ("silver eval_attempts", attempts), ("dim_arm.csv", dim_arm))

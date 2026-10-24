@@ -9,6 +9,7 @@ def test_table_paths_are_schema_style():
     assert paths.table("gold", "fact_daily_cost") == "/lh/Tables/gold/fact_daily_cost"
     assert paths.table("silver", "daily_cost") == "/lh/Tables/silver/daily_cost"
     assert paths.table("reject", "eval_unresolved") == "/lh/Tables/reject/eval_unresolved"
+    assert paths.table("security", "user_project") == "/lh/Tables/security/user_project"
 
 
 @pytest.mark.parametrize("layer", ["bronze", "private", "", "Gold"])

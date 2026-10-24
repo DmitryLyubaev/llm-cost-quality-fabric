@@ -5,6 +5,7 @@ import pytest
 
 from lakehouse import fabric_entry
 from lakehouse.checks import CheckResult, QualityCheckFailed
+from lakehouse.gold.build import PROJECTS
 from lakehouse.paths import LakePaths
 from lakehouse.run import RunSummary
 
@@ -130,3 +131,69 @@ def test_load_custom_cost_export_dir(monkeypatch):
     monkeypatch.setattr(fabric_entry, "run_load", fake_run_load)
     fabric_entry.load("2026-10-20", CONTEXT, cost_export_dir="Files/exports/x")
     assert seen["root"] == f"{ONELAKE}/Files/exports/x"
+
+
+def _access_folder(root, *names):
+    folder = root / "private" / "access"
+    folder.mkdir(parents=True)
+    for name in names:
+        (folder / name).write_text("upn,project\n", encoding="utf-8")
+    return folder
+
+
+def test_load_access_reads_the_single_csv_under_the_mount(tmp_path, monkeypatch):
+    monkeypatch.setattr(fabric_entry, "FILES_MOUNT", str(tmp_path))
+    folder = _access_folder(tmp_path, "access.csv", "notes.txt")
+    spark_stub = object()
+    seen = {}
+
+    def fake_load_access(spark, paths, csv_path, projects):
+        seen.update(spark=spark, paths=paths, csv_path=csv_path, projects=projects)
+        return {"rows": 2, "users": 1, "projects": 2}
+
+    monkeypatch.setattr(fabric_entry, "get_active_spark", lambda: spark_stub)
+    monkeypatch.setattr(fabric_entry.security, "load_access", fake_load_access)
+
+    result = fabric_entry.load_access(CONTEXT)
+
+    assert result == {"rows": 2, "users": 1, "projects": 2}
+    json.dumps(result)
+    assert seen["spark"] is spark_stub
+    assert seen["paths"] == fabric_entry.fabric_paths(CONTEXT)
+    assert seen["csv_path"] == str(folder / "access.csv")
+    assert seen["projects"] == [project for project, _ in PROJECTS]
+
+
+def test_load_access_takes_another_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(fabric_entry, "FILES_MOUNT", str(tmp_path))
+    folder = tmp_path / "elsewhere"
+    folder.mkdir()
+    (folder / "leads.csv").write_text("upn,project\n", encoding="utf-8")
+    seen = {}
+    monkeypatch.setattr(fabric_entry, "get_active_spark", lambda: object())
+    monkeypatch.setattr(
+        fabric_entry.security, "load_access", lambda spark, paths, csv_path, projects: seen.setdefault("p", csv_path)
+    )
+
+    fabric_entry.load_access(CONTEXT, csv_dir="Files/elsewhere")
+
+    assert seen["p"] == str(folder / "leads.csv")
+
+
+@pytest.mark.parametrize("names", [(), ("a.csv", "b.csv")])
+def test_load_access_needs_exactly_one_csv(tmp_path, monkeypatch, names):
+    monkeypatch.setattr(fabric_entry, "FILES_MOUNT", str(tmp_path))
+    _access_folder(tmp_path, *names)
+    monkeypatch.setattr(fabric_entry, "get_active_spark", lambda: object())
+    monkeypatch.setattr(fabric_entry.security, "load_access", lambda *args: pytest.fail("must not load"))
+
+    with pytest.raises(ValueError, match=rf"exactly one \.csv.*found {len(names)}"):
+        fabric_entry.load_access(CONTEXT)
+
+
+def test_load_access_without_the_folder_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(fabric_entry, "FILES_MOUNT", str(tmp_path))
+    monkeypatch.setattr(fabric_entry, "get_active_spark", lambda: object())
+
+    with pytest.raises(ValueError, match=r"Files/private/access.*found 0"):
+        fabric_entry.load_access(CONTEXT)
