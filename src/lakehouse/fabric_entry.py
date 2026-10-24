@@ -172,11 +172,13 @@ def load_access(context: dict, csv_dir: str = "Files/private/access") -> dict:
 
     The file is git-ignored `private/access.csv` (`upn,project`), uploaded by hand; it is read
     through the Files mount. ValueError, before anything is written, if the folder does not hold
-    exactly one `.csv` file, or (from `security.load_access`) for a bad row, naming its line
-    number only. Returns counts only (`rows`, `users`, `projects`), never a UPN.
+    exactly one `.csv` file, if no files mount is set, or (from `security.load_access`) for a bad
+    row, naming its line number only, or a file with no rows. Returns counts only (`rows`, `users`, `projects`), never a UPN.
     """
     paths = fabric_paths(context)
-    folder = Path(paths.files_mount or paths.files_root) / csv_dir.removeprefix("Files/")
+    if not paths.files_mount:  # files_root is an abfss:// URI, which pathlib cannot list
+        raise ValueError("load_access reads the access file through the files mount, and none is set")
+    folder = Path(paths.files_mount) / csv_dir.removeprefix("Files/")
     files = sorted(folder.glob("*.csv")) if folder.is_dir() else []
     if len(files) != 1:
         raise ValueError(f"{csv_dir} must hold exactly one .csv file, found {len(files)}")

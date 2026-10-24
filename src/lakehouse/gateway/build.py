@@ -37,15 +37,16 @@ SILVER_TABLE = "gateway_calls"
 GOLD_TABLE = "fact_gateway_call"
 KEY = "request_id"
 FIELDS = [name for name, _ in EVENT_FIELDS]
-# The contract's types as Spark types (the Eventhouse table uses the same: int is 32-bit).
-SPARK_TYPES = {"datetime": "timestamp", "string": "string", "int": "int", "bool": "boolean"}
-_SPARK_TYPE_OBJECTS = {"timestamp": TimestampType(), "string": StringType(), "int": IntegerType(),
-                       "boolean": BooleanType()}
+# The contract's types as Spark types (the Eventhouse table uses the same: int is 32-bit), and
+# their DDL names for casts ("timestamp", "string", "int", "boolean").
+SPARK_TYPE_OBJECTS = {"datetime": TimestampType(), "string": StringType(), "int": IntegerType(),
+                      "bool": BooleanType()}
+SPARK_TYPES = {kind: spark_type.simpleString() for kind, spark_type in SPARK_TYPE_OBJECTS.items()}
 # Gold `fact_gateway_call` as the writer stores it: the contract's fields, the UTC call date and the
 # project. Every column is nullable, as a Delta write from a DataFrame leaves it (ruling R2: the
 # writer casts to this schema, and the always-present step creates the empty table with it).
 FACT_GATEWAY_CALL_SCHEMA = StructType(
-    [StructField(name, _SPARK_TYPE_OBJECTS[SPARK_TYPES[kind]]) for name, kind in EVENT_FIELDS]
+    [StructField(name, SPARK_TYPE_OBJECTS[kind]) for name, kind in EVENT_FIELDS]
     + [StructField("call_date", DateType()), StructField("project", StringType())]
 )
 

@@ -502,3 +502,13 @@ def test_the_gateway_table_stays_out_of_project_9s_rerun_fingerprint():
 
     assert GRAINS["fact_gateway_call"] == "gateway call"
     assert "fact_gateway_call" not in GOLD_TABLES
+
+
+def test_the_cast_names_derive_from_the_spark_types():
+    """One source for the contract's Spark types: the casts' DDL names and the gold schema agree."""
+    from lakehouse.gateway.build import SPARK_TYPE_OBJECTS, SPARK_TYPES
+
+    assert SPARK_TYPES == {"datetime": "timestamp", "string": "string", "int": "int", "bool": "boolean"}
+    assert [f.dataType for f in FACT_GATEWAY_CALL_SCHEMA][: len(EVENT_FIELDS)] == [
+        SPARK_TYPE_OBJECTS[kind] for _, kind in EVENT_FIELDS
+    ]

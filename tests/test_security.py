@@ -161,3 +161,20 @@ def test_a_wrong_header_raises_without_echoing_it(spark, tmp_lake, tmp_path, hea
         load_access(spark, tmp_lake, csv_path, KNOWN)
 
     assert "@" not in str(caught.value)
+
+
+@pytest.mark.parametrize("lines", [[], ["", "  "]])
+def test_an_access_file_without_rows_is_refused_before_writing(spark, tmp_lake, tmp_path, lines):
+    """Ruling R3: a header-only file would leave every lead seeing nothing, so it is refused."""
+    load_access(spark, tmp_lake, _access(tmp_path, "lead@example.invalid,p4"), KNOWN)
+
+    with pytest.raises(ValueError, match=r"^access file has no rows$"):
+        load_access(spark, tmp_lake, _access(tmp_path, *lines), KNOWN)
+
+    assert _user_project(spark, tmp_lake) == {("lead@example.invalid", "p4")}
+
+
+def test_an_unknown_project_names_the_project_list_it_checks(spark, tmp_lake, tmp_path):
+    """The list is gold/build.py's PROJECTS (what dim_project is built from), not a lake read."""
+    with pytest.raises(ValueError, match=r"line 2: .*PROJECTS in lakehouse/gold/build\.py"):
+        load_access(spark, tmp_lake, _access(tmp_path, "lead@example.invalid,p99"), KNOWN)

@@ -57,7 +57,7 @@ def _read_access(csv_path: str, projects: list[str]) -> list[tuple[str, str]]:
             raise ValueError("access file line 1: the header must be exactly upn,project")
         for record in reader:
             line = reader.line_num
-            if not record:  # a blank line
+            if not any(cell.strip() for cell in record):  # a blank line, or one of only spaces and commas
                 continue
             if len(record) != len(ACCESS_HEADER):
                 raise ValueError(f"access file line {line}: expected 2 fields (upn,project), got {len(record)}")
@@ -67,12 +67,14 @@ def _read_access(csv_path: str, projects: list[str]) -> list[tuple[str, str]]:
             if not project:
                 raise ValueError(f"access file line {line}: the project is blank")
             if project not in known:
-                raise ValueError(f"access file line {line}: the project is not one of gold dim_project's")
+                raise ValueError(f"access file line {line}: the project is not in PROJECTS in lakehouse/gold/build.py")
             pair = (upn, project)
             if pair in first_line:
                 raise ValueError(f"access file line {line}: duplicates line {first_line[pair]}")
             first_line[pair] = line
             rows.append(pair)
+    if not rows:  # ruling R3: an empty table would leave every lead seeing nothing
+        raise ValueError("access file has no rows")
     return rows
 
 
@@ -82,7 +84,7 @@ def load_access(spark: SparkSession, paths: LakePaths, csv_path: str, projects: 
     UPNs are stripped and lower-cased; one row per (upn, project), so a user with two projects has
     two rows. ValueError, naming the line number only and before anything is written, for a wrong
     header, a row without exactly two fields, a blank UPN or project, a project not in `projects`
-    or a duplicate pair. Returns `{"rows": n, "users": n, "projects": n}`; nothing is printed.
+    or a duplicate pair; and ValueError for a file with no data rows (ruling R3). Returns `{"rows": n, "users": n, "projects": n}`; nothing is printed.
     """
     rows = _read_access(csv_path, projects)
     path = paths.table(USER_PROJECT_LAYER, USER_PROJECT_TABLE)

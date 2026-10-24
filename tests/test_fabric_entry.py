@@ -197,3 +197,13 @@ def test_load_access_without_the_folder_raises(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match=r"Files/private/access.*found 0"):
         fabric_entry.load_access(CONTEXT)
+
+
+def test_load_access_needs_the_files_mount(monkeypatch):
+    """Without the mount the folder would be an abfss:// URI, which pathlib cannot list."""
+    monkeypatch.setattr(fabric_entry, "FILES_MOUNT", None)
+    monkeypatch.setattr(fabric_entry, "get_active_spark", lambda: object())
+    monkeypatch.setattr(fabric_entry.security, "load_access", lambda *args: pytest.fail("must not load"))
+
+    with pytest.raises(ValueError, match=r"files mount"):
+        fabric_entry.load_access(CONTEXT)
