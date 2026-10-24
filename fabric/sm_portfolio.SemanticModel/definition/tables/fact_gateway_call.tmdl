@@ -28,17 +28,22 @@ table fact_gateway_call
 	/// Mirrors lakehouse.gateway.answers.cost_per_gateway_call
 	measure 'Cost per 1,000 calls' =
 			VAR calls = [Calls]
+			VAR callDays = VALUES(fact_gateway_call[call_date])
 			VAR gatewayLines =
 			    CALCULATETABLE(
 			        fact_daily_cost,
 			        REMOVEFILTERS(dim_project),
-			        TREATAS(VALUES(fact_gateway_call[call_date]), fact_daily_cost[cost_date]),
+			        TREATAS(callDays, fact_daily_cost[cost_date]),
 			        KEEPFILTERS(fact_daily_cost[resource_group] = "rg-releaselens-gateway")
 			    )
+			VAR costDays = DISTINCT(SELECTCOLUMNS(gatewayLines, "day", fact_daily_cost[cost_date]))
+			VAR uncostedDays = COUNTROWS(EXCEPT(callDays, costDays))
 			VAR currencies = COUNTROWS(DISTINCT(SELECTCOLUMNS(gatewayLines, "currency", fact_daily_cost[billing_currency])))
 			VAR gatewayCost = SUMX(gatewayLines, fact_daily_cost[cost])
 			RETURN
-			    IF(currencies = 1, DIVIDE(gatewayCost, calls) * 1000)
+			    // Blank unless every call day has gateway cost lines, in one currency: a day with calls
+			    // but no cost yet is null in gold, and its calls never dilute the cost of another day.
+			    IF(ISBLANK(uncostedDays) && currencies = 1, DIVIDE(gatewayCost, calls) * 1000)
 		formatString: #,##0.0000
 		displayFolder: Gateway
 

@@ -320,6 +320,62 @@ def test_every_measure_names_its_gold_answer():
         assert node.expression and node.properties.get("formatString"), name
 
 
+# `Table[column]` or `'Table'[column]`, and a bare `[name]` (a measure, or a role filter's own column).
+_STRING = re.compile(r'"(?:[^"]|"")*"')
+_COMMENT = re.compile(r"//[^\n]*")
+_QUALIFIED = re.compile(r"(?<![\w'\]])(?:'((?:[^']|'')+)'|([A-Za-z_]\w*))\[([^\]]+)\]")
+_BARE = re.compile(r"(?<![\w'\]])\[([^\]]+)\]")
+
+
+def _unresolved(dax: str, columns: dict[str, set[str]], bare: set[str]) -> list[str]:
+    """The references in `dax` that name no column (`T[c]`) or nothing in `bare` (`[x]`).
+
+    String literals and `//` comments are removed first, so their text is never read as a
+    reference. DAX names ignore case, so the comparison does too.
+    """
+    text = _COMMENT.sub("", _STRING.sub('""', dax))
+    lowered = {table.lower(): {c.lower() for c in cols} for table, cols in columns.items()}
+    problems = []
+    for match in _QUALIFIED.finditer(text):
+        table = (match.group(1) or match.group(2)).replace("''", "'")
+        column = match.group(3)
+        if column.lower() not in lowered.get(table.lower(), set()):
+            problems.append(f"{table}[{column}]")
+    for match in _BARE.finditer(_QUALIFIED.sub("", text)):
+        if match.group(1).lower() not in {name.lower() for name in bare}:
+            problems.append(f"[{match.group(1)}]")
+    return problems
+
+
+def _model_columns() -> dict[str, set[str]]:
+    return {name: set(_columns(table)) for name, table in _tables().items()}
+
+
+def test_every_dax_reference_resolves():
+    """Each `Table[column]` in a measure or role filter is a model column; each `[x]` in a measure is a
+    measure, and in a role filter a column of the filtered table."""
+    columns = _model_columns()
+    measure_names = set(_measures())
+    for name, (_, node) in _measures().items():
+        assert _unresolved(node.expression, columns, measure_names) == [], name
+    for permission in _role().all("tablePermission"):
+        assert _unresolved(permission.expression, columns, columns[permission.name]) == [], permission.name
+
+
+@pytest.mark.parametrize(
+    "dax, stale",
+    [
+        ("SUM(fact_daily_cost[costs])", ["fact_daily_cost[costs]"]),
+        ("COUNTROWS(fact_gateway_call) + SUM('fact_gateway_calls'[tokens])", ["fact_gateway_calls[tokens]"]),
+        ("DIVIDE([Tokens], [Calls])", ["[Tokens]"]),
+        ('CALCULATE([Calls], fact_gateway_call[session] = "x[y]")', []),
+        ("[Calls] // not fact_daily_cost[nope]\n+ 0", []),
+    ],
+)
+def test_reference_check_catches_a_stale_reference(dax, stale):
+    assert _unresolved(dax, _model_columns(), set(_measures())) == stale
+
+
 def test_measure_names_never_shadow_a_column():
     """A measure may not share its name with any column in the model (DAX names ignore case)."""
     columns = {column.lower() for table in _tables().values() for column in _columns(table)}
@@ -347,6 +403,9 @@ def test_measures_use_the_answers_constants():
     assert f'<> "{answers.NO_MODEL_BASIS}"' in measures["Estimated cost per result (USD)"]
     assert f'= "{answers.PRICING_CURRENCY}"' in measures["Estimated cost per result (AUD)"]
     assert f'fact_daily_cost[resource_group] = "{GATEWAY_RESOURCE_GROUP}"' in measures["Cost per 1,000 calls"]
+    # A call day with no cost lines blanks the figure (gold's null), never dilutes another day's.
+    assert "COUNTROWS(EXCEPT(callDays, costDays))" in measures["Cost per 1,000 calls"]
+    assert "IF(ISBLANK(uncostedDays) && currencies = 1" in measures["Cost per 1,000 calls"]
 
 
 # --- Identifiers ---------------------------------------------------------------------------------
