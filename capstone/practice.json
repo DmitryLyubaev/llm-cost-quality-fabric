@@ -1,0 +1,107 @@
+[
+  {
+    "id": "t01",
+    "text": "What is project p6's total attributed spend?",
+    "kind": "money",
+    "source": {
+      "function": "lakehouse.answers.cost_per_project",
+      "args": {},
+      "select": {"project": "p6", "billing_currency": "AUD"},
+      "column": "total"
+    }
+  },
+  {
+    "id": "t02",
+    "text": "How much did the shared ReleaseLens resources (releaselens-shared) cost in October 2026?",
+    "kind": "money",
+    "source": {
+      "function": "lakehouse.capstone.answers.spend_for_month",
+      "args": {"month": "2026-10"},
+      "select": {"project": "releaselens-shared", "billing_currency": "AUD"},
+      "column": "total"
+    }
+  },
+  {
+    "id": "t03",
+    "text": "What was the untagged spend in September 2026?",
+    "kind": "money",
+    "source": {
+      "function": "lakehouse.capstone.answers.spend_for_month",
+      "args": {"month": "2026-09"},
+      "select": {"project": "untagged", "billing_currency": "AUD"},
+      "column": "total"
+    }
+  },
+  {
+    "id": "t04",
+    "text": "What success rate did claude-haiku-4-5 reach in the p3-agent study?",
+    "kind": "rate",
+    "source": {
+      "function": "lakehouse.answers.quality_across_models",
+      "args": {},
+      "select": {"study": "p3-agent", "model": "claude-haiku-4-5"},
+      "column": "success_rate"
+    }
+  },
+  {
+    "id": "t05",
+    "text": "What top-1 rate did arm S1 get in the p2-retrieval study?",
+    "kind": "rate",
+    "source": {
+      "function": "lakehouse.answers.quality_across_models",
+      "args": {},
+      "select": {"study": "p2-retrieval", "arm": "S1"},
+      "column": "top1_rate"
+    }
+  },
+  {
+    "id": "t06",
+    "text": "How many failed live checks does project p4 have?",
+    "kind": "count",
+    "source": {
+      "function": "lakehouse.capstone.answers.live_check_counts",
+      "args": {},
+      "select": {"project": "p4", "verdict": "fail"},
+      "column": "n"
+    }
+  },
+  {
+    "id": "t07",
+    "text": "Which projects have a live check that was not run?",
+    "kind": "labels",
+    "source": {
+      "function": "lakehouse.capstone.answers.live_check_counts",
+      "args": {},
+      "select": {"verdict": "not-run"},
+      "column": null
+    }
+  },
+  {
+    "id": "t08",
+    "text": "How many scored results does arm E1 of the p2-retrieval study have?",
+    "kind": "count",
+    "source": {
+      "function": "lakehouse.capstone.answers.eval_count_by_arm",
+      "args": {"study": "p2-retrieval"},
+      "select": {"arm": "E1"},
+      "column": "n"
+    }
+  },
+  {
+    "id": "t09",
+    "text": "What did project p1 cost between 2026-09-28 and 2026-10-02 inclusive?",
+    "kind": "money",
+    "source": {
+      "function": "lakehouse.capstone.answers.cost_by_project_between",
+      "args": {"start": "2026-09-28", "end": "2026-10-02"},
+      "select": {"project": "p1", "billing_currency": "AUD"},
+      "column": "total"
+    }
+  },
+  {
+    "id": "t10",
+    "text": "Which Azure region gave the p1-three-arm study its lowest latency?",
+    "kind": "unanswerable",
+    "source": null
+  }
+]
