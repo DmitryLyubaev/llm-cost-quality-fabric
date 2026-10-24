@@ -8,8 +8,9 @@ A question's `source` names a function (`lakehouse.answers.*`, `lakehouse.gatewa
   value is the set of the selected rows' first column, sorted and de-duplicated, as strings.
 
 The result of each question is `{"value": number | list[str] | None, "currency": str | None,
-"rows": int}`. `currency` is the selected row's `billing_currency` when the answer has one (for a
-set, the one currency its rows share), otherwise None. A question with no source (the
+"rows": int}`. `currency` is the selected row's `billing_currency` when the answer has one, else
+its `actual_currency` (as in `cost_per_result`); for a set, the one currency its rows share;
+otherwise None. A question with no source (the
 unanswerable one) has no expected answer and is left out.
 """
 
@@ -28,7 +29,8 @@ from lakehouse.paths import LakePaths
 # it must not be able to name an arbitrary callable.
 ALLOWED_MODULES = ("lakehouse.answers", "lakehouse.gateway.answers", "lakehouse.capstone.answers")
 MAX_ROWS = 25  # the data agent's answers are capped at 25 rows, so an expected answer is too
-CURRENCY_COLUMN = "billing_currency"
+# The answer's currency column: billing_currency, else actual_currency (cost_per_result), else none.
+CURRENCY_COLUMNS = ("billing_currency", "actual_currency")
 _FIELDS = ("function", "args", "select", "column")
 
 
@@ -128,17 +130,17 @@ def _expected_answer(spark: SparkSession, paths: LakePaths, qid: str, source: So
         raise ValueError(f"question {qid}: column {source.column!r} is not in {frame.columns}")
 
     rows = _select_rows(frame, source, qid)
-    has_currency = CURRENCY_COLUMN in frame.columns
+    currency_column = next((c for c in CURRENCY_COLUMNS if c in frame.columns), None)
     if source.column is not None:
         if len(rows) > 1:
             raise ValueError(f"question {qid}: the selection matches more than one row ({len(rows)}) for a single cell")
         row = rows[0]
-        currency = row[CURRENCY_COLUMN] if has_currency else None
+        currency = row[currency_column] if currency_column else None
         return {"value": _number(row[source.column], qid, source.column), "currency": currency, "rows": 1}
 
     first = frame.columns[0]
     value = sorted({str(row[first]) for row in rows if row[first] is not None})
-    currencies = {row[CURRENCY_COLUMN] for row in rows if row[CURRENCY_COLUMN] is not None} if has_currency else set()
+    currencies = {row[currency_column] for row in rows if row[currency_column] is not None} if currency_column else set()
     return {"value": value, "currency": next(iter(currencies)) if len(currencies) == 1 else None, "rows": len(rows)}
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from lakehouse.capstone.expected import ALLOWED_MODULES, MAX_ROWS, Source, compute_expected, resolve_function
-from lakehouse.capstone.score import KINDS, score
+from lakehouse.capstone.score import KINDS, score_question
 
 ROOT = Path(__file__).resolve().parent.parent
 QUESTIONS = ROOT / "capstone" / "questions.json"
@@ -131,6 +131,32 @@ def test_practice_set_has_10_questions_that_do_not_overlap_the_frozen_set(frozen
     assert not [q["id"] for q in practice if q["source"] and _source_key(q) in sources]
 
 
+def test_no_practice_question_reveals_part_of_a_frozen_label_set(frozen, practice):
+    # a practice question with the same function, the same arguments and the frozen labels
+    # question's filter (or more) answers for one member of that set
+    for f in frozen:
+        if f["kind"] != "labels":
+            continue
+        fsrc = f["source"]
+        for p in practice:
+            psrc = p["source"]
+            if psrc is None or psrc["function"] != fsrc["function"] or psrc["args"] != fsrc["args"]:
+                continue
+            assert not (fsrc["select"] or {}).items() <= (psrc["select"] or {}).items(), (f["id"], p["id"])
+
+
+# The live snapshot is taken after 8 November 2026, so every month asked about must be closed by then.
+LAST_CLOSED_MONTH = "2026-10"
+
+
+def test_every_month_and_date_asked_about_is_closed_at_the_snapshot(frozen, practice):
+    for q in frozen + practice:
+        args = (q["source"] or {}).get("args", {})
+        for key in ("month", "start", "end"):
+            if key in args:
+                assert args[key][:7] <= LAST_CLOSED_MONTH, (q["id"], key, args[key])
+
+
 def test_texts_are_unique_within_each_set(frozen, practice):
     for questions in (frozen, practice):
         texts = [_norm(q["text"]) for q in questions]
@@ -185,14 +211,19 @@ def test_every_required_question_resolves_and_scores_on_the_fixture(spark, loade
         if q["kind"] == "labels":
             assert answer["value"], q["id"]
             assert all(len(label) >= 2 for label in answer["value"]), q["id"]  # one letter matches prose
+            # a pseudo-project in the answer is named as a project in the question
+            for label in answer["value"]:
+                if not re.fullmatch(r"p\d+", label):
+                    assert label in q["text"], (q["id"], label)
         else:
             assert isinstance(answer["value"], int | float), q["id"]
         if q["kind"] == "count":
             assert isinstance(answer["value"], int), q["id"]
-        assert score(_answer_for(answer, q["kind"]), answer, q["kind"]).correct, q["id"]
+        assert score_question(_answer_for(answer, q["kind"]), answer, q).correct, q["id"]
     for q in questions:
         if q["kind"] == "unanswerable":
-            assert score("That is not in the data.", None, "unanswerable").correct
+            assert score_question("That is not in the data.", None, q).correct
+            assert not score_question("It rose from 50% to 60%.", None, q).correct
 
 
 def test_the_optional_gateway_question_resolves_once_its_session_has_run(spark, loaded_lake, frozen):

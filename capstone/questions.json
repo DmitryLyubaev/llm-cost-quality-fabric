@@ -34,7 +34,7 @@
   },
   {
     "id": "q04",
-    "text": "Which projects had any spend in the billing month of September 2026?",
+    "text": "Which projects, counting untagged and releaselens-shared as projects, had any spend in the billing month of September 2026?",
     "kind": "labels",
     "source": {
       "function": "lakehouse.capstone.answers.spend_for_month",

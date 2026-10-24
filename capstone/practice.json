@@ -23,12 +23,12 @@
   },
   {
     "id": "t03",
-    "text": "What was the untagged spend in September 2026?",
+    "text": "What did project p8 spend in the billing month of October 2026?",
     "kind": "money",
     "source": {
       "function": "lakehouse.capstone.answers.spend_for_month",
-      "args": {"month": "2026-09"},
-      "select": {"project": "untagged", "billing_currency": "AUD"},
+      "args": {"month": "2026-10"},
+      "select": {"project": "p8", "billing_currency": "AUD"},
       "column": "total"
     }
   },
@@ -56,12 +56,12 @@
   },
   {
     "id": "t06",
-    "text": "How many failed live checks does project p4 have?",
+    "text": "How many live checks passed for project p8?",
     "kind": "count",
     "source": {
       "function": "lakehouse.capstone.answers.live_check_counts",
       "args": {},
-      "select": {"project": "p4", "verdict": "fail"},
+      "select": {"project": "p8", "verdict": "pass"},
       "column": "n"
     }
   },

@@ -213,6 +213,36 @@ def test_compute_expected_set_currency_when_the_rows_share_one(spark, loaded_lak
     assert result["rows"] == len(result["value"])
 
 
+def test_compute_expected_currency_falls_back_to_actual_currency(spark, loaded_lake):
+    # ruling R3: cost_per_result has no billing_currency, so its actual_currency is the currency
+    q = _question(
+        "q", "lakehouse.answers.cost_per_result", select={"project": "p1", "actual_currency": "AUD"},
+        column="actual_per_result",
+    )
+
+    result = compute_expected(spark, loaded_lake[0], [q])["q"]
+
+    assert result["currency"] == "AUD"
+    assert result["value"] == pytest.approx(4.28 / 6)
+
+
+def test_compute_expected_prefers_billing_currency(spark, loaded_lake, monkeypatch):
+    def both(spark, paths):
+        return spark.createDataFrame([("x", 1.0, "AUD", "USD")], "k string, v double, billing_currency string, actual_currency string")
+
+    name = _fake_answer(monkeypatch, "both", both)
+
+    result = compute_expected(spark, loaded_lake[0], [_question("q", name, select={"k": "x"}, column="v")])["q"]
+
+    assert result["currency"] == "AUD"
+
+
+def test_compute_expected_without_a_currency_column_has_none(spark, loaded_lake):
+    q = _question("q", "lakehouse.capstone.answers.eval_count_by_arm", {"study": "p3-agent"}, {"arm": "gpt"}, "n")
+
+    assert compute_expected(spark, loaded_lake[0], [q])["q"]["currency"] is None
+
+
 def test_compute_expected_skips_a_question_without_a_source(spark, loaded_lake):
     qs = [
         {"id": "u", "text": "unanswerable", "kind": "unanswerable", "source": None},

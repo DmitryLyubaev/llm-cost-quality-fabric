@@ -3,7 +3,16 @@
 import pytest
 
 from lakehouse.capstone import score as score_module
-from lakehouse.capstone.score import KINDS, REFUSAL_PHRASES, Number, Verdict, parse_numbers, score
+from lakehouse.capstone.score import (
+    KINDS,
+    REFUSAL_PHRASES,
+    REFUSAL_VERBS,
+    Number,
+    Verdict,
+    parse_numbers,
+    score,
+    score_question,
+)
 
 
 def _money(value, currency="AUD"):
@@ -14,6 +23,22 @@ def _plain(value):
     return {"value": value, "currency": None, "rows": 1}
 
 
+def _labels(*values):
+    return {"value": list(values), "currency": None, "rows": len(values)}
+
+
+def N(value, percent=False, currency=None, *, marked=None, decimal=None, range=False):  # noqa: A002
+    """A Number, with `marked` defaulting to whether a currency is named and `decimal` to a fraction."""
+    return Number(
+        float(value),
+        percent,
+        currency,
+        marked=currency is not None if marked is None else marked,
+        decimal=(float(value) != int(float(value))) if decimal is None else decimal,
+        range=range,
+    )
+
+
 # --- parse_numbers ---------------------------------------------------------------------------
 
 
@@ -21,34 +46,53 @@ def _plain(value):
     ("text", "want"),
     [
         # Review Focus 1: the four formats
-        ("A$1,234.56", [Number(1234.56, False, "AUD")]),
-        ("98.3%", [Number(98.3, True, None)]),
-        ("1.2k", [Number(1200.0, False, None)]),
-        ("0.0047 USD", [Number(0.0047, False, "USD")]),
+        ("A$1,234.56", [N(1234.56, currency="AUD")]),
+        ("98.3%", [N(98.3, True)]),
+        ("1.2k", [N(1200, decimal=True)]),
+        ("0.0047 USD", [N(0.0047, currency="USD")]),
         # every currency marker
-        ("AU$3.50", [Number(3.5, False, "AUD")]),
-        ("AUD 3.50", [Number(3.5, False, "AUD")]),
-        ("3.50 AUD", [Number(3.5, False, "AUD")]),
-        ("$3.50", [Number(3.5, False, None)]),
-        ("$3.50 AUD", [Number(3.5, False, "AUD")]),
-        ("US$0.02", [Number(0.02, False, "USD")]),
-        ("USD 12", [Number(12.0, False, "USD")]),
-        ("A$ 4.28", [Number(4.28, False, "AUD")]),
+        ("AU$3.50", [N(3.5, currency="AUD")]),
+        ("AUD 3.50", [N(3.5, currency="AUD")]),
+        ("3.50 AUD", [N(3.5, currency="AUD")]),
+        ("$3.50", [N(3.5, marked=True)]),
+        ("$3.50 AUD", [N(3.5, currency="AUD")]),
+        ("US$0.02", [N(0.02, currency="USD")]),
+        ("USD 12", [N(12, currency="USD")]),
+        ("A$ 4.28", [N(4.28, currency="AUD")]),
+        ("€3.50", [N(3.5, currency="EUR")]),
         # separators and suffixes
-        ("1,234,567", [Number(1234567.0, False, None)]),
-        ("2.5M", [Number(2500000.0, False, None)]),
-        ("12K", [Number(12000.0, False, None)]),
-        ("A$1.2k", [Number(1200.0, False, "AUD")]),
-        ("0.5", [Number(0.5, False, None)]),
-        (".75", [Number(0.75, False, None)]),
-        ("-0.25", [Number(-0.25, False, None)]),
-        ("-A$3.00", [Number(-3.0, False, "AUD")]),
-        ("A$-3.00", [Number(-3.0, False, "AUD")]),
-        ("98.3 %", [Number(98.3, True, None)]),
-        ("27 percent", [Number(27.0, True, None)]),
+        ("1,234,567", [N(1234567)]),
+        ("2.5M", [N(2500000, decimal=True)]),
+        ("A$1.2m", [N(1200000, currency="AUD", decimal=True)]),
+        ("12K", [N(12000)]),
+        ("A$1.2k", [N(1200, currency="AUD", decimal=True)]),
+        ("1.5x faster", [N(1.5)]),
+        ("0.5", [N(0.5)]),
+        ("1.0", [N(1, decimal=True)]),
+        (".75", [N(0.75)]),
+        ("-0.25", [N(-0.25)]),
+        ("-A$3.00", [N(-3, currency="AUD", decimal=True)]),
+        ("A$-3.00", [N(-3, currency="AUD", decimal=True)]),
+        # spaced thousands after a currency marker, with plain, no-break and narrow no-break spaces
+        ("A$ 1 234", [N(1234, currency="AUD")]),
+        ("A$1 234.50", [N(1234.5, currency="AUD")]),
+        ("A$ 1 234", [N(1234, currency="AUD")]),
+        ("A$1 234", [N(1234, currency="AUD")]),
+        ("1 234 calls", [N(1), N(234)]),  # without a marker, a space separates numbers
+        # percents
+        ("98.3 %", [N(98.3, True)]),
+        ("27 percent", [N(27, True)]),
+        ("27 per cent", [N(27, True)]),
+        ("27percent", [N(27, True)]),
+        # ranges keep their first end and are flagged
+        ("5-7 checks", [N(5, range=True)]),
+        ("5–7 checks", [N(5, range=True)]),
+        ("A$3.40-A$3.60", [N(3.4, currency="AUD", range=True)]),
         # sentence punctuation is not part of the number
-        ("It spent A$3.50.", [Number(3.5, False, "AUD")]),
-        ("6, 8 and 12", [Number(6.0, False, None), Number(8.0, False, None), Number(12.0, False, None)]),
+        ("It spent A$3.50.", [N(3.5, currency="AUD")]),
+        ("6, 8 and 12", [N(6), N(8), N(12)]),
+        # a month name followed by a count keeps the count
+        ("In October 6 checks failed", [N(6)]),
     ],
 )
 def test_parse_numbers_formats(text, want):
@@ -66,12 +110,17 @@ def test_parse_numbers_formats(text, want):
         "in 2026-10",
         "at 2026-10-09T14:05:00Z",
         "at 14:05",
+        "on 10/25/2026",
         "in October 2026",
         "on 25 October 2026",
+        "on 25 October",
         "on Oct 9, 2026",
         "project 3",
         "the top-1 rate",
+        "the top 1 rate",
         "3rd",
+        "3ms",
+        "1.5xyz",
         "",
     ],
 )
@@ -82,15 +131,17 @@ def test_labels_dates_and_ids_are_not_numbers(text):
 def test_parse_numbers_in_a_sentence_keeps_only_quantities():
     text = "In October 2026 (2026-10), project p3 spent A$3.50 over 12 days; gpt-5.6-luna was 98.3% right."
 
-    assert parse_numbers(text) == [
-        Number(3.5, False, "AUD"),
-        Number(12.0, False, None),
-        Number(98.3, True, None),
-    ]
+    assert parse_numbers(text) == [N(3.5, currency="AUD"), N(12), N(98.3, True)]
 
 
 def test_parse_numbers_normalises_unicode_spaces_and_minus():
-    assert parse_numbers("A$ 1,234.56 and −0.5") == [Number(1234.56, False, "AUD"), Number(-0.5, False, None)]
+    assert parse_numbers("A$ 1,234.56 and −0.5") == [N(1234.56, currency="AUD"), N(-0.5)]
+
+
+def test_a_suffix_does_not_backtrack_into_the_digits():
+    # "1.5x" is 1.5, never 1 (from backtracking off the ".5x")
+    assert [n.value for n in parse_numbers("1.5x")] == [1.5]
+    assert [n.value for n in parse_numbers("2.75xl")] == []
 
 
 # --- money -----------------------------------------------------------------------------------
@@ -123,21 +174,22 @@ def test_money_review_focus_formats():
     assert score("The total is A$1,234.56.", _money(1234.56), "money").correct
     assert score("About A$1.2k", _money(1200.0), "money").correct
     assert score("0.0047 USD per call", _money(0.0047, "USD"), "money").correct
+    assert score("A$ 1 234.56 in all", _money(1234.56), "money").correct
+    assert score("A$1.2m", _money(1_200_000.0), "money").correct
 
 
-def test_money_with_a_different_stated_currency_is_wrong():
+def test_money_in_only_another_currency_is_wrong():
     verdict = score("US$3.50", _money(3.5, "AUD"), "money")
 
     assert not verdict.correct
     assert "currency" in verdict.reason
 
 
-def test_money_with_a_converted_second_figure_is_wrong():
-    # the right AUD figure, plus a conversion to USD that the data cannot support
-    verdict = score("A$3.50 (about US$2.30)", _money(3.5, "AUD"), "money")
-
-    assert not verdict.correct
-    assert "currency" in verdict.reason
+def test_money_ignores_a_figure_in_another_currency():
+    # ruling R4: the US$ conversion is neither a match nor a shotgun figure; the A$ figure decides
+    assert score("A$3.50 (about US$2.30)", _money(3.5, "AUD"), "money").correct
+    assert score("A$3.50, or US$1, US$2 and US$3 at various rates", _money(3.5, "AUD"), "money").correct
+    assert not score("A$3.70 (about US$3.50)", _money(3.5, "AUD"), "money").correct
 
 
 def test_money_with_no_expected_currency_accepts_any_stated_currency():
@@ -148,6 +200,20 @@ def test_money_with_no_expected_currency_accepts_any_stated_currency():
 def test_money_prefers_the_figures_with_a_currency():
     # the day count and the year are not money once a figure carries a currency
     assert score("Over 12 days in 2026, p3 spent A$3.50.", _money(3.5), "money").correct
+
+
+def test_money_prefers_a_bare_dollar_figure_over_plain_numbers():
+    answer = "In 2026, across 10 projects, p3 ran 12 days and spent $3.50"
+
+    assert score(answer, _money(3.5), "money").correct
+    assert not score("Across 10 projects, p3 spent $3.80 over 3.5 days", _money(3.5), "money").correct
+
+
+def test_a_money_range_is_unreadable():
+    verdict = score("Between A$3.40-A$3.60", _money(3.4), "money")
+
+    assert not verdict.correct
+    assert "unreadable" in verdict.reason
 
 
 # --- counts ----------------------------------------------------------------------------------
@@ -167,7 +233,7 @@ def test_count_fails_when_not_exact(answer):
 
 
 def test_count_ignores_percents_and_money():
-    verdict = score("6%, A$6.00", _plain(6), "count")
+    verdict = score("6%, A$6.00, $6", _plain(6), "count")
 
     assert not verdict.correct
     assert "unreadable" in verdict.reason
@@ -175,6 +241,66 @@ def test_count_ignores_percents_and_money():
 
 def test_count_with_a_suffix():
     assert score("1.2k calls", _plain(1200), "count").correct
+
+
+def test_a_count_range_is_unreadable():
+    verdict = score("5-7 checks failed", _plain(5), "count")
+
+    assert not verdict.correct
+    assert "unreadable" in verdict.reason
+
+
+def test_a_month_name_does_not_swallow_the_count():
+    assert score("In October 6 checks failed", _plain(6), "count").correct
+
+
+# --- counts next to a verdict ----------------------------------------------------------------
+
+
+def test_the_count_next_to_the_asked_verdict_decides():
+    assert not score("p7 ran 6 checks; 2 failed", _plain(6), "count", verdict="fail").correct
+    assert score("p7 ran 25 checks; 6 failed", _plain(6), "count", verdict="fail").correct
+    assert score("6 failed and 10 passed", _plain(6), "count", verdict="fail").correct
+    assert score("10 passed, 6 failed", _plain(6), "count", verdict="fail").correct
+    assert not score("6 passed, 10 failed", _plain(6), "count", verdict="fail").correct
+    assert score("6 passed, 10 failed", _plain(6), "count", verdict="pass").correct
+
+
+def test_several_counts_without_the_asked_verdict_are_wrong():
+    verdict = score("p7 ran 25 checks and 6 passed", _plain(6), "count", verdict="fail")
+
+    assert not verdict.correct
+    assert "fail" in verdict.reason
+
+
+def test_one_count_needs_no_verdict_word():
+    assert score("6", _plain(6), "count", verdict="fail").correct
+    assert score("p7 had 6.", _plain(6), "count", verdict="pass").correct
+
+
+def test_several_counts_with_no_verdict_word_at_all_use_the_plain_rule():
+    assert score("p7: 6 of 25 checks", _plain(6), "count", verdict="fail").correct
+
+
+def test_not_run_words():
+    assert score("2 checks were not run and 8 passed", _plain(2), "count", verdict="not-run").correct
+
+
+def test_an_unknown_verdict_raises():
+    with pytest.raises(ValueError, match="verdict"):
+        score("6", _plain(6), "count", verdict="maybe")
+
+
+def test_score_question_passes_the_selected_verdict():
+    question = {
+        "id": "q09",
+        "kind": "count",
+        "source": {"function": "f", "args": {}, "select": {"project": "p7", "verdict": "fail"}, "column": "n"},
+    }
+
+    assert not score_question("p7 ran 6 checks; 2 failed", _plain(6), question).correct
+    assert score_question("p7 had 6 failed checks", _plain(6), question).correct
+    assert score_question("That is not in the data.", None, {"id": "u", "kind": "unanswerable", "source": None}).correct
 
 
 # --- rates -----------------------------------------------------------------------------------
@@ -194,6 +320,7 @@ def test_rate_fails_outside_half_a_point(answer):
 
 def test_rate_reads_a_percent_as_a_fraction():
     assert score("50%", _plain(0.5), "rate").correct
+    assert score("50 per cent", _plain(0.5), "rate").correct
     assert score("0.5", _plain(0.5), "rate").correct
     assert not score("50", _plain(0.5), "rate").correct
 
@@ -202,6 +329,25 @@ def test_rate_zero_and_one():
     assert score("0%", _plain(0.0), "rate").correct
     assert score("100%", _plain(1.0), "rate").correct
     assert score("1.0", _plain(1.0), "rate").correct
+    assert score("0.0", _plain(0.0), "rate").correct
+
+
+def test_rate_never_reads_a_bare_whole_number():
+    verdict = score("E3 scored 0% on its 1 query", _plain(1.0), "rate")
+
+    assert not verdict.correct
+    assert not score("It was 1 of 1", _plain(1.0), "rate").correct
+    assert not score("0 of 2", _plain(0.0), "rate").correct
+
+
+def test_rate_uses_only_percents_when_there_are_any():
+    # the 0.5 (a latency in seconds) is not a rate once the answer states a percent
+    assert not score("98% at 0.5 seconds", _plain(0.5), "rate").correct
+    assert score("98% at 0.5 seconds", _plain(0.98), "rate").correct
+
+
+def test_a_rate_range_is_unreadable():
+    assert not score("between 95%-99%", _plain(0.95), "rate").correct
 
 
 # --- labels ----------------------------------------------------------------------------------
@@ -214,10 +360,14 @@ def test_rate_zero_and_one():
         "P8, P7, P6, P4.",
         "Projects p4 (2 failures), p6 (2), p7 (6) and p8 (2) each had a failed check.",
         "- p4\n- p6\n- p7\n- p8",
+        "Projects 4, 6, 7 and 8.",
+        "p4, p6, p7 and p8; p5 had none.",
+        "Every project except p5: p4, p6, p7 and p8.",
+        "p4, p6, p7 and p8, but not p5.",
     ],
 )
 def test_labels_pass_as_an_equal_set(answer):
-    assert score(answer, {"value": ["p4", "p6", "p7", "p8"], "currency": None, "rows": 4}, "labels").correct
+    assert score(answer, _labels("p4", "p6", "p7", "p8"), "labels").correct
 
 
 @pytest.mark.parametrize(
@@ -226,30 +376,42 @@ def test_labels_pass_as_an_equal_set(answer):
         ("p4, p6 and p7", "missing"),
         ("p4, p5, p6, p7 and p8", "extra"),
         ("p4, p6, p7, p8 and p10", "extra"),
+        ("Projects 4, 5, 6, 7 and 8", "extra"),
     ],
 )
 def test_labels_fail_when_the_sets_differ(answer, why):
-    verdict = score(answer, {"value": ["p4", "p6", "p7", "p8"], "currency": None, "rows": 4}, "labels")
+    verdict = score(answer, _labels("p4", "p6", "p7", "p8"), "labels")
 
     assert not verdict.correct
     assert why in verdict.reason
 
 
+def test_labels_map_project_numbers():
+    assert score("Projects 1 and 4.", _labels("p1", "p4"), "labels").correct
+    assert score("Project 1 and project 4.", _labels("p1", "p4"), "labels").correct
+
+
+def test_labels_negated_mentions_are_not_present():
+    assert score("p1 and p4; p2 had none.", _labels("p1", "p4"), "labels").correct
+    assert score("All of them except p5 and p6: that leaves p1 and p4.", _labels("p1", "p4"), "labels").correct
+    assert not score("p1, p4 and p2.", _labels("p1", "p4"), "labels").correct
+
+
 def test_labels_do_not_read_a_study_name_as_a_project():
-    expected = {"value": ["p1", "p4", "untagged"], "currency": None, "rows": 3}
+    expected = _labels("p1", "p4", "untagged")
 
     assert score("In September 2026: p1, p4 and untagged (p3-agent ran in October).", expected, "labels").correct
 
 
 def test_labels_with_words_and_dashes():
-    expected = {"value": ["releaselens-shared", "untagged"], "currency": None, "rows": 2}
+    expected = _labels("releaselens-shared", "untagged")
 
     assert score("Untagged and ReleaseLens-Shared.", expected, "labels").correct
     assert not score("Untagged only.", expected, "labels").correct
 
 
 def test_labels_with_no_label_are_unreadable():
-    verdict = score("I could not find any.", {"value": ["p4"], "currency": None, "rows": 1}, "labels")
+    verdict = score("I could not find any.", _labels("p4"), "labels")
 
     assert not verdict.correct
     assert "unreadable" in verdict.reason
@@ -300,7 +462,7 @@ def test_no_number_is_unreadable(kind):
 
 def test_an_empty_answer_is_unreadable():
     assert not score("", _money(1.0), "money").correct
-    assert not score("", {"value": ["p1"], "currency": None, "rows": 1}, "labels").correct
+    assert not score("", _labels("p1"), "labels").correct
 
 
 # --- unanswerable ----------------------------------------------------------------------------
@@ -313,9 +475,12 @@ def test_an_empty_answer_is_unreadable():
         "I can't answer that; gold has no version history.",
         "I can’t tell from these tables.",
         "Cannot be determined from the lakehouse.",
+        "I'm unable to compare model versions here.",
         "There is no version change recorded for gpt-5.6-luna.",
         "The model version didn't change during the study.",
         "THE DATA DOES NOT RECORD MORE THAN ONE VERSION.",
+        "I can't say whether it improved: only one version of gpt-5.6-luna was tested.",
+        "Its success rate was 50%, but the data has only one version, so I can't compare.",
     ],
 )
 def test_unanswerable_passes_on_a_refusal_or_caveat(answer):
@@ -329,6 +494,13 @@ def test_unanswerable_passes_on_a_refusal_or_caveat(answer):
         "The success rate rose from 95.0% to 98.3% after the upgrade.",
         "Version 2026-07-09 scored 0.5 and the earlier version scored 0.4.",
         "",
+        # confident answers that merely contain a refusal word
+        "I can't be sure, but it's 42",
+        "It didn't change much: from 95% to 98.3%.",
+        "The rate cannot be called flat: it rose from 95% to 98.3%.",
+        "It didn't change a lot.",
+        "There is no version history, but quality improved after the upgrade.",
+        "The data has only one version: 50% then 60%.",
     ],
 )
 def test_unanswerable_fails_on_an_answer(answer):
@@ -338,13 +510,17 @@ def test_unanswerable_fails_on_an_answer(answer):
     assert "refusal" in verdict.reason
 
 
-def test_refusal_phrases_are_a_fixed_lowercase_list():
-    assert isinstance(REFUSAL_PHRASES, tuple)
-    for phrase in ("not in the data", "can't", "cannot", "no version", "didn't change"):
+def test_refusal_lists_are_fixed_lowercase_tuples():
+    assert isinstance(REFUSAL_PHRASES, tuple) and isinstance(REFUSAL_VERBS, tuple)
+    for phrase in ("not in the data", "no version"):
         assert phrase in REFUSAL_PHRASES
-    assert all(p == p.lower().strip() and p for p in REFUSAL_PHRASES)
-    # a plain number never contains one
-    assert not any(p in "98.3% 0.5 a$3.50 6" for p in REFUSAL_PHRASES)
+    for verb in ("can't", "cannot", "unable to"):
+        assert verb in REFUSAL_VERBS
+    for words in (REFUSAL_PHRASES, REFUSAL_VERBS, score_module.REFUSAL_OBJECTS, score_module.CHANGE_WORDS):
+        assert all(p == p.lower().strip() and p for p in words)
+    # a plain numeric answer is never a refusal
+    assert not score("98.3%", None, "unanswerable").correct
+    assert not score("A$3.50", None, "unanswerable").correct
 
 
 # --- the contract ----------------------------------------------------------------------------
