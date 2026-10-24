@@ -154,7 +154,7 @@ def test_failover_minutes_are_secondary_answers():
 
 def test_token_spike_threshold_is_a_let_at_the_top():
     code = _code(QUERIES_DIR / "token_spike_minutes.kql")
-    assert code.strip().splitlines()[0] == "let threshold = 5000;"
+    assert code.strip().splitlines()[0] == "let threshold = 8000;"
     assert re.search(r"sum\(tokens\)", code)
     assert re.search(r">\s*threshold\b", code)
     assert re.search(r"by\s+minute\s*=\s*bin\(event_time, 1m\)\s*,\s*caller|by\s+caller\s*,\s*minute", code)

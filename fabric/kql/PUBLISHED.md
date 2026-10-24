@@ -14,7 +14,7 @@ row's ingestion time, and `first_ingested`, the earliest ingestion time of any c
 | `tokens_per_minute_per_caller` | Tokens consumed per caller per minute | `queries/tokens_per_minute_per_caller.kql` |
 | `session_counts` | Requests (distinct `request_id`, exact) by session and caller | `queries/session_counts.kql` |
 | `failover_minutes` | Minutes with at least one call answered by the secondary backend | `queries/failover_minutes.kql` |
-| `token_spike_minutes` | Caller-minutes whose tokens exceed the threshold (5000 here; set from the session plan when deployed) | `queries/token_spike_minutes.kql` |
+| `token_spike_minutes` | Caller-minutes whose tokens exceed the threshold (8000 here, set from the 9 October 2026 gateway traffic) | `queries/token_spike_minutes.kql` |
 
 The delay can be negative if the gateway clock runs ahead of the ingestion clock; `first_ingested` minus
 `event_time` is not clamped, so a negative p50 or p95 (or a negative max, if every call is affected) would show the skew

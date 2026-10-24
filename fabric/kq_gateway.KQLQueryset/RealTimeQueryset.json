@@ -43,7 +43,7 @@
       },
       {
         "id": "30fc036b-7b07-4cb3-b619-4a1f35ba9c4b",
-        "content": "let threshold = 5000;\n// Caller-minutes whose summed tokens exceed the threshold (the Activator rule's condition).\nGatewayCalls()\n| where isnotnull(tokens)\n| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller\n| where tokens > threshold\n| order by minute asc, caller asc\n",
+        "content": "let threshold = 8000;\n// Caller-minutes whose summed tokens exceed the threshold (the Activator rule's condition).\nGatewayCalls()\n| where isnotnull(tokens)\n| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller\n| where tokens > threshold\n| order by minute asc, caller asc\n",
         "title": "token_spike_minutes",
         "dataSourceId": "de3a8075-7dfe-4c77-b711-a042e0d3ebbc"
       },
