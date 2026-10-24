@@ -7,6 +7,8 @@ The UPNs here are made up (`example.test`); the check must never put one in its 
 import copy
 import re
 from datetime import date
+from decimal import Decimal
+from fractions import Fraction
 
 import pytest
 from pyspark.sql import functions as F
@@ -15,8 +17,18 @@ from lake_helpers import copy_lake
 from lakehouse import answers, semantic
 from lakehouse.gateway.answers import cost_per_gateway_call
 from lakehouse.gateway.build import FACT_GATEWAY_CALL_SCHEMA, GOLD_TABLE
+from lakehouse.gold.build import PROJECTS
 from lakehouse.security import USER_PROJECT_SCHEMA
-from lakehouse.semantic import KEYS, MEASURE_NAMES, QUERIES, QUERY_COLUMNS, Mismatch, compare
+from lakehouse.semantic import (
+    KEYS,
+    MEASURE_NAMES,
+    QUERIES,
+    QUERY_COLUMNS,
+    UNTAGGED_COST,
+    UNTAGGED_QUERY,
+    Mismatch,
+    compare,
+)
 from test_semantic_model import _measures, _model_columns, _unresolved
 
 ANSWERS = ["cost_per_project", "quality_across_models", "cost_per_result", "cost_per_gateway_call"]
@@ -109,6 +121,32 @@ def test_compare_text_must_match_exactly():
                    ["project"]) == [Mismatch("r", ("p1",), "fx_month", "2026-10", "2026-09")]
 
 
+def test_compare_takes_a_decimal_as_a_float():
+    assert compare("cost_per_project", [_row(total=10.0)], [_row(total=Decimal("10.004"))], KEY) == []
+    assert compare("cost_per_project", [_row(total=Decimal("10.0"))], [_row(total=10.004)], KEY) == []
+    assert len(compare("cost_per_project", [_row(total=10.0)], [_row(total=Decimal("10.01"))], KEY)) == 1
+    assert compare("cost_per_project", [_row(total=Decimal("0"))], [_row(total=None)], KEY) == []
+
+
+def test_compare_takes_any_real_number():
+    assert compare("cost_per_project", [_row(total=1 / 3)], [_row(total=Fraction(1, 3))], KEY) == []
+    assert len(compare("cost_per_project", [_row(total=0.5)], [_row(total=Fraction(1, 3))], KEY)) == 1
+
+
+def test_compare_takes_gold_nan_as_null():
+    assert compare("cost_per_project", [_row(total=float("nan"))], [_row(total=None)], KEY) == []
+    assert len(compare("cost_per_project", [_row(total=float("nan"))], [_row(total=0.0)], KEY)) == 1
+
+
+def test_compare_takes_numpy_scalars():
+    numpy = pytest.importorskip("numpy")
+    keys = ["study"]
+    assert compare("q", [{"study": "s", "n": 3}], [{"study": "s", "n": numpy.int64(3)}], keys) == []
+    assert len(compare("q", [{"study": "s", "n": 3}], [{"study": "s", "n": numpy.int64(4)}], keys)) == 1
+    assert compare("q", [{"study": "s", "x": numpy.float64("nan")}], [{"study": "s", "x": None}], keys) == []
+    assert compare("q", [{"study": "s", "x": 0.25}], [{"study": "s", "x": numpy.float64(0.252)}], keys) == []
+
+
 def test_compare_a_duplicate_key_differs():
     expected = [_row()]
     actual = [_row(), _row()]
@@ -194,6 +232,13 @@ def test_every_dax_reference_in_the_queries_resolves(name):
     assert _unresolved(query, columns, set(_measures()) | defined | added) == []
 
 
+def test_untagged_query_reads_the_untagged_measure_only():
+    assert UNTAGGED_QUERY.lstrip().startswith("EVALUATE")
+    assert _unresolved(UNTAGGED_QUERY, _model_columns(), set(_measures()) | {"total"}) == []
+    assert '"total", [Untagged cost]' in UNTAGGED_QUERY
+    assert UNTAGGED_COST not in QUERIES  # owner only, and not one of the four answers
+
+
 def test_query_measures_never_reuse_a_model_name():
     names = {n.lower() for n in _measures()}
     names |= {column.lower() for table in _model_columns().values() for column in table}
@@ -205,10 +250,15 @@ def test_query_measures_never_reuse_a_model_name():
 def test_named_measures_exist_in_the_model():
     measures = _measures()
     for name, mapping in MEASURE_NAMES.items():
-        assert set(mapping) <= set(QUERY_COLUMNS[name]) | set(semantic.compared_columns(name)), name
+        if name == UNTAGGED_COST:
+            assert mapping == {"total": "Untagged cost"}
+            query = UNTAGGED_QUERY
+        else:
+            assert set(mapping) <= set(QUERY_COLUMNS[name]) | set(semantic.compared_columns(name)), name
+            query = QUERIES[name]
         for measure in mapping.values():
             assert measure in measures, measure
-            assert f"[{measure}]" in QUERIES[name], measure
+            assert f"[{measure}]" in query, measure
 
 
 def test_cost_query_sums_aud_only_through_the_measure():
@@ -226,7 +276,7 @@ def test_gateway_query_takes_no_session_text():
 # --- the gateway rows ------------------------------------------------------------------------
 
 
-def _gateway_lake(spark, paths):
+def _write_gateway_calls(spark, paths):
     calls = [
         ("2026-11-12T01:00:00Z", "req-01", SESSION, 100, False),
         ("2026-11-12T02:00:00Z", "req-02", SESSION, None, True),
@@ -243,6 +293,10 @@ def _gateway_lake(spark, paths):
     columns = [F.col(f.name).cast(f.dataType) if f.name in frame.columns else F.lit(None).cast(f.dataType).alias(f.name)
                for f in FACT_GATEWAY_CALL_SCHEMA]
     frame.select(*columns).write.format("delta").mode("overwrite").save(paths.table("gold", GOLD_TABLE))
+
+
+def _gateway_lake(spark, paths):
+    _write_gateway_calls(spark, paths)
     spark.createDataFrame(
         [(date(2026, 11, 12), "rg-releaselens-gateway", 4.0, "AUD", "p4")],
         "cost_date date, resource_group string, cost double, billing_currency string, project string",
@@ -289,31 +343,50 @@ def checked_lake(spark, loaded_lake, tmp_path_factory):
     return lake
 
 
+def _figures_blank(row, keys):
+    """True when every figure is 0 or None: SUMMARIZECOLUMNS leaves such a row out."""
+    return all(value is None or (isinstance(value, (int, float)) and value == 0)
+               for column, value in row.items() if column not in keys)
+
+
 class FakeModel:
     """`evaluate(dax, user)` over gold's answers, in the shape the DAX queries return them.
 
-    As a user it keeps only that user's projects, as the `ProjectLead` role does, unless the user
-    is in `leaks`. `tamper(name, rows, user)` may change the rows before they are served.
+    As DAX would, it leaves out rows whose figures are all 0 or None, and serves one quality row
+    with the deployment's version blank and the study's recorded version set (`recorded_only`), so
+    the coalescing runs end to end. As a user it keeps only that user's projects, as the
+    `ProjectLead` role does, unless the user is in `leaks`. `tamper(name, rows, user)` may change
+    the rows before they are served.
     """
 
-    def __init__(self, spark, paths, sessions=()):
+    def __init__(self, spark, paths, sessions=(), access=ACCESS):
         self.study_projects = {
             r["study"]: r["project"]
             for r in spark.read.format("delta").load(paths.table("gold", "dim_study")).collect()
         }
         self.access = {}
-        for upn, project in ACCESS:
+        for upn, project in access:
             self.access.setdefault(upn, set()).add(project)
         self.rows = {}
+        self.recorded_only = None
         for name in ANSWERS:
             rows = semantic.gold_rows(spark, paths, name, list(sessions))
             if name == "cost_per_project":  # `Cost (AUD)` sums AUD lines only
                 rows = [r for r in rows if r["billing_currency"] == "AUD"]
+                self.untagged = sum(r["total"] for r in rows if r["project"] == "untagged") or None
+            rows = [r for r in rows if not _figures_blank(r, KEYS[name])]
             if name == "quality_across_models":
-                rows = [{**r, "dim_model_version": r["model_version"], "recorded_model_version": None} for r in rows]
+                shaped = []
                 for r in rows:
-                    del r["model_version"]
+                    version = r.pop("model_version")
+                    if self.recorded_only is None and version is not None:
+                        self.recorded_only = (r["study"], r["arm"], version)
+                        shaped.append({**r, "dim_model_version": None, "recorded_model_version": version})
+                    else:
+                        shaped.append({**r, "dim_model_version": version, "recorded_model_version": None})
+                rows = shaped
             self.rows[name] = rows
+        self.rows[UNTAGGED_COST] = [{"total": self.untagged}]
         self.calls = []
         self.leaks = set()
         self.tamper = None
@@ -322,7 +395,8 @@ class FakeModel:
         return self.study_projects.get(row["study"]) if name == "quality_across_models" else row.get("project")
 
     def __call__(self, dax, user):
-        name = next(n for n, q in QUERIES.items() if q == dax)
+        queries = {**QUERIES, UNTAGGED_COST: UNTAGGED_QUERY}
+        name = next(n for n, q in queries.items() if q == dax)
         self.calls.append((name, user))
         rows = copy.deepcopy(self.rows[name])
         if user is not None and user not in self.leaks:
@@ -344,6 +418,32 @@ def model(fake_model):
     return fake
 
 
+@pytest.fixture(scope="module")
+def gateway_checked_lake(spark, checked_lake, tmp_path_factory):
+    """The checked lake with gateway calls for SESSION (and another session) in gold."""
+    lake = copy_lake(checked_lake, tmp_path_factory.mktemp("gateway_checked"))
+    _write_gateway_calls(spark, lake)
+    return lake
+
+
+def _lake_with_access(spark, base, target, access):
+    lake = copy_lake(base, target)
+    spark.createDataFrame(access, USER_PROJECT_SCHEMA).write.format("delta").mode("overwrite").save(
+        lake.table("security", "user_project")
+    )
+    return lake
+
+
+def _projects_without_data(model):
+    """Projects with no row in any answer the leads see (and not the two always-present ones)."""
+    seen = {model.project_of(name, r) for name in ("cost_per_project", "quality_across_models")
+            for r in model.rows[name]}
+    seen |= {r["project"] for r in model.rows["cost_per_result"]}
+    empty = [p for p, _ in PROJECTS if p not in seen and p not in ("untagged", "releaselens-shared")]
+    assert len(empty) >= 2, empty
+    return empty
+
+
 def _no_upn(detail):
     assert "@" not in detail
     assert "lead.one" not in detail and "lead.two" not in detail and "example.test" not in detail
@@ -355,10 +455,12 @@ def test_check_passes_when_the_model_serves_gold(spark, checked_lake, model):
     assert result.passed, result.detail
     assert result.name == "model_matches_gold"
     _no_upn(result.detail)
-    assert "p1" in result.detail and "p2, p3" in result.detail
+    assert "the lead of p1: " in result.detail and "the lead of p2, p3: " in result.detail
+    assert "nothing compared" not in result.detail
     assert "cost_per_gateway_call skipped" in result.detail
+    assert model.recorded_only is not None  # a quality row matched only through the recorded version
     owner = [name for name, user in model.calls if user is None]
-    assert owner == ["cost_per_project", "quality_across_models", "cost_per_result"]
+    assert owner == [UNTAGGED_COST, "cost_per_project", "quality_across_models", "cost_per_result"]
     # as each lead, only the two answers whose figures do not depend on lines the lead cannot see
     by_user = {}
     for name, user in model.calls:
@@ -367,12 +469,99 @@ def test_check_passes_when_the_model_serves_gold(spark, checked_lake, model):
     assert by_user == {upn: ["cost_per_project", "quality_across_models"] for upn in (LEAD_ONE, LEAD_TWO)}
 
 
-def test_check_with_sessions_compares_the_gateway_answer(spark, checked_lake, model):
-    result = semantic.check_model_matches_gold(spark, checked_lake, model, [SESSION])
+def test_check_with_sessions_compares_the_gateway_answer(spark, gateway_checked_lake):
+    model = FakeModel(spark, gateway_checked_lake, sessions=[SESSION])
+    assert model.rows["cost_per_gateway_call"]  # there is something to compare
+
+    result = semantic.check_model_matches_gold(spark, gateway_checked_lake, model, [SESSION, SESSION])
 
     assert result.passed, result.detail
     assert "skipped" not in result.detail
     assert ("cost_per_gateway_call", None) in model.calls
+
+
+def test_check_fails_on_a_tampered_gateway_figure(spark, gateway_checked_lake):
+    model = FakeModel(spark, gateway_checked_lake, sessions=[SESSION])
+
+    def tamper(name, rows, user):
+        if name == "cost_per_gateway_call":
+            rows[0]["refused"] = (rows[0]["refused"] or 0) + 1
+        return rows
+
+    model.tamper = tamper
+    result = semantic.check_model_matches_gold(spark, gateway_checked_lake, model, [SESSION])
+
+    assert not result.passed
+    assert "measure 'Refused by gateway' (refused)" in result.detail
+
+
+def test_check_fails_on_a_session_with_no_gold_calls(spark, gateway_checked_lake):
+    """Minor 1: a mistyped session must not pass with nothing compared."""
+    model = FakeModel(spark, gateway_checked_lake, sessions=[SESSION])
+
+    result = semantic.check_model_matches_gold(spark, gateway_checked_lake, model, [SESSION, "p10-2026-11-21"])
+
+    assert not result.passed
+    assert "session 'p10-2026-11-21' has no calls in gold fact_gateway_call" in result.detail
+    assert SESSION + "'" not in result.detail  # the real session is fine
+
+
+def test_check_fails_on_a_wrong_untagged_cost(spark, checked_lake, model):
+    """Minor 2: `Untagged cost` is evaluated as the owner against gold's untagged AUD total."""
+    def tamper(name, rows, user):
+        if name == UNTAGGED_COST:
+            rows[0]["total"] = (rows[0]["total"] or 0) + 2.0
+        return rows
+
+    model.tamper = tamper
+    result = semantic.check_model_matches_gold(spark, checked_lake, model, [])
+
+    assert not result.passed
+    assert "untagged_cost measure 'Untagged cost' (total) at the whole model" in result.detail
+
+
+def test_check_fails_when_a_lead_sees_nothing_of_their_projects(spark, checked_lake, model):
+    """I-1: a lead whose queries return no rows while the owner has rows in their projects fails."""
+    def tamper(name, rows, user):
+        return [] if user == LEAD_ONE else rows
+
+    model.tamper = tamper
+    result = semantic.check_model_matches_gold(spark, checked_lake, model, [])
+
+    assert not result.passed
+    assert "the lead of p1: cost_per_project measure 'Cost (AUD)' (total)" in result.detail
+    assert ", lead None" in result.detail
+    _no_upn(result.detail)
+
+
+def test_check_fails_when_no_lead_compared_a_row(spark, checked_lake, fake_model, tmp_path):
+    """I-1: every lead's projects hold no data, so nothing was compared as a lead: the check fails."""
+    first, second = _projects_without_data(fake_model)[:2]
+    access = [(LEAD_ONE, first), (LEAD_TWO, second)]
+    lake = _lake_with_access(spark, checked_lake, tmp_path / "empty_leads", access)
+    model = FakeModel(spark, lake, access=access)
+
+    result = semantic.check_model_matches_gold(spark, lake, model, [])
+
+    assert not result.passed
+    assert "no lead compared a row" in result.detail
+    assert f"the lead of {first}" in result.detail and f"the lead of {second}" in result.detail
+    _no_upn(result.detail)
+
+
+def test_check_notes_a_lead_with_nothing_compared_and_passes(spark, checked_lake, fake_model, tmp_path):
+    """I-1: one lead compares rows and another has none; it passes, and the note names the second."""
+    empty = _projects_without_data(fake_model)[0]
+    access = [(LEAD_ONE, "p1"), (LEAD_TWO, empty)]
+    lake = _lake_with_access(spark, checked_lake, tmp_path / "one_empty_lead", access)
+    model = FakeModel(spark, lake, access=access)
+
+    result = semantic.check_model_matches_gold(spark, lake, model, [])
+
+    assert result.passed, result.detail
+    assert f"nothing compared for the lead of {empty} (no rows in their projects)" in result.detail
+    assert "the lead of p1: " in result.detail and "the lead of p1: 0 row(s)" not in result.detail
+    _no_upn(result.detail)
 
 
 def test_check_fails_on_a_tampered_figure_naming_the_measure_and_key(spark, checked_lake, model):

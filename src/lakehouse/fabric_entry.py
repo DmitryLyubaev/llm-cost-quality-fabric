@@ -263,7 +263,8 @@ def check_model(context: dict, sessions: str = "") -> dict:
     skips the gateway answer. A failed check raises `QualityCheckFailed`. Returns the sessions and
     the check, JSON-ready; neither ever holds a UPN.
     """
-    names = [name.strip() for name in (sessions or "").split(",") if name.strip()]
+    # stripped, blanks dropped, and each name once (in the order given)
+    names = list(dict.fromkeys(name.strip() for name in (sessions or "").split(",") if name.strip()))
     paths = fabric_paths(context)
     spark = get_active_spark()
     # As run_load does: dates and cost_per_result's month are cut in UTC.

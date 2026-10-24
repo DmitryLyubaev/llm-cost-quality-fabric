@@ -333,6 +333,11 @@ def test_check_model_calls_evaluate_dax_as_the_owner_then_as_a_user(model_check)
     json.dumps(summary)
 
 
+def test_check_model_passes_each_session_once(model_check):
+    fabric_entry.check_model(CONTEXT, "p10-a, p10-b,p10-a , p10-b")
+    assert model_check["sessions"] == ["p10-a", "p10-b"]
+
+
 @pytest.mark.parametrize("sessions", ["", "  ", " , "])
 def test_check_model_with_no_sessions_passes_an_empty_list(model_check, sessions):
     fabric_entry.check_model(CONTEXT, sessions)

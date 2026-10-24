@@ -19,14 +19,18 @@ rest runs offline.
 """
 
 import math
+import numbers
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal
 
 from pyspark.sql import SparkSession
 
 from lakehouse import answers
+from lakehouse.attribution import UNTAGGED
 from lakehouse.checks import CheckResult
 from lakehouse.gateway.answers import GATEWAY_RESOURCE_GROUP, cost_per_gateway_call
+from lakehouse.gateway.build import GOLD_TABLE as GATEWAY_GOLD_TABLE
 from lakehouse.paths import LakePaths
 from lakehouse.security import USER_PROJECT_LAYER, USER_PROJECT_TABLE
 
@@ -242,6 +246,11 @@ KEYS: dict[str, list[str]] = {
     COST_PER_RESULT: ["project", "actual_currency"],
     COST_PER_GATEWAY_CALL: ["session", "call_date", "billing_currency"],
 }
+# `Untagged cost`, as the owner only: one figure, gold's `untagged` AUD total in cost per project.
+UNTAGGED_COST = "untagged_cost"
+UNTAGGED_MEASURE = "Untagged cost"
+UNTAGGED_QUERY = f'EVALUATE\nROW("total", [{UNTAGGED_MEASURE}])\n'
+
 # answer column -> the model measure it is compared with, for the failure detail
 MEASURE_NAMES: dict[str, dict[str, str]] = {
     COST_PER_PROJECT: {"total": "Cost (AUD)"},
@@ -259,6 +268,7 @@ MEASURE_NAMES: dict[str, dict[str, str]] = {
         "tokens_per_call": "Tokens per call",
         "cost_per_1000_calls": "Cost per 1,000 calls",
     },
+    UNTAGGED_COST: {"total": UNTAGGED_MEASURE},
 }
 
 
@@ -285,8 +295,21 @@ class Mismatch:
     actual: object
 
 
+def _plain(value):
+    """A number as int (an integral type: a count, kept exact) or float (any other real, Decimal
+    included), and NaN as None, so the tolerance and blank rules apply whatever type a side uses."""
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, numbers.Integral):  # int, numpy.int64
+        return int(value)
+    if isinstance(value, (numbers.Real, Decimal)):  # float, numpy.float64, Fraction, Decimal
+        value = float(value)
+        return None if math.isnan(value) else value
+    return value
+
+
 def _blank(value) -> bool:
-    return value is None or (isinstance(value, float) and math.isnan(value))
+    return _plain(value) is None
 
 
 def _number(value) -> bool:
@@ -294,6 +317,7 @@ def _number(value) -> bool:
 
 
 def _same(expected, actual) -> bool:
+    expected, actual = _plain(expected), _plain(actual)
     if _blank(expected) and _blank(actual):
         return True
     if _blank(actual):  # a DAX blank, a missing column or a missing row: equal only to gold 0
@@ -311,7 +335,7 @@ def _index(rows: list[dict], keys: list[str]) -> tuple[dict[tuple, dict], dict[t
     index: dict[tuple, dict] = {}
     counts: dict[tuple, int] = {}
     for row in rows:
-        key = tuple(None if _blank(row.get(k)) else row.get(k) for k in keys)
+        key = tuple(_plain(row.get(k)) for k in keys)
         counts[key] = counts.get(key, 0) + 1
         index.setdefault(key, row)
     return index, counts
@@ -394,8 +418,8 @@ def shape_rows(answer: str, rows: list[dict], sessions: list[str] | None = None)
 def _describe(mismatch: Mismatch, expected: str = "gold", actual: str = "model") -> str:
     """One difference: the answer, the measure (or column), the key and both values, each side
     named by `expected` and `actual`."""
-    keys = KEYS[mismatch.answer]
-    where = ", ".join(f"{k}={v}" for k, v in zip(keys, mismatch.key))
+    keys = KEYS.get(mismatch.answer, [])
+    where = ", ".join(f"{k}={v}" for k, v in zip(keys, mismatch.key)) or "the whole model"
     measure = MEASURE_NAMES.get(mismatch.answer, {}).get(mismatch.column)
     if mismatch.column == DUPLICATE_KEY:
         return (
@@ -414,6 +438,18 @@ def _other_currencies(rows: list[dict]) -> list[str]:
         for r in rows
         if r["billing_currency"] not in (AUD, None)
     ]
+
+
+def _keys(rows: list[dict], keys: list[str]) -> set[tuple]:
+    return {tuple(_plain(row.get(k)) for k in keys) for row in rows}
+
+
+def _untagged(expected: list[dict], evaluate: Callable[[str, str | None], list[dict]]) -> list[str]:
+    """`Untagged cost` as the owner against gold's `untagged` AUD total (0 when gold has no such row)."""
+    gold = sum(r["total"] or 0.0 for r in expected if r["project"] == UNTAGGED and r["billing_currency"] == AUD)
+    rows = evaluate(UNTAGGED_QUERY, None)
+    model = rows[0].get("total") if rows else None
+    return [_describe(m) for m in compare(UNTAGGED_COST, [{"total": gold}], [{"total": model}], [])]
 
 
 def _leads(spark: SparkSession, paths: LakePaths) -> list[tuple[str, str, set[str]]]:
@@ -445,12 +481,16 @@ def check_model_matches_gold(
     """Every query, as the owner, equals its gold answer; as each lead, only their projects show.
 
     `evaluate(dax, user)` runs a query as the owner when `user` is None, else as that UPN, and
-    returns plain dicts named as `QUERY_COLUMNS`. With no `sessions` the gateway answer is skipped,
-    and the detail says so. As each user in `security.user_project`, cost per project and quality
-    across models (`USER_ANSWERS`) may show only that user's projects, with the owner's figures for
-    them. An empty access table fails: no lead could be checked. Leads are named by their projects;
-    no UPN, and no error text (which may hold one), ever reaches the detail.
+    returns plain dicts named as `QUERY_COLUMNS`. As the owner, `Untagged cost` (`UNTAGGED_QUERY`)
+    must also equal gold's `untagged` AUD total. With no `sessions` the gateway answer is skipped,
+    and the detail says so; a named session with no gold calls fails (a mistyped name would otherwise
+    compare nothing). As each user in `security.user_project`, cost per project and quality across
+    models (`USER_ANSWERS`) may show only that user's projects, with the owner's figures for them.
+    The rows compared are counted per lead: a lead with none is named in a note, and the check fails
+    when no lead compared a row, as it does for an empty access table. Leads are named by their
+    projects; no UPN, and no error text (which may hold one), ever reaches the detail.
     """
+    sessions = list(dict.fromkeys(sessions))  # a name given twice would duplicate its rows
     problems: list[str] = []
     notes: list[str] = []
     owner: dict[str, list[dict]] = {}
@@ -461,6 +501,14 @@ def check_model_matches_gold(
         expected = gold_rows(spark, paths, answer, sessions)
         if answer == COST_PER_PROJECT:
             problems.extend(_other_currencies(expected))
+            problems.extend(_untagged(expected, evaluate))
+        if answer == COST_PER_GATEWAY_CALL:  # a mistyped session would otherwise pass with nothing compared
+            found = {row["session"] for row in expected}
+            problems.extend(
+                f"{COST_PER_GATEWAY_CALL}: session {name!r} has no calls in gold {GATEWAY_GOLD_TABLE}"
+                for name in sessions
+                if name not in found
+            )
         owner[answer] = shape_rows(answer, evaluate(dax, None), sessions)
         problems.extend(_describe(m) for m in compare(answer, expected, owner[answer], KEYS[answer]))
 
@@ -472,7 +520,9 @@ def check_model_matches_gold(
     def project_of(answer: str, row: dict) -> str | None:
         return study_projects.get(row["study"]) if answer == QUALITY_ACROSS_MODELS else row["project"]
 
+    compared: dict[str, int] = {}  # per lead, the rows compared (keys on either side)
     for label, upn, projects in leads:
+        compared[label] = 0
         for answer in USER_ANSWERS:
             try:
                 rows = shape_rows(answer, evaluate(QUERIES[answer], upn))
@@ -484,8 +534,16 @@ def check_model_matches_gold(
                 problems.append(f"{label}: {answer} shows {', '.join(foreign)}, outside their projects")
             own = [r for r in owner[answer] if project_of(answer, r) in projects]
             visible = [r for r in rows if project_of(answer, r) in projects]
+            compared[label] += len(_keys(own, KEYS[answer]) | _keys(visible, KEYS[answer]))
             differences = compare(answer, own, visible, KEYS[answer])
             problems.extend(f"{label}: {_describe(m, 'owner', 'lead')}" for m in differences)
+    # A lead with no rows in their projects passes with nothing compared, so it is named; when no lead
+    # compared a row, the access filter was never exercised, and the check fails.
+    empty = [label for label, count in compared.items() if count == 0]
+    if leads and len(empty) == len(leads):
+        problems.append("no lead compared a row: " + "; ".join(empty) + " (no rows in their projects)")
+    elif empty:
+        notes.append("nothing compared for " + "; ".join(empty) + " (no rows in their projects)")
 
     if problems:
         listed = problems[:MAX_REPORTED]
@@ -494,6 +552,6 @@ def check_model_matches_gold(
         detail = f"{len(problems)} difference(s): " + "; ".join(listed + notes)
         return CheckResult(CHECK_NAME, False, detail)
     checked = ", ".join(owner)
-    who = "; ".join(label for label, _, _ in leads)
-    detail = f"the model matches gold as the owner ({checked}) and as {len(leads)} lead(s) ({who})"
+    who = "; ".join(f"{label}: {compared[label]} row(s)" for label, _, _ in leads)
+    detail = f"the model matches gold as the owner ({checked}, {UNTAGGED_COST}) and as {len(leads)} lead(s) ({who})"
     return CheckResult(CHECK_NAME, True, "; ".join([detail, *notes]))
