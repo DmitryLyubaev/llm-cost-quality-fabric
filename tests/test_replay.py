@@ -182,7 +182,7 @@ def test_a_failing_retry_after_a_full_batch_raises_and_closes_the_sender():
 class _FakeAzure:
     """Stands in for azure.eventhub and azure.identity, and records what the real sender does."""
 
-    def __init__(self, monkeypatch):
+    def __init__(self, monkeypatch, fail_client=False):
         outer = self
         self.clients, self.credentials, self.bodies = [], [], []
 
@@ -199,6 +199,8 @@ class _FakeAzure:
 
         class EventHubProducerClient:
             def __init__(self, **kwargs):
+                if fail_client:
+                    raise RuntimeError("cannot build the client")
                 self.kwargs = kwargs
                 self.batches, self.closed = [], False
                 outer.clients.append(self)
@@ -243,6 +245,45 @@ def test_the_real_client_wrapper_builds_the_client_and_forwards_the_events_and_c
     assert [len(batch.items) for batch in client.batches] == [3]
     assert client.closed
     assert credential.closed
+
+
+def test_the_credential_is_closed_when_the_client_constructor_raises(monkeypatch):
+    fake = _FakeAzure(monkeypatch, fail_client=True)
+    with pytest.raises(RuntimeError):
+        replay.send(replay.make_events(3, START, seed=1), "ns1", "hub1")
+    (credential,) = fake.credentials
+    assert credential.closed
+    assert fake.clients == []
+
+
+def test_a_missing_extra_import_raises_the_dedicated_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "azure.eventhub", None)  # makes `import azure.eventhub` raise ImportError
+    with pytest.raises(replay.MissingExtraError):
+        replay._make_sender("ns1", "hub1")
+
+
+def test_send_reports_the_events_sent_before_a_failure():
+    class FailsOnSecondBatch(FakeSender):
+        def send_batch(self, batch):
+            if self.sent:
+                raise RuntimeError("boom")
+            super().send_batch(batch)
+
+    sender = FailsOnSecondBatch(capacity=4)
+    with pytest.raises(RuntimeError) as error_info:
+        replay.send(replay.make_events(10, START, seed=1), "ns", "hub", sender=sender)
+    assert error_info.value.events_sent == 4
+    assert sender.closed
+
+
+def test_send_reports_zero_when_the_first_batch_fails():
+    class Failing(FakeSender):
+        def send_batch(self, batch):
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError) as error_info:
+        replay.send(replay.make_events(3, START, seed=1), "ns", "hub", sender=Failing())
+    assert error_info.value.events_sent == 0
 
 
 def _cli_env(monkeypatch, sender):
@@ -290,7 +331,46 @@ def test_an_unexpected_error_prints_only_the_type_name(monkeypatch, capsys):
     assert replay.main([]) == 1
     out, err = capsys.readouterr()
     assert out == ""
-    assert err.strip() == "KeyError"
+    assert err.splitlines()[0] == "KeyError"
+    assert "secret" not in err
+
+
+def test_a_failure_partway_prints_the_type_name_and_how_many_events_were_sent(monkeypatch, capsys):
+    class FailsOnSecondBatch(FakeSender):
+        def send_batch(self, batch):
+            if self.sent:
+                raise KeyError("secret-namespace")
+            super().send_batch(batch)
+
+    _cli_env(monkeypatch, FailsOnSecondBatch(capacity=4))
+    assert replay.main(["--count", "10"]) == 1
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert err.splitlines() == ["KeyError", "sent 4 replay events before the failure"]
+
+
+def test_a_failure_before_any_send_reports_zero_events(monkeypatch, capsys):
+    class Failing(FakeSender):
+        def send_batch(self, batch):
+            raise KeyError("secret-namespace")
+
+    _cli_env(monkeypatch, Failing())
+    assert replay.main([]) == 1
+    assert capsys.readouterr().err.splitlines()[1] == "sent 0 replay events before the failure"
+
+
+def test_an_import_error_inside_send_is_not_reported_as_a_missing_extra(monkeypatch, capsys):
+    class Failing(FakeSender):
+        def send_batch(self, batch):
+            raise ImportError("cannot import name x from secret-namespace")
+
+    _cli_env(monkeypatch, Failing())
+    assert replay.main([]) == 1
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert err.splitlines()[0] == "ImportError"
+    assert "install the replay extra" not in err
+    assert "secret" not in err
 
 
 def test_help_says_development_only(capsys):
@@ -349,7 +429,7 @@ def test_a_missing_extra_prints_the_install_hint(monkeypatch, capsys):
     _cli_env(monkeypatch, FakeSender())
 
     def no_extra(namespace, hub):
-        raise ImportError("No module named 'azure.eventhub' secret-namespace")
+        raise replay.MissingExtraError
 
     monkeypatch.setattr(replay, "_make_sender", no_extra)
     assert replay.main([]) == 1

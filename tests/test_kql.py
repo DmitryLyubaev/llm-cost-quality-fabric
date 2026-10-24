@@ -186,9 +186,12 @@ def test_no_guid_or_url_in_any_kql_or_published_file():
 
 def test_published_notes_estimates_and_clock_skew():
     text = PUBLISHED.read_text(encoding="utf-8")
-    assert "estimated (T-Digest)" in text
-    assert "max is exact" in text
+    assert "estimated, using T-Digest" in text
+    assert "max (exact)" in text
     assert "negative" in text and "first_ingested" in text
+    # the delay query reports p50, p95, max and n: the skew note must not mention a minimum it lacks
+    assert "negative minimum" not in text
+    assert "min(" not in (QUERIES_DIR / "delay_p50_p95_max.kql").read_text(encoding="utf-8")
 
 
 def test_comment_blocks_are_separated_from_the_next_command():

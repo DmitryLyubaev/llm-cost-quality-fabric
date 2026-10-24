@@ -1,15 +1,17 @@
 import csv
 import gzip
 import shutil
-from pathlib import Path
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import pytest
 from delta.tables import DeltaTable
 from pyspark.sql import functions as F
 
+from lake_helpers import COST_EXPORT_ROOT, FIGURES, FIGURES_DIR, SEEDS, copy_lake, cost_export_maker
 from lakehouse import checks
 from lakehouse.answers import cost_per_project, cost_per_result, quality_across_models
+from lakehouse.attribution import load_rg_rules, load_session_windows
 from lakehouse.checks import (
     QUERIES,
     CheckResult,
@@ -22,10 +24,7 @@ from lakehouse.checks import (
 from lakehouse.gold.fingerprint import gold_fingerprint, table_fingerprint
 from lakehouse.paths import LakePaths
 from lakehouse.seeding import read_study_projects
-from lakehouse.attribution import load_rg_rules, load_session_windows
 from lakehouse.silver.costs import normalise_costs, read_cost_export, replace_month
-
-from lake_helpers import COST_EXPORT_ROOT, FIGURES, FIGURES_DIR, SEEDS, copy_lake, cost_export_maker
 
 
 @pytest.fixture

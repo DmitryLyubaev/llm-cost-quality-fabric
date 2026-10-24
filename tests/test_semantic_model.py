@@ -321,19 +321,27 @@ def test_every_measure_names_its_gold_answer():
 
 
 # `Table[column]` or `'Table'[column]`, and a bare `[name]` (a measure, or a role filter's own column).
-_STRING = re.compile(r'"(?:[^"]|"")*"')
-_COMMENT = re.compile(r"//[^\n]*")
+# One left-to-right scan finds a string, a quoted table name, or a comment (`/* ... */`, `// ...`,
+# `-- ...`), so a comment marker inside a string and a quote inside a comment are each left alone.
+_STRING_OR_COMMENT = re.compile(r"\"(?:[^\"]|\"\")*\"|'(?:[^']|'')*'|/\*.*?\*/|//[^\n]*|--[^\n]*", re.DOTALL)
 _QUALIFIED = re.compile(r"(?<![\w'\]])(?:'((?:[^']|'')+)'|([A-Za-z_]\w*))\[([^\]]+)\]")
 _BARE = re.compile(r"(?<![\w'\]])\[([^\]]+)\]")
+
+
+def _blank_string_or_comment(match: re.Match) -> str:
+    text = match.group()
+    if text.startswith('"'):
+        return '""'
+    return text if text.startswith("'") else " "  # a quoted table name stays; a comment becomes a space
 
 
 def _unresolved(dax: str, columns: dict[str, set[str]], bare: set[str]) -> list[str]:
     """The references in `dax` that name no column (`T[c]`) or nothing in `bare` (`[x]`).
 
-    String literals and `//` comments are removed first, so their text is never read as a
-    reference. DAX names ignore case, so the comparison does too.
+    String literals and comments (`/* ... */`, `//` and `--`) are removed first, so their text is
+    never read as a reference. DAX names ignore case, so the comparison does too.
     """
-    text = _COMMENT.sub("", _STRING.sub('""', dax))
+    text = _STRING_OR_COMMENT.sub(_blank_string_or_comment, dax)
     lowered = {table.lower(): {c.lower() for c in cols} for table, cols in columns.items()}
     problems = []
     for match in _QUALIFIED.finditer(text):
@@ -370,6 +378,18 @@ def test_every_dax_reference_resolves():
         ("DIVIDE([Tokens], [Calls])", ["[Tokens]"]),
         ('CALCULATE([Calls], fact_gateway_call[session] = "x[y]")', []),
         ("[Calls] // not fact_daily_cost[nope]\n+ 0", []),
+        ("[Calls] /* not fact_daily_cost[nope] */ + 0", []),
+        ("[Calls] /* not\nfact_daily_cost[nope]\nat all */ + 0", []),
+        ("[Calls] -- not fact_daily_cost[nope]\n+ 0", []),
+        ("[Calls] /* a */ + fact_daily_cost[costs] -- b", ["fact_daily_cost[costs]"]),
+        # a comment marker inside a string is not a comment, so the reference after it is still read
+        ('CALCULATE([Calls], fact_gateway_call[session] = "a // b /* c -- d") + fact_daily_cost[costs]',
+         ["fact_daily_cost[costs]"]),
+        # and a quote inside a comment does not open a string
+        ("[Calls] // it's a \"quote\n+ fact_daily_cost[costs]", ["fact_daily_cost[costs]"]),
+        ('[Calls] /* " */ + fact_daily_cost[costs]', ["fact_daily_cost[costs]"]),
+        # a single minus is subtraction, not a comment
+        ("[Calls] - fact_daily_cost[costs]", ["fact_daily_cost[costs]"]),
     ],
 )
 def test_reference_check_catches_a_stale_reference(dax, stale):

@@ -19,6 +19,18 @@ def stack_text(stack):
     return "\n".join(p.read_text(encoding="utf-8") for p in sorted((INFRA / stack).glob("*.tf")))
 
 
+def resource_block(text, rtype, name):
+    """The body of one `resource "<rtype>" "<name>"` block, so a needle is tied to its own resource."""
+    header = f'resource "{rtype}" "{name}" {{'
+    assert header in text, header
+    return text.split(header, 1)[1].split(BLOCK_END, 1)[0]
+
+
+def sets_default(block):
+    """True when a variable block has a `default` attribute (the word in a description does not count)."""
+    return re.search(r"^\s*default\s*=", block, re.MULTILINE) is not None
+
+
 def squash(text):
     """Collapse whitespace so `terraform fmt` column alignment does not matter."""
     return re.sub(r"\s+", " ", text)
@@ -121,10 +133,10 @@ def test_variables_have_no_secret_defaults():
     cost = (INFRA / "cost-export" / "variables.tf").read_text(encoding="utf-8")
     for name in ("deploy_sp_object_id",):
         block = fabric.split(f'variable "{name}"', 1)[1].split("\n}\n", 1)[0]
-        assert "default" not in block
+        assert not sets_default(block), name
     for name in ("subscription_id", "storage_account_name"):
         block = cost.split(f'variable "{name}"', 1)[1].split("\n}\n", 1)[0]
-        assert "default" not in block
+        assert not sets_default(block), name
     assert 'default     = "australiaeast"' in cost
 
 
@@ -157,24 +169,35 @@ def test_lock_files_are_committed_next_to_each_stack():
 
 
 def test_event_hubs_stack_shape():
-    text = squash(stack_text("event-hubs"))
-    for needle in (
-        '"rg-p10-event-hubs"',
-        'project = "p10"',
-        'sku = "Standard"',
-        "capacity = 1",
-        "local_authentication_enabled = false",
-        "public_network_access_enabled = true",
-        'minimum_tls_version = "1.2"',
-        'resource "azurerm_eventhub" "gateway_calls"',
-        'name = "gateway-calls"',
-        "partition_count = 1",
-        "message_retention = 1",
-        'resource "azurerm_eventhub_consumer_group" "fabric"',
-        'name = "fabric"',
-        "eventhub_name = azurerm_eventhub.gateway_calls.name",
-    ):
-        assert needle in text, needle
+    text = stack_text("event-hubs")
+    expected = {
+        ("azurerm_resource_group", "event_hubs"): (
+            '"rg-p10-event-hubs"',
+            'project = "p10"',
+        ),
+        ("azurerm_eventhub_namespace", "gateway"): (
+            'sku = "Standard"',
+            "capacity = 1",
+            "local_authentication_enabled = false",
+            "public_network_access_enabled = true",
+            'minimum_tls_version = "1.2"',
+            'project = "p10"',
+        ),
+        ("azurerm_eventhub", "gateway_calls"): (
+            'name = "gateway-calls"',
+            "partition_count = 1",
+            "message_retention = 1",
+            "namespace_id = azurerm_eventhub_namespace.gateway.id",
+        ),
+        ("azurerm_eventhub_consumer_group", "fabric"): (
+            'name = "fabric"',
+            "eventhub_name = azurerm_eventhub.gateway_calls.name",
+        ),
+    }
+    for (rtype, name), needles in expected.items():
+        block = squash(resource_block(text, rtype, name))
+        for needle in needles:
+            assert needle in block, (rtype, name, needle)
 
 
 def test_event_hubs_has_one_hub_and_one_consumer_group():
@@ -202,7 +225,7 @@ def test_event_hubs_variables_are_sensitive_without_defaults():
     variables = (INFRA / "event-hubs" / "variables.tf").read_text(encoding="utf-8")
     for name in ("subscription_id", "namespace_name", "sender_principal_id"):
         block = variables.split(f'variable "{name}"', 1)[1].split(BLOCK_END, 1)[0]
-        assert "default" not in block, name
+        assert not sets_default(block), name
         assert squash("sensitive = true") in squash(block), name
     location = variables.split('variable "location"', 1)[1].split(BLOCK_END, 1)[0]
     assert 'default     = "australiaeast"' in location

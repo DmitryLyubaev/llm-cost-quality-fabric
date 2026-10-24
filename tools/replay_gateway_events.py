@@ -32,6 +32,10 @@ ENV_NAMESPACE = "P10_EVENTHUB_NAMESPACE"
 ENV_HUB = "P10_EVENTHUB_NAME"
 
 
+class MissingExtraError(Exception):
+    """The replay extra (azure-eventhub, azure-identity) is not installed."""
+
+
 def _event_time(moment: datetime) -> str:
     """ISO 8601 UTC with milliseconds and a Z suffix, like the policy's yyyy-MM-ddTHH:mm:ss.fffZ."""
     moment = moment.astimezone(timezone.utc)
@@ -122,15 +126,23 @@ class _HubSender:
 
 def _make_sender(namespace: str, hub: str):
     """The default sender. The azure imports stay here so the tests need no azure-eventhub."""
-    from azure.eventhub import EventData, EventHubProducerClient
-    from azure.identity import AzureCliCredential
+    try:
+        from azure.eventhub import EventData, EventHubProducerClient
+        from azure.identity import AzureCliCredential
+    except ImportError:
+        # Only the import of the extra means "not installed"; any other ImportError is a real failure.
+        raise MissingExtraError from None
 
     credential = AzureCliCredential()
-    client = EventHubProducerClient(
-        fully_qualified_namespace=_host(namespace),
-        eventhub_name=hub,
-        credential=credential,
-    )
+    try:
+        client = EventHubProducerClient(
+            fully_qualified_namespace=_host(namespace),
+            eventhub_name=hub,
+            credential=credential,
+        )
+    except BaseException:
+        credential.close()
+        raise
     return _HubSender(client, EventData, credential)
 
 
@@ -138,29 +150,37 @@ def send(events: list[dict], namespace: str, hub: str, sender=None) -> int:
     """Send `events` in as few batches as fit, close the sender and return the number sent.
 
     A sender has create_batch(), send_batch(batch) and close(); a batch has add(json_text), which
-    raises ValueError when it is full.
+    raises ValueError when it is full. If sending fails, the exception is re-raised with
+    `events_sent` set to the number of events in batches sent before the failure.
     """
-    sender = sender if sender is not None else _make_sender(namespace, hub)
+    sent = 0
     try:
-        batch = sender.create_batch()
-        in_batch = 0
-        for event in events:
-            body = json.dumps(event, separators=(",", ":"))
-            try:
-                batch.add(body)
-            except ValueError:
-                if in_batch == 0:
-                    raise  # one event does not fit an empty batch
+        sender = sender if sender is not None else _make_sender(namespace, hub)
+        try:
+            batch = sender.create_batch()
+            in_batch = 0
+            for event in events:
+                body = json.dumps(event, separators=(",", ":"))
+                try:
+                    batch.add(body)
+                except ValueError:
+                    if in_batch == 0:
+                        raise  # one event does not fit an empty batch
+                    sender.send_batch(batch)
+                    sent += in_batch
+                    batch = sender.create_batch()
+                    batch.add(body)
+                    in_batch = 0
+                in_batch += 1
+            if in_batch:
                 sender.send_batch(batch)
-                batch = sender.create_batch()
-                batch.add(body)
-                in_batch = 0
-            in_batch += 1
-        if in_batch:
-            sender.send_batch(batch)
-    finally:
-        sender.close()
-    return len(events)
+                sent += in_batch
+        finally:
+            sender.close()
+    except Exception as error:
+        error.events_sent = sent
+        raise
+    return sent
 
 
 def _positive_int(text: str) -> int:
@@ -195,11 +215,12 @@ def main(argv: list[str] | None = None) -> int:
         now = datetime.now(timezone.utc)
         events = make_events(args.count, now - timedelta(milliseconds=MAX_STEP_MS * args.count), args.seed)
         sent = send(events, namespace, hub)
-    except ImportError:
+    except MissingExtraError:
         print(INSTALL_HINT, file=sys.stderr)
         return 1
     except Exception as error:  # never print the message: it may hold the namespace or hub
         print(type(error).__name__, file=sys.stderr)
+        print(f"sent {getattr(error, 'events_sent', 0)} replay events before the failure", file=sys.stderr)
         return 1
     print(f"sent {sent} replay events")
     return 0
