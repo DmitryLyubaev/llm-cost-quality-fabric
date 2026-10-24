@@ -112,13 +112,15 @@ def test_dev_uploads_and_shortcuts_but_does_not_publish(deploy):
 def test_prod_publishes_then_uploads_then_shortcuts(deploy):
     # publish first: on a first deploy the lakehouse the wheel and the shortcut go into exists
     # only after it. OneLake availability comes before the gateway shortcut, which targets the
-    # table that availability exposes.
+    # table that availability exposes. The model refresh comes last, after every table it frames
+    # (the gateway table through its shortcut) is in place.
     assert deploy_commands(deploy["jobs"]["prod"]) == [
         "publish",
         "upload-wheel",
         "ensure-shortcut",
         "onelake-availability",
         "ensure-gateway-shortcut",
+        "refresh-model",
     ]
 
 
@@ -155,6 +157,45 @@ def test_the_dev_job_has_no_realtime_steps(deploy):
         assert GATE not in (step.get("env") or {})
         assert "onelake-availability" not in str(step.get("run", ""))
         assert "ensure-gateway-shortcut" not in str(step.get("run", ""))
+
+
+MODEL_GATE = "P11_MODEL_CONNECTION_ID"
+MODEL_GATE_SECRET = "${{ secrets.P11_MODEL_CONNECTION_ID }}"
+
+
+def test_prod_publish_gets_the_model_connection_gate(deploy):
+    """fabric-cicd's semantic_model_binding reads it through parameter.yml's $ENV: token."""
+    assert prod_step(deploy, "publish")["env"] == {
+        "FABRIC_WORKSPACE_ID": "${{ secrets.FABRIC_WORKSPACE_ID }}",
+        "FABRIC_ENVIRONMENT": "PROD",
+        GATE: GATE_SECRET,
+        MODEL_GATE: MODEL_GATE_SECRET,
+    }
+
+
+def test_prod_refreshes_the_model_after_the_gateway_shortcut_with_its_gate_at_step_scope(deploy):
+    """refresh-model reads P11_MODEL_CONNECTION_ID twice: as its gate, and as the connection it
+    checks the model is bound to (R7) before the refresh."""
+    job_steps = steps(deploy["jobs"]["prod"])
+    names = [s.get("name") for s in job_steps]
+    refresh = names.index("Refresh the semantic model")
+    assert names[refresh - 1] == "Ensure the gateway shortcut"
+    assert refresh == len(job_steps) - 1
+    step = job_steps[refresh]
+    assert step["env"] == {
+        "FABRIC_WORKSPACE_ID": "${{ secrets.FABRIC_WORKSPACE_ID }}",
+        MODEL_GATE: MODEL_GATE_SECRET,
+    }
+    assert step["run"].strip() == "python .deploy/deploy.py refresh-model"
+
+
+def test_only_publish_and_the_refresh_take_the_model_gate(deploy):
+    for job_name, step in all_steps(deploy):
+        run = str(step.get("run", ""))
+        if job_name == "prod" and ("deploy.py publish" in run or "deploy.py refresh-model" in run):
+            continue
+        assert MODEL_GATE not in (step.get("env") or {}), (job_name, step.get("name"))
+        assert "refresh-model" not in run, job_name
 
 
 @pytest.mark.parametrize("job", ["dev", "prod"])
@@ -253,7 +294,7 @@ def test_deploy_permissions_default_to_read_only(deploy):
 
 def test_ci_is_hardened(ci):
     job = ci["jobs"]["test"]
-    assert job["timeout-minutes"] == 45
+    assert job["timeout-minutes"] == 90
     assert ci["permissions"] == {"contents": "read"}
     on = triggers(ci)
     assert set(on) == {"push", "pull_request"}

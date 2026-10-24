@@ -1,0 +1,40 @@
+table dim_study
+	sourceLineageTag: [gold].[dim_study]
+
+	column study
+		dataType: string
+		sourceColumn: study
+		sourceLineageTag: study
+		summarizeBy: none
+
+	column run_id
+		dataType: string
+		sourceColumn: run_id
+		sourceLineageTag: run_id
+		summarizeBy: none
+
+	column started_at
+		dataType: dateTime
+		sourceColumn: started_at
+		sourceLineageTag: started_at
+		summarizeBy: none
+
+	column study_key
+		dataType: string
+		isHidden
+		sourceColumn: study_key
+		sourceLineageTag: study_key
+		summarizeBy: none
+
+	column project
+		dataType: string
+		sourceColumn: project
+		sourceLineageTag: project
+		summarizeBy: none
+
+	partition dim_study = entity
+		mode: directLake
+		source
+			entityName: dim_study
+			schemaName: gold
+			expressionSource: 'DirectLake - lh_portfolio'

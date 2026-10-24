@@ -20,11 +20,16 @@ EMPTY_GUID = "00000000-0000-0000-0000-000000000000"
 GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 NOTEBOOKS = ["nb_ingest_public", "nb_load"]  # the pipeline's, in activity order
 GATEWAY_NOTEBOOK = "nb_gateway_load"  # run by hand after a session, never by the pipeline
-ALL_NOTEBOOKS = NOTEBOOKS + [GATEWAY_NOTEBOOK]
-PARAMETERS = {
+ACCESS_NOTEBOOK = "nb_access_load"  # run by hand after access.csv is uploaded, never by the pipeline
+MODEL_CHECK_NOTEBOOK = "nb_model_check"  # run by hand, as a user, after the model refreshes
+HAND_RUN_NOTEBOOKS = [GATEWAY_NOTEBOOK, ACCESS_NOTEBOOK, MODEL_CHECK_NOTEBOOK]
+ALL_NOTEBOOKS = NOTEBOOKS + HAND_RUN_NOTEBOOKS
+PARAMETERS = {  # None: the notebook has no parameters cell
     "nb_ingest_public": ['load_date = ""'],
     "nb_load": ['load_date = ""'],
     GATEWAY_NOTEBOOK: ['session = ""', 'eventhouse_count = ""'],
+    ACCESS_NOTEBOOK: None,
+    MODEL_CHECK_NOTEBOOK: ['sessions = ""'],
 }
 # Patterns that would mean a storage endpoint or a lake path with real IDs slipped in.
 FORBIDDEN_IN_NOTEBOOKS = [
@@ -86,7 +91,10 @@ def test_expected_items_exist():
         "nb_ingest_public.Notebook",
         "nb_load.Notebook",
         "nb_gateway_load.Notebook",
+        "nb_access_load.Notebook",
+        "nb_model_check.Notebook",
         "pl_daily_load.DataPipeline",
+        "sm_portfolio.SemanticModel",
     } | REALTIME_ITEMS
 
 
@@ -154,6 +162,10 @@ def test_notebook_installs_the_wheel_first_then_takes_its_parameters(name):
     # %pip restarts Python, so it must run before the parameters cell sets anything.
     install = f"%pip install /lakehouse/default/Files/wheels/{_wheel_name()}"
     assert code_cells[0] == (CELL_MARKER, [install])
+    if PARAMETERS[name] is None:
+        assert PARAMETERS_MARKER not in text
+        assert [m for m, _ in code_cells] == [CELL_MARKER, CELL_MARKER]  # the install, then the call
+        return
     assert code_cells[1] == (PARAMETERS_MARKER, PARAMETERS[name])
     assert [m for m, _ in code_cells].count(PARAMETERS_MARKER) == 1
 
@@ -186,6 +198,8 @@ def test_notebook_default_lakehouse_is_lh_portfolio_in_this_workspace(name):
             GATEWAY_NOTEBOOK,
             "lakehouse.fabric_entry.load_gateway(session, eventhouse_count, notebookutils.runtime.context)",
         ),
+        (ACCESS_NOTEBOOK, "lakehouse.fabric_entry.load_access(notebookutils.runtime.context)"),
+        (MODEL_CHECK_NOTEBOOK, "lakehouse.fabric_entry.check_model(notebookutils.runtime.context, sessions)"),
     ],
 )
 def test_notebook_calls_its_entry_point_with_the_runtime_context(name, call):
@@ -213,13 +227,41 @@ def test_gateway_notebook_says_it_runs_once_after_the_session():
     assert "json.dumps(" in text
 
 
-def test_pipeline_never_runs_the_gateway_notebook():
-    gateway_id = _logical_ids()[f"{GATEWAY_NOTEBOOK}.Notebook"]
+def test_access_notebook_runs_by_hand_and_prints_counts_only():
+    text = _notebook(ACCESS_NOTEBOOK)
+    markdown = text.split(MARKDOWN_MARKER, 1)[1].split(CELL_MARKER, 1)[0].lower()
+    assert "files/private/access/" in markdown
+    assert "security.user_project" in markdown
+    assert "never from the pipeline" in markdown
+    assert "counts" in markdown
+    call_cell = text.rsplit(CELL_MARKER, 1)[1]
+    assert call_cell.count("print(") == 1
+    assert "print(json.dumps(summary" in call_cell
+    assert "@" not in text
+
+
+def test_model_check_notebook_runs_as_a_user_and_never_from_the_pipeline():
+    text = _notebook(MODEL_CHECK_NOTEBOOK)
+    markdown = " ".join(text.split(MARKDOWN_MARKER, 1)[1].split(PARAMETERS_MARKER, 1)[0].lower().split())
+    assert "as a user" in markdown
+    assert "never from the pipeline" in markdown
+    assert "service principal" in markdown and "not supported" in markdown
+    assert "sessions" in markdown and "comma-separated" in markdown
+    assert "never prints a upn" in markdown
+    call_cell = text.rsplit(CELL_MARKER, 1)[1]
+    assert call_cell.count("print(") == 1
+    assert "print(json.dumps(summary" in call_cell
+    assert "@" not in text
+
+
+@pytest.mark.parametrize("name", HAND_RUN_NOTEBOOKS)
+def test_pipeline_never_runs_the_hand_run_notebooks(name):
+    notebook_id = _logical_ids()[f"{name}.Notebook"]
     for path in (FABRIC / "pl_daily_load.DataPipeline").rglob("*"):
         if path.is_file():
             text = path.read_text(encoding="utf-8")
-            assert gateway_id not in text, path
-            assert GATEWAY_NOTEBOOK not in text, path
+            assert notebook_id not in text, path
+            assert name not in text, path
 
 
 def test_fabric_files_pass_hygiene():
@@ -744,5 +786,127 @@ def test_parameter_file_only_targets_prod_and_known_environment_variables():
         for rule in params[section]:
             assert set(rule["replace_value"]) == {"PROD"}
     text = (FABRIC / "parameter.yml").read_text(encoding="utf-8")
-    assert set(re.findall(r"\$ENV:(\w+)", text)) == {"P10_EVENTHUB_CONNECTION_ID"}
+    assert set(re.findall(r"\$ENV:(\w+)", text)) == {"P10_EVENTHUB_CONNECTION_ID", "P11_MODEL_CONNECTION_ID"}
     assert "enable_environment_variable_replacement" in text
+
+
+# --- The semantic model (project 11): rebinding and the connection -------------------------------
+
+MODEL_EXPRESSIONS = FABRIC / "sm_portfolio.SemanticModel" / "definition" / "expressions.tmdl"
+_G = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+ONELAKE_SOURCE = re.compile(rf'AzureStorage\.DataLake\("https://onelake\.dfs\.fabric\.microsoft\.com/({_G})/({_G})"')
+# What fabric-cicd resolves the two dynamic variables to on a PROD deploy (made-up IDs).
+PROD_WORKSPACE = "12121212-aaaa-bbbb-cccc-000000000012"
+PROD_LAKEHOUSE = "34343434-aaaa-bbbb-cccc-000000000034"
+RESOLVED = {"$workspace.$id": PROD_WORKSPACE, "$items.Lakehouse.lh_portfolio.$id": PROD_LAKEHOUSE}
+# fabric_cicd/_common/_validate_env_vars.py, VALID_GUID_REGEX (1.4.0): what a binding connection_id must be.
+VALID_GUID = re.compile(r"^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$")
+
+
+def _find_replace_rules(item_type: str) -> list[dict]:
+    return [r for r in _parameters()["find_replace"] if r["item_type"] == item_type]
+
+
+def _apply_find_replace(rule: dict, text: str, value: str) -> str:
+    """As fabric-cicd 1.4.0 applies an `is_regex` rule (fabric_workspace.py, _replace_parameters):
+    re.sub over every match, swapping only capture group 1 for the resolved value."""
+    pattern = re.compile(rule["find_value"])
+    assert pattern.groups == 1  # fabric-cicd's _validate_regex_structure
+    return pattern.sub(
+        lambda m: m.group(0)[: m.start(1) - m.start(0)] + value + m.group(0)[m.end(1) - m.start(0) :],
+        text,
+    )
+
+
+def test_every_find_replace_rule_is_checked():
+    """The notebook rules are evaluated above, the model's below; a new item type needs its own test."""
+    rules = _parameters()["find_replace"]
+    assert sorted(r["item_type"] for r in rules) == ["Notebook"] * 3 + ["SemanticModel"] * 2
+
+
+def test_model_rules_target_only_the_expression_file():
+    model_files = [
+        p for path, doc in _platforms().items() if doc["metadata"]["type"] == "SemanticModel"
+        for p in path.parent.rglob("*") if p.is_file()
+    ]
+    for rule in _find_replace_rules("SemanticModel"):
+        assert rule["is_regex"] == "true"
+        assert rule["file_path"] == "**/definition/expressions.tmdl"
+        assert set(rule["replace_value"]) == {"PROD"}
+        assert sorted(FABRIC.glob(rule["file_path"])) == [MODEL_EXPRESSIONS]
+        for path in model_files:
+            matches = re.findall(rule["find_value"], path.read_text(encoding="utf-8"))
+            assert len(matches) == (1 if path == MODEL_EXPRESSIONS else 0), (rule["find_value"], path)
+
+
+def test_model_rules_repoint_the_workspace_and_the_lakehouse():
+    text = MODEL_EXPRESSIONS.read_text(encoding="utf-8")
+    source = ONELAKE_SOURCE.search(text)
+    roles = {}
+    for rule in _find_replace_rules("SemanticModel"):
+        match = re.search(rule["find_value"], text)
+        # which of the URL's two GUIDs the capture group holds
+        roles[match.start(1) - source.start()] = rule["replace_value"]["PROD"]
+    assert roles == {
+        source.start(1) - source.start(): "$workspace.$id",
+        source.start(2) - source.start(): "$items.Lakehouse.lh_portfolio.$id",
+    }
+
+
+@pytest.mark.parametrize("order", [1, -1], ids=["as_written", "reversed"])
+def test_model_rules_change_only_the_two_guids_in_prod(order):
+    """Every find_replace rule fabric-cicd would apply to the file (its item type and glob match), in
+    turn: the second still matches after the first has swapped its GUID, and nothing else changes."""
+    text = MODEL_EXPRESSIONS.read_text(encoding="utf-8")
+    applied = [
+        r for r in _parameters()["find_replace"]
+        if r["item_type"] == "SemanticModel" and MODEL_EXPRESSIONS in FABRIC.glob(r["file_path"])
+    ]
+    assert len(applied) == 2
+    result = text
+    for rule in applied[::order]:
+        assert len(re.findall(rule["find_value"], result)) == 1
+        result = _apply_find_replace(rule, result, RESOLVED[rule["replace_value"]["PROD"]])
+
+    source = ONELAKE_SOURCE.search(text)
+    expected = (
+        text[: source.start(1)] + PROD_WORKSPACE + text[source.end(1) : source.start(2)]
+        + PROD_LAKEHOUSE + text[source.end(2) :]
+    )
+    assert result == expected
+    # the notebook rules, filtered out by item type, would not have matched the model either
+    for rule in _find_replace_rules("Notebook"):
+        assert not re.search(rule["find_value"], text)
+
+
+def test_parameter_file_binds_the_model_to_the_connection_from_the_environment():
+    """fabric-cicd 1.4.0 binds after publish (_items/_semanticmodel.py, post_publish_all); the new
+    dictionary format, since the legacy list format takes no per-environment value."""
+    assert _parameters()["semantic_model_binding"] == {
+        "models": [
+            {"semantic_model_name": "sm_portfolio", "connection_id": {"PROD": "$ENV:P11_MODEL_CONNECTION_ID"}}
+        ]
+    }
+
+
+def _with_environment(raw: str, environment: dict) -> dict:
+    """fabric-cicd 1.4.0's replace_variables_in_parameter_file (_parameter/_utils.py): every
+    `$ENV:<name>` token in the raw file is replaced before the YAML is loaded, and a token whose
+    variable is not set is kept as it is."""
+    return yaml.safe_load(
+        re.sub(r"\$ENV:(\w+)", lambda m: environment.get(m.group(1), m.group(0)), raw)
+    )
+
+
+def test_the_binding_connection_resolves_to_a_guid_only_when_the_variable_is_set():
+    raw = (FABRIC / "parameter.yml").read_text(encoding="utf-8")
+    connection = "56565656-aaaa-bbbb-cccc-000000000056"
+
+    def bound(environment):
+        return _with_environment(raw, environment)["semantic_model_binding"]["models"][0]["connection_id"]["PROD"]
+
+    assert bound({"P11_MODEL_CONNECTION_ID": connection}) == connection
+    # the gate closed: deploy.py stands in the empty GUID, which passes fabric-cicd's GUID check
+    assert VALID_GUID.match(bound({"P11_MODEL_CONNECTION_ID": EMPTY_GUID}))
+    # unset, the token stays and fabric-cicd refuses the whole file: hence the stand-in
+    assert not VALID_GUID.match(bound({}))

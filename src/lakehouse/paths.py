@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-LAYERS = ("silver", "gold", "reject")
+LAYERS = ("silver", "gold", "reject", "security")
 
 
 @dataclass(frozen=True)

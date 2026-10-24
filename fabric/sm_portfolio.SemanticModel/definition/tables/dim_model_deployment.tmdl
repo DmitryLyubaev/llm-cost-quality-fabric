@@ -1,0 +1,76 @@
+table dim_model_deployment
+	sourceLineageTag: [gold].[dim_model_deployment]
+
+	column deployment_sk
+		dataType: string
+		isHidden
+		sourceColumn: deployment_sk
+		sourceLineageTag: deployment_sk
+		summarizeBy: none
+
+	column account_alias
+		dataType: string
+		sourceColumn: account_alias
+		sourceLineageTag: account_alias
+		summarizeBy: none
+
+	column deployment_name
+		dataType: string
+		sourceColumn: deployment_name
+		sourceLineageTag: deployment_name
+		summarizeBy: none
+
+	column model_name
+		dataType: string
+		sourceColumn: model_name
+		sourceLineageTag: model_name
+		summarizeBy: none
+
+	column model_version
+		dataType: string
+		sourceColumn: model_version
+		sourceLineageTag: model_version
+		summarizeBy: none
+
+	column sku
+		dataType: string
+		sourceColumn: sku
+		sourceLineageTag: sku
+		summarizeBy: none
+
+	column capacity
+		dataType: int64
+		sourceColumn: capacity
+		sourceLineageTag: capacity
+		summarizeBy: none
+
+	column region_alias
+		dataType: string
+		sourceColumn: region_alias
+		sourceLineageTag: region_alias
+		summarizeBy: none
+
+	column valid_from
+		dataType: dateTime
+		sourceColumn: valid_from
+		sourceLineageTag: valid_from
+		summarizeBy: none
+
+	column valid_to
+		dataType: dateTime
+		sourceColumn: valid_to
+		sourceLineageTag: valid_to
+		summarizeBy: none
+
+	column is_current
+		dataType: boolean
+		sourceColumn: is_current
+		sourceLineageTag: is_current
+		summarizeBy: none
+
+	partition dim_model_deployment = entity
+		mode: directLake
+		source
+			entityName: dim_model_deployment
+			schemaName: gold
+			expressionSource: 'DirectLake - lh_portfolio'

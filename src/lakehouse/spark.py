@@ -21,7 +21,9 @@ def get_spark(app_name: str = "lakehouse-tests") -> SparkSession:
         .config("spark.ui.enabled", "false")
         # The status store keeps per-job and per-query records in the driver heap; a long run
         # of builds (the test suite) exhausted the default 1 GB heap, so keep fewer records.
-        .config("spark.driver.memory", "2g")
+        # 2 GB ran out on CI after about 17,000 stages once project 11's tests were added
+        # (PR #7); GitHub's runner has 16 GB.
+        .config("spark.driver.memory", "4g")
         .config("spark.ui.retainedJobs", "50")
         .config("spark.ui.retainedStages", "50")
         .config("spark.sql.ui.retainedExecutions", "50")

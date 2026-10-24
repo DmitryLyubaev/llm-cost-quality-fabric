@@ -8,12 +8,16 @@ import json
 from datetime import UTC, date, datetime
 
 import pytest
+from delta.tables import DeltaTable
 from pyspark.sql import functions as F
 
 from lakehouse import fabric_entry
 from lakehouse.checks import CheckResult, QualityCheckFailed, check_gateway_counts
 from lakehouse.gateway.answers import cost_per_gateway_call
 from lakehouse.gateway.build import (
+    FACT_GATEWAY_CALL_SCHEMA,
+    GOLD_TABLE,
+    SILVER_TABLE,
     build_fact_gateway_call,
     build_gateway_calls,
     count_duplicate_request_ids,
@@ -257,6 +261,7 @@ def test_gold_is_one_row_per_call_with_call_date_and_project_p4(spark, tmp_lake)
     gold = spark.read.format("delta").load(tmp_lake.table("gold", "fact_gateway_call"))
     assert count == 3
     assert gold.columns == FIELDS + ["call_date", "project"]
+    assert gold.schema == FACT_GATEWAY_CALL_SCHEMA  # ruling R2: the always-present step uses it too
     assert {r["project"] for r in gold.collect()} == {"p4"}
     assert dict(gold.dtypes)["call_date"] == "date"
 
@@ -338,10 +343,12 @@ def test_cost_per_call_divides_the_days_gateway_cost_by_every_call(spark, tmp_la
     answer = _answer(spark, tmp_lake)
 
     assert frame.columns == [
-        "call_date", "calls", "tokens_total", "tokens_per_call", "billing_currency", "apim_cost", "cost_per_call",
+        "call_date", "calls", "refused", "tokens_total", "tokens_per_call", "billing_currency", "apim_cost",
+        "cost_per_call",
     ]
     row = answer[(date(2026, 11, 12), "AUD")]
     assert row["calls"] == 4  # refused calls counted
+    assert row["refused"] == 2  # ruling R5: the model's `Refused by gateway` mirrors this
     assert row["tokens_total"] == 400
     assert row["tokens_per_call"] == pytest.approx(100.0)
     assert row["apim_cost"] == pytest.approx(4.0)
@@ -357,7 +364,16 @@ def test_cost_per_call_without_cost_rows_keeps_the_day_with_null_cost(spark, tmp
     assert list(answer) == [(date(2026, 11, 12), None)]
     row = answer[(date(2026, 11, 12), None)]
     assert row["calls"] == 2
+    assert row["refused"] == 1
     assert row["apim_cost"] is None and row["cost_per_call"] is None
+
+
+def test_cost_per_call_counts_zero_refused_calls_as_zero(spark, tmp_lake):
+    _load(spark, tmp_lake, [_call("req-01"), _call("req-02"), _refused("req-03", session=OTHER_SESSION)])
+
+    row = _answer(spark, tmp_lake)[(date(2026, 11, 12), None)]
+
+    assert row["refused"] == 0
 
 
 def test_cost_per_call_matches_the_resource_group_case_insensitively(spark, tmp_lake):
@@ -445,6 +461,7 @@ def test_load_gateway_runs_silver_gold_check_and_answer(spark, entry_lake):
         {
             "call_date": "2026-11-12",
             "calls": 2,
+            "refused": 1,
             "tokens_total": 120,
             "tokens_per_call": 60.0,
             "billing_currency": "AUD",
@@ -455,6 +472,27 @@ def test_load_gateway_runs_silver_gold_check_and_answer(spark, entry_lake):
 
     again = fabric_entry.load_gateway(SESSION, "2", {})
     assert again["silver"] == {"inserted": 0, "updated": 0}
+
+
+def test_load_gateway_compacts_its_silver_and_gold_tables(spark, entry_lake, monkeypatch):
+    """Direct Lake on OneLake errors past 1,000 Parquet files per table: once both tables are
+    written, the load runs OPTIMIZE on silver `gateway_calls` and gold `fact_gateway_call`."""
+    _source(spark, entry_lake, [_call("req-01"), _refused("req-02")])
+    _gold_dims(spark, entry_lake)
+    calls = []
+    real = fabric_entry.optimize_tables
+
+    def spy(spark_session, paths):
+        assert all(DeltaTable.isDeltaTable(spark_session, p) for p in paths)
+        calls.append(list(paths))
+        real(spark_session, paths)
+
+    monkeypatch.setattr(fabric_entry, "optimize_tables", spy)
+
+    summary = fabric_entry.load_gateway(SESSION, "2", {})
+
+    assert calls == [[entry_lake.table("silver", SILVER_TABLE), entry_lake.table("gold", GOLD_TABLE)]]
+    assert summary["gold_rows"] == 2
 
 
 def test_load_gateway_raises_when_the_count_check_fails(spark, entry_lake):
@@ -500,3 +538,13 @@ def test_the_gateway_table_stays_out_of_project_9s_rerun_fingerprint():
 
     assert GRAINS["fact_gateway_call"] == "gateway call"
     assert "fact_gateway_call" not in GOLD_TABLES
+
+
+def test_the_cast_names_derive_from_the_spark_types():
+    """One source for the contract's Spark types: the casts' DDL names and the gold schema agree."""
+    from lakehouse.gateway.build import SPARK_TYPE_OBJECTS, SPARK_TYPES
+
+    assert SPARK_TYPES == {"datetime": "timestamp", "string": "string", "int": "int", "bool": "boolean"}
+    assert [f.dataType for f in FACT_GATEWAY_CALL_SCHEMA][: len(EVENT_FIELDS)] == [
+        SPARK_TYPE_OBJECTS[kind] for _, kind in EVENT_FIELDS
+    ]

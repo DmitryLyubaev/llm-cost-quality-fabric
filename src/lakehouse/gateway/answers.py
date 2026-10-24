@@ -17,7 +17,9 @@ def _gold(spark: SparkSession, paths: LakePaths, name: str) -> DataFrame:
 def cost_per_gateway_call(spark: SparkSession, paths: LakePaths, session: str) -> DataFrame:
     """One row per (UTC call date of the session's calls, billing currency).
 
-    `calls` counts every call of the session that day, refused ones included. `tokens_total` is
+    `calls` counts every call of the session that day, refused ones included, and `refused` those
+    with `refused_by_gateway` true (0 when none; ruling R5, mirrored by the model's
+    `Refused by gateway`). `tokens_total` is
     the day's tokens and `tokens_per_call` that over `calls` (R14: the event has no model, so the
     tokens are not priced). `apim_cost` is the day's gold `fact_daily_cost.cost` for
     `rg-releaselens-gateway` (compared case-insensitively), and `cost_per_call` that over `calls`.
@@ -25,14 +27,18 @@ def cost_per_gateway_call(spark: SparkSession, paths: LakePaths, session: str) -
     Computed the day after the session, because the cost export lags up to a day. A day with no
     cost rows yet keeps its row, with `billing_currency`, `apim_cost` and `cost_per_call` null.
     Costs stay in the billing currency, one row per currency; nothing is converted. A day billed
-    in more than one currency has one row per currency, and `calls`, `tokens_total` and
+    in more than one currency has one row per currency, and `calls`, `refused`, `tokens_total` and
     `tokens_per_call` repeat on each of them: never sum them across rows.
     """
     calls = (
         _gold(spark, paths, GOLD_TABLE)
         .where(F.col("session") == session)
         .groupBy("call_date")
-        .agg(F.count("*").alias("calls"), F.sum("tokens").alias("tokens_total"))
+        .agg(
+            F.count("*").alias("calls"),
+            F.count(F.when(F.col("refused_by_gateway"), 1)).alias("refused"),
+            F.sum("tokens").alias("tokens_total"),
+        )
     )
     costs = (
         _gold(spark, paths, "fact_daily_cost")
@@ -47,6 +53,7 @@ def cost_per_gateway_call(spark: SparkSession, paths: LakePaths, session: str) -
         .select(
             "call_date",
             "calls",
+            "refused",
             "tokens_total",
             "tokens_per_call",
             "billing_currency",

@@ -33,7 +33,7 @@ from lakehouse.checks import (
     check_published_figures,
     check_rerun_unchanged,
 )
-from lakehouse.gold.build import build_gold
+from lakehouse.gold.build import GOLD_TABLES, build_gold, optimize_tables
 from lakehouse.gold.fingerprint import gold_fingerprint
 from lakehouse.paths import LakePaths
 from lakehouse.silver.costs import ExportRun, find_latest_runs, normalise_costs, read_export_runs, replace_month
@@ -225,7 +225,8 @@ def run_load(
     *,
     allow_earlier: bool = False,
 ) -> RunSummary:
-    """Build silver and gold for `load_date`, run the four checks and return the summary.
+    """Build silver and gold for `load_date`, compact the gold tables, run the four checks and
+    return the summary.
 
     Sets the session to ANSI SQL and UTC first: Fabric's session is not built by `get_spark`, and
     both are part of the lake's contract (unreadable text fails, timestamps are UTC).
@@ -254,6 +255,9 @@ def run_load(
     digest = inputs_digest(seeds_dir, manifest, export_runs)
 
     row_counts = _build(spark, paths, seeds_dir, export, load_date)
+    # Compact before the fingerprint and the checks, so they read the tables as published. The
+    # fingerprint hashes rows, not files or versions, so OPTIMIZE leaves the re-run check as it was.
+    optimize_tables(spark, [paths.table("gold", name) for name in GOLD_TABLES])
     fingerprint = gold_fingerprint(spark, paths)
     seen_date, previous = _previous_run(spark, log_path, load_date, digest)
 

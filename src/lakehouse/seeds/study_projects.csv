@@ -1,0 +1,4 @@
+study,project,evidence
+p1-three-arm,p1,ReleaseLens eval/baseline.md (project 1 three-arm study report)
+p2-retrieval,p2,Measured RAG benchmark report (project 2; private extract)
+p3-agent,p3,Foundry workshop agent results/study-2026-10-06-2601d16c644b/report.md (project 3 study report)

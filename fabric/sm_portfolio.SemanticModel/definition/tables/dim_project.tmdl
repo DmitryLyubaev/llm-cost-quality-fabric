@@ -1,0 +1,21 @@
+table dim_project
+	sourceLineageTag: [gold].[dim_project]
+
+	column project
+		dataType: string
+		sourceColumn: project
+		sourceLineageTag: project
+		summarizeBy: none
+
+	column name
+		dataType: string
+		sourceColumn: name
+		sourceLineageTag: name
+		summarizeBy: none
+
+	partition dim_project = entity
+		mode: directLake
+		source
+			entityName: dim_project
+			schemaName: gold
+			expressionSource: 'DirectLake - lh_portfolio'

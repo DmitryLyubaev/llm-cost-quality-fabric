@@ -141,3 +141,42 @@ def test_allows_host_suffixes_without_a_name(tmp_path, line):
     f.write_text(line + "\n", encoding="utf-8")
 
     assert check_hygiene([f], forbidden=[]) == []
+
+
+# Joined at run time so this file does not itself hold an address the repo-wide check would flag.
+TENANT = "." + "onmicrosoft.com"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f"upn,project\nlead-p4@contoso{TENANT},p4",
+        f"owner: Fabric.Admin@Contoso-Lab{TENANT.upper()}",
+        f'"member": "x@a1{TENANT}"',
+    ],
+)
+def test_flags_onmicrosoft_addresses(tmp_path, line):
+    f = tmp_path / "access.csv"
+    f.write_text(line + "\n", encoding="utf-8")
+
+    problems = check_hygiene([f], forbidden=[])
+
+    assert len(problems) == 1
+    assert "access.csv" in problems[0]
+    assert "@" not in problems[0] and "contoso" not in problems[0].lower()
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f"a work-or-school user (`fabric@<tenant>{TENANT}`)",
+        f"(`…@<tenant>{TENANT}`)",
+        f"the `…{TENANT[1:]}` tenant",
+        "as `fabric@` in Fabric",
+    ],
+)
+def test_allows_onmicrosoft_placeholders_and_bare_user_names(tmp_path, line):
+    f = tmp_path / "notes.md"
+    f.write_text(line + "\n", encoding="utf-8")
+
+    assert check_hygiene([f], forbidden=[]) == []

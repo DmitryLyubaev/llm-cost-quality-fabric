@@ -10,8 +10,8 @@ from pyspark.sql import functions as F
 
 from lake_helpers import copy_lake, cost_export_maker, make_lake, run
 from lakehouse.checks import QualityCheckFailed
-from lakehouse.gold.build import GOLD_TABLES, REJECT_NAME
-from lakehouse.gold.fingerprint import gold_fingerprint
+from lakehouse.gold.build import GOLD_TABLES, REJECT_NAME, optimize_tables
+from lakehouse.gold.fingerprint import gold_fingerprint, table_fingerprint
 from lakehouse.run import RunSummary, inputs_digest
 import lakehouse.run as run_module
 from lakehouse.silver.costs import ExportRun
@@ -401,3 +401,50 @@ def test_earlier_date_guard_counts_only_passed_rows(spark, loaded_lake, tmp_path
     )
 
     run(spark, paths, seeds)  # 2026-10-21 is not earlier than the latest *passed* date
+
+
+def _parquet_files(spark, path):
+    return DeltaTable.forPath(spark, path).detail().first()["numFiles"]
+
+
+def test_optimize_tables_compacts_small_files_and_keeps_the_content(spark, tmp_path):
+    """OPTIMIZE rewrites files, not rows: the content fingerprint is the same before and after.
+    (A table of one file has nothing to compact and gets no OPTIMIZE entry, so this one is built
+    from several appends, the way the daily MERGEs fragment a table.)"""
+    path = str(tmp_path / "fragmented")
+    for n in range(5):
+        spark.range(n * 10, n * 10 + 10).write.format("delta").mode("append").save(path)
+    assert _parquet_files(spark, path) >= 5
+    before = table_fingerprint(spark, path)
+
+    optimize_tables(spark, [path])
+
+    assert _latest_operation(spark, path) == "OPTIMIZE"
+    assert _parquet_files(spark, path) == 1
+    assert table_fingerprint(spark, path) == before
+
+
+def test_run_load_compacts_every_gold_table_before_fingerprinting(spark, loaded_lake, tmp_path, monkeypatch):
+    """Direct Lake on OneLake errors past 1,000 Parquet files per table, and the daily MERGEs keep
+    adding files, so each load compacts the gold tables, once they are built and before the
+    fingerprint is taken. The fingerprint is content-based, so the re-run check is unchanged."""
+    paths, seeds, first = _copy(loaded_lake, tmp_path)
+    calls = []
+    real = run_module.optimize_tables
+
+    def spy(spark_session, table_paths):
+        assert all(DeltaTable.isDeltaTable(spark_session, p) for p in table_paths)
+        calls.append(list(table_paths))
+        real(spark_session, table_paths)
+
+    monkeypatch.setattr(run_module, "optimize_tables", spy)
+
+    second = run(spark, paths, seeds)
+
+    assert calls == [[paths.table("gold", name) for name in GOLD_TABLES]]
+    assert "identical" in _rerun_detail(second).detail
+    assert second.fingerprint == first.fingerprint == gold_fingerprint(spark, paths)
+
+
+def _latest_operation(spark, path):
+    return DeltaTable.forPath(spark, path).history(1).first()["operation"]

@@ -1,0 +1,133 @@
+table fact_gateway_call
+	sourceLineageTag: [gold].[fact_gateway_call]
+
+	/// Mirrors lakehouse.gateway.answers.cost_per_gateway_call
+	measure Calls = COUNTROWS(fact_gateway_call)
+		formatString: #,##0
+		displayFolder: Gateway
+
+	/// Mirrors lakehouse.gateway.answers.cost_per_gateway_call
+	measure 'Refused by gateway' =
+			CALCULATE(
+			    COUNTROWS(fact_gateway_call),
+			    KEEPFILTERS(fact_gateway_call[refused_by_gateway] = TRUE())
+			)
+		formatString: #,##0
+		displayFolder: Gateway
+
+	/// Mirrors lakehouse.gateway.answers.cost_per_gateway_call
+	measure 'Tokens (total)' = SUM(fact_gateway_call[tokens])
+		formatString: #,##0
+		displayFolder: Gateway
+
+	/// Mirrors lakehouse.gateway.answers.cost_per_gateway_call
+	measure 'Tokens per call' = DIVIDE([Tokens (total)], [Calls])
+		formatString: #,##0.0
+		displayFolder: Gateway
+
+	/// Mirrors lakehouse.gateway.answers.cost_per_gateway_call
+	measure 'Cost per 1,000 calls' =
+			VAR calls = [Calls]
+			VAR callDays = VALUES(fact_gateway_call[call_date])
+			VAR gatewayLines =
+			    CALCULATETABLE(
+			        fact_daily_cost,
+			        REMOVEFILTERS(dim_project),
+			        TREATAS(callDays, fact_daily_cost[cost_date]),
+			        KEEPFILTERS(fact_daily_cost[resource_group] = "rg-releaselens-gateway")
+			    )
+			VAR costDays = DISTINCT(SELECTCOLUMNS(gatewayLines, "day", fact_daily_cost[cost_date]))
+			VAR uncostedDays = COUNTROWS(EXCEPT(callDays, costDays))
+			VAR currencies = COUNTROWS(DISTINCT(SELECTCOLUMNS(gatewayLines, "currency", fact_daily_cost[billing_currency])))
+			VAR gatewayCost = SUMX(gatewayLines, fact_daily_cost[cost])
+			RETURN
+			    // Blank unless every call day has gateway cost lines, in one currency: a day with calls
+			    // but no cost yet is null in gold, and its calls never dilute the cost of another day.
+			    IF(ISBLANK(uncostedDays) && currencies = 1, DIVIDE(gatewayCost, calls) * 1000)
+		formatString: #,##0.0000
+		displayFolder: Gateway
+
+	column event_time
+		dataType: dateTime
+		sourceColumn: event_time
+		sourceLineageTag: event_time
+		summarizeBy: none
+
+	column request_id
+		dataType: string
+		sourceColumn: request_id
+		sourceLineageTag: request_id
+		summarizeBy: none
+
+	column session
+		dataType: string
+		sourceColumn: session
+		sourceLineageTag: session
+		summarizeBy: none
+
+	column api
+		dataType: string
+		sourceColumn: api
+		sourceLineageTag: api
+		summarizeBy: none
+
+	column operation
+		dataType: string
+		sourceColumn: operation
+		sourceLineageTag: operation
+		summarizeBy: none
+
+	column caller
+		dataType: string
+		sourceColumn: caller
+		sourceLineageTag: caller
+		summarizeBy: none
+
+	column answered_by
+		dataType: string
+		sourceColumn: answered_by
+		sourceLineageTag: answered_by
+		summarizeBy: none
+
+	column status
+		dataType: int64
+		sourceColumn: status
+		sourceLineageTag: status
+		summarizeBy: none
+
+	column refused_by_gateway
+		dataType: boolean
+		sourceColumn: refused_by_gateway
+		sourceLineageTag: refused_by_gateway
+		summarizeBy: none
+
+	column tokens
+		dataType: int64
+		sourceColumn: tokens
+		sourceLineageTag: tokens
+		summarizeBy: none
+
+	column latency_ms
+		dataType: int64
+		sourceColumn: latency_ms
+		sourceLineageTag: latency_ms
+		summarizeBy: none
+
+	column call_date
+		dataType: dateTime
+		sourceColumn: call_date
+		sourceLineageTag: call_date
+		summarizeBy: none
+
+	column project
+		dataType: string
+		sourceColumn: project
+		sourceLineageTag: project
+		summarizeBy: none
+
+	partition fact_gateway_call = entity
+		mode: directLake
+		source
+			entityName: fact_gateway_call
+			schemaName: gold
+			expressionSource: 'DirectLake - lh_portfolio'
