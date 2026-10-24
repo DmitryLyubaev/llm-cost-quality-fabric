@@ -521,6 +521,7 @@ def check_model_matches_gold(
         return study_projects.get(row["study"]) if answer == QUALITY_ACROSS_MODELS else row["project"]
 
     compared: dict[str, int] = {}  # per lead, the rows compared (keys on either side)
+    failed: set[str] = set()  # leads with a query that raised
     for label, upn, projects in leads:
         compared[label] = 0
         for answer in USER_ANSWERS:
@@ -528,6 +529,7 @@ def check_model_matches_gold(
                 rows = shape_rows(answer, evaluate(QUERIES[answer], upn))
             except Exception as error:  # its message may name the UPN, so only the type is kept
                 problems.append(f"{label}: the {answer} query failed ({type(error).__name__})")
+                failed.add(label)
                 continue
             foreign = sorted({project_of(answer, r) or "(no project)" for r in rows} - projects)
             if foreign:
@@ -537,13 +539,17 @@ def check_model_matches_gold(
             compared[label] += len(_keys(own, KEYS[answer]) | _keys(visible, KEYS[answer]))
             differences = compare(answer, own, visible, KEYS[answer])
             problems.extend(f"{label}: {_describe(m, 'owner', 'lead')}" for m in differences)
-    # A lead with no rows in their projects passes with nothing compared, so it is named; when no lead
-    # compared a row, the access filter was never exercised, and the check fails.
-    empty = [label for label, count in compared.items() if count == 0]
+    # A lead with no rows in their projects passes with nothing compared, so it is named, with why; when
+    # no lead compared a row, the access filter was never exercised, and the check fails.
+    empty = [
+        f"{label} ({'their queries failed' if label in failed else 'no rows in their projects'})"
+        for label, count in compared.items()
+        if count == 0
+    ]
     if leads and len(empty) == len(leads):
-        problems.append("no lead compared a row: " + "; ".join(empty) + " (no rows in their projects)")
+        problems.append("no lead compared a row: " + "; ".join(empty))
     elif empty:
-        notes.append("nothing compared for " + "; ".join(empty) + " (no rows in their projects)")
+        notes.append("nothing compared for " + "; ".join(empty))
 
     if problems:
         listed = problems[:MAX_REPORTED]

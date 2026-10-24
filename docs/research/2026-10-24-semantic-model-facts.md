@@ -265,7 +265,7 @@ The F2 price didn't render on https://azure.microsoft.com/en-au/pricing/details/
 - **Non-existent UPN**: no Learn page says the "specific person" picker accepts an arbitrary string.
   - [INFERRED] It's a people picker over the directory, so the user must exist.
   - XMLA impersonation is explicit: "The account specified in EffectiveUserName **must be in the tenant's Microsoft Entra ID** and must have both **Read** and **Build** permissions" (service-premium-connect-tools, updated 2026-09-29).
-  - So you **can't test a made-up UPN**. Create real test member users in the personal tenant (free Entra users; Fabric Free licence; Viewer + Build), or put your own UPN in the access table for a "Test as role" check.
+  - So you **can't test a made-up UPN**. Create real test member users in the personal tenant (free Entra users; Fabric Free licence; Read + Build on the model, no workspace role: a workspace Viewer can read the lakehouse through its SQL analytics endpoint, past the model's RLS; corrected at the plan-1 review, spec 4.1), or put your own UPN in the access table for a "Test as role" check.
 
 ### Programmatic testing
 - **executeQueries REST** (https://learn.microsoft.com/en-us/rest/api/power-bi/datasets/execute-queries, updated 2026-09-15):
@@ -371,9 +371,9 @@ Sources:
 - **Add a post-deploy refresh (frame) step** after fabric-cicd for the semantic model; fabric-cicd 1.4.0 sends none. Leave the SP as model owner, so it can bind and refresh; don't take over in prod.
 - **Decide SSO vs fixed identity now.**
   - With default SSO, every Viewer needs Read + ReadAll on `lh_portfolio`, which lets them bypass model RLS through OneLake.
-  - For real RLS, bind a fixed-identity cloud connection (SP or workspace identity, SSO off) through `semantic_model_binding`, and give Viewers only model Read (+Build for tests).
-- **The owner sees all for free** as workspace Admin (RLS isn't enforced for Write). The access table maps only Viewer UPNs to projects; no "all" row is needed for the owner.
-- **Test RLS with real Entra member users** (free, Viewer + Build): "Test as role > Now viewing as" in the service, or `evaluate_dax(effective_user_name=...)` / executeQueries `impersonatedUserName` as a user. Made-up UPNs and SPs can't be impersonated or added to roles. Web modelling has no View as.
+  - For real RLS, bind a fixed-identity cloud connection (SP or workspace identity, SSO off) through `semantic_model_binding`, and give the leads only model Read (+Build for tests), never a workspace role.
+- **The owner sees all for free** as workspace Admin (RLS isn't enforced for Write). The access table maps only the leads' UPNs to projects; no "all" row is needed for the owner.
+- **Test RLS with real Entra member users** (free, Read + Build on the model, no workspace role): "Test as role > Now viewing as" in the service, or `evaluate_dax(effective_user_name=...)` / executeQueries `impersonatedUserName` as a user. Made-up UPNs and SPs can't be impersonated or added to roles. Web modelling has no View as.
 - **Run the "DAX = gold" notebook check under a user identity** (interactive or a dev pipeline you last edited). Use `evaluate_dax`, not `evaluate_measure`. In prod the SP-deployed pipeline runs the notebook as the SP: `evaluate_dax` is unsupported by the default SP token flow, `evaluate_measure` is unsupported for SPs, and RLS/SSO models reject SP executeQueries.
 - **Finish authoring by ~20 Dec 2026, or budget Power BI Pro (AU$21/user/month + GST, annual).** Creating or editing the model and report needs Pro/PPU/trial even on the trial capacity, and the individual trial may lapse ~21 Dec, before the Fabric trial ends ~7 Jan. Check the licence state in Account manager right after starting the Fabric trial.
 - **Set the trial capacity's XMLA endpoint to Read Write** if Desktop live edit or TMDL view is wanted. Desktop is not an option on a Free licence.

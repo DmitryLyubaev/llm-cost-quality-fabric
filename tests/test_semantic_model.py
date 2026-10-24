@@ -68,9 +68,9 @@ RELATIONSHIPS = (
 )
 
 ROLE = "ProjectLead"
-USER_FILTER = "[upn] = USERPRINCIPALNAME()"
+USER_FILTER = "[upn] = LOWER(USERPRINCIPALNAME())"
 PROJECT_FILTER = (
-    "[project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = USERPRINCIPALNAME())"
+    "[project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = LOWER(USERPRINCIPALNAME()))"
 )
 
 SPEND, QUALITY, GATEWAY = "Spend", "Quality", "Gateway"

@@ -106,10 +106,11 @@ don't build" note.
   - `dim_project` filters every fact through `project`;
   - `dim_date` filters through each fact's date;
   - `dim_model_deployment` filters `fact_eval_attempt` through the resolved deployment version;
-  - `user_project` filters `dim_project`.
+  - `user_project` has no relationship: the role filters each table with a `project` column
+    itself (4.2).
 
-  No bidirectional filters except the one the RLS pattern needs, if Learn's dynamic-RLS pattern
-  requires it there.
+  No bidirectional filters: the RLS pattern needs none, because no filter travels from
+  `user_project`.
 - **Gold gains keys and project columns** *(Claude's call)*, because the builder check found
   RLS could not reach the quality data:
   - `project` on `dim_study` and `fact_eval_attempt`, from the study-to-project map that now lives
@@ -125,22 +126,28 @@ don't build" note.
   missing table. So the gold build creates an empty `fact_gateway_call` (and `security.user_project`)
   with their schemas when absent, and never overwrites a filled one. The model therefore loads
   before project 10's session has run, and in dev, where the gateway table stays empty.
-- **Measures:** in a display folder per page. Each one names the gold answer it mirrors in its
-  description.
+- **Measures:** on their fact tables, in a display folder per page: Spend on `fact_daily_cost`,
+  Quality on `fact_eval_attempt`, Gateway on `fact_gateway_call`. There is no measures-only table,
+  because that would be a calculated table, which the model doesn't use *(Claude's call, ruling R1)*.
+  Each measure names the gold answer it mirrors in its description.
   - **Spend:** `Cost (AUD)` and `Untagged cost`. They mirror `answers.cost_per_project`. Costs
     stay in the billing currency, and estimates are never added to actuals. There is no share
     measure: under RLS a lead's "share" would be 100% of what they can see, and gold has no share
     figure to mirror. The owner's table may show a visual-level percent of the grand total, which
     is outside the check.
   - **Quality:** `Results (n)`, `Success rate`, and one mean measure per metric that
-    `quality_across_models` returns, with the same name: groundedness, citation recall and
+    `quality_across_models` returns, named after it: groundedness, citation recall and
     precision, must-contain rate, top-1 rate, MRR, tool-call accuracy, task adherence, intent
-    resolution and latency. There is no blended "score": each study shows the metrics it has.
+    resolution and latency. A measure can't share a name with a column, and DAX names ignore case,
+    so the groundedness mean is `Groundedness (mean)` *(ruling R4)*. There is no blended "score":
+    each study shows the metrics it has.
     Also `Estimated cost per result (USD)` and `Estimated cost per result (AUD)`. They mirror `answers.quality_across_models` and
     `answers.cost_per_result`, including the export-rate conversion that is null when the export
     has no single rate.
-  - **Gateway:** `Calls`, `Refused by gateway`, `Tokens`, `Tokens per call`, `Cost per 1,000 calls`.
-    They mirror `gateway.answers.cost_per_gateway_call`.
+  - **Gateway:** `Calls`, `Refused by gateway`, `Tokens (total)`, `Tokens per call`,
+    `Cost per 1,000 calls`. They mirror `gateway.answers.cost_per_gateway_call`. `Tokens (total)`
+    is not `Tokens`, because the fact has a `tokens` column *(ruling R4)*. The gateway answer gains a
+    `refused` column, so `Refused by gateway` mirrors a real gold figure *(ruling R5)*.
 
     "Tokens per user" becomes tokens per caller label, and "cost per 1,000 requests" applies to
     the gateway session's calls. Those are the only data these measures exist for, and the page
@@ -155,8 +162,14 @@ don't build" note.
 
 ### 4.2 Row-level security
 
-- **One role, `ProjectLead`,** with a DAX filter on `user_project`: `[upn] = USERPRINCIPALNAME()`.
-  It reaches `dim_project`, and through it every fact. The two test users are its members.
+- **One role, `ProjectLead`.** It filters `user_project` to the signed-in user with
+  `[upn] = LOWER(USERPRINCIPALNAME())`. The model has no relationship to `user_project`, so every
+  table with a `project` column carries its own filter:
+  `[project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = LOWER(USERPRINCIPALNAME()))`.
+  The two test users are its members.
+- **The filter compares with the lower-case UPN** *(ruling R8)*. The loader stores UPNs in lower
+  case, and Direct Lake's collation is unconfirmed. A case mismatch would fail closed and hide
+  everything from every lead.
 - **The owner sees everything**, because RLS doesn't apply to workspace Admins and Members. The
   access table therefore needs no "all" row.
 - **`user_project` holds UPNs, so it is never committed.**
@@ -202,14 +215,19 @@ hand-written.
   this storage mode.
 - **The connection binding.** `semantic_model_binding` binds `sm_portfolio` to the fixed-identity
   connection. Its ID comes from a prod environment secret via `$ENV:`, as in project 10.
+  `fabric-cicd`'s binding is best-effort and never fails publish, so `refresh-model` verifies it:
+  the model's connections must list the fixed-identity connection, or the step fails and starts no
+  refresh *(ruling R7)*. The fixed identity is a security property, so the deploy fails closed.
 - **Item scope.** `ITEM_TYPES_IN_SCOPE` gains `SemanticModel` and `Report`.
 - **A new deploy step, `refresh-model`.** After `publish`, it frames the model through the
   refresh API, because `fabric-cicd` 1.4.0 never refreshes and new tables stay invisible until a
   refresh. It follows the same error rules as the other steps. The service principal stays the
   model's owner, so it can bind and refresh.
 - **The daily pipeline** gains an `OPTIMIZE` of each gold table after the load. A Direct Lake on
-  OneLake table over 1,000 Parquet files errors rather than falling back. Afterwards the model is
-  refreshed, by the pipeline or by the model's automatic updates, whichever the builder confirms.
+  OneLake table over 1,000 Parquet files errors rather than falling back. How the model then picks
+  the load up is decided in plan 2, at the `fabric/VERIFY.md` row on the model's refresh after the
+  daily load: the model's automatic updates if a daily load shows up without `refresh-model`,
+  otherwise a refresh after `nb_load` in the pipeline.
 
 ### 4.5 The model-versus-gold check
 
@@ -221,6 +239,8 @@ hand-written.
 - **What it checks:**
   - for each measure, its value at the grain of the gold answer it mirrors equals that answer
     (exact for counts; within 0.005 for money and rates);
+  - `Cost per 1,000 calls` against 1000 × the answer's `cost_per_call`, and `Refused by gateway`
+    against its `refused` column *(ruling R5)*;
   - as each test user (`effective_user_name`), only that user's project appears, and its figures
     equal the owner's figures for that project.
 - **It fails** with the measure's name, the grain key and both values. It never prints a UPN; users
@@ -234,7 +254,7 @@ hand-written.
   - every table in `GOLD_TABLES`, `SESSION_TABLES` and `user_project` is in the model, in Direct
     Lake mode, with `schemaName` set;
   - every measure named in 4.1 exists with a description naming its gold answer;
-  - the role filter is exactly the `USERPRINCIPALNAME()` filter;
+  - the role filters are exactly the `LOWER(USERPRINCIPALNAME())` filters in 4.2;
   - no UPN, tenant ID or URL other than the OneLake expression is in the definition. Fabric
     workspace and item GUIDs are allowed.
 - `parameter.yml` rules evaluated as in project 10: the regex `find_replace` matches the
@@ -242,7 +262,8 @@ hand-written.
 - The access loader, the comparison logic, and the deploy's `refresh-model` step, with fakes as in
   `tests/test_deploy.py`.
 - The hygiene check gains UPN patterns for the personal tenant's domain, held in the
-  `HYGIENE_FORBIDDEN` secret.
+  `HYGIENE_FORBIDDEN` secret. Plan 2 adds the domain and the test users' UPN local parts to it
+  (a `fabric/VERIFY.md` row).
 
 ### 4.7 The live run (plan 2 of project 11)
 
@@ -271,7 +292,8 @@ The run finishes by about 20 December.
 
 - Exact DAX and visual choices within the pages above.
 - Measure and display-folder names beyond those listed.
-- Whether the model refreshes from the pipeline or by automatic updates.
+- Whether the model refreshes from the pipeline or by automatic updates: decided in plan 2, at
+  the `fabric/VERIFY.md` row on the model's refresh after the daily load (4.4).
 - The fixed identity's credential type, if the workspace identity is refused.
 - The TMDL details Learn doesn't show in full: check them against the first model Fabric commits.
 

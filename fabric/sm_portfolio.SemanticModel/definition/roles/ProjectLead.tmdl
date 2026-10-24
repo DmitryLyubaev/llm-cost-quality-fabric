@@ -1,18 +1,18 @@
 role ProjectLead
 	modelPermission: read
 
-	tablePermission user_project = [upn] = USERPRINCIPALNAME()
+	tablePermission user_project = [upn] = LOWER(USERPRINCIPALNAME())
 
-	tablePermission dim_project = [project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = USERPRINCIPALNAME())
+	tablePermission dim_project = [project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = LOWER(USERPRINCIPALNAME()))
 
-	tablePermission dim_study = [project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = USERPRINCIPALNAME())
+	tablePermission dim_study = [project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = LOWER(USERPRINCIPALNAME()))
 
-	tablePermission dim_arm = [project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = USERPRINCIPALNAME())
+	tablePermission dim_arm = [project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = LOWER(USERPRINCIPALNAME()))
 
-	tablePermission fact_eval_attempt = [project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = USERPRINCIPALNAME())
+	tablePermission fact_eval_attempt = [project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = LOWER(USERPRINCIPALNAME()))
 
-	tablePermission fact_daily_cost = [project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = USERPRINCIPALNAME())
+	tablePermission fact_daily_cost = [project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = LOWER(USERPRINCIPALNAME()))
 
-	tablePermission fact_live_check = [project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = USERPRINCIPALNAME())
+	tablePermission fact_live_check = [project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = LOWER(USERPRINCIPALNAME()))
 
-	tablePermission fact_gateway_call = [project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = USERPRINCIPALNAME())
+	tablePermission fact_gateway_call = [project] IN CALCULATETABLE(VALUES(user_project[project]), user_project[upn] = LOWER(USERPRINCIPALNAME()))

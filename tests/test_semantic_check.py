@@ -638,6 +638,22 @@ def test_a_failing_lead_query_is_reported_without_its_text(spark, checked_lake, 
     _no_upn(result.detail)
 
 
+def test_a_lead_whose_queries_failed_is_not_said_to_have_no_rows(spark, checked_lake, model):
+    """The note for a lead with nothing compared says their queries failed when they raised."""
+    def tamper(name, rows, user):
+        if user == LEAD_ONE:
+            raise RuntimeError("impersonation refused")
+        return rows
+
+    model.tamper = tamper
+    result = semantic.check_model_matches_gold(spark, checked_lake, model, [])
+
+    assert not result.passed
+    assert "nothing compared for the lead of p1 (their queries failed)" in result.detail
+    assert "no rows in their projects" not in result.detail
+    _no_upn(result.detail)
+
+
 def test_check_fails_with_no_leads_in_the_access_table(spark, loaded_lake, fake_model):
     paths, _, _ = loaded_lake  # its user_project is the empty always-present table
 
