@@ -87,6 +87,8 @@ jobs:
   # wheel, then the cost shortcut, then OneLake availability for the gateway table, then the gateway
   # shortcut (it targets the table that availability exposes). The real-time items and both
   # gateway steps run only when P10_EVENTHUB_CONNECTION_ID is set; without it they are skipped.
+  # Then the semantic model's refresh. The model and report, its connection binding and the refresh
+  # run only when P11_MODEL_CONNECTION_ID is set; the two gates are independent.
   # The `prod` environment's required reviewer (configured in plan 3) gates this job.
   prod:
     if: github.ref == 'refs/heads/main'
@@ -122,6 +124,7 @@ jobs:
           FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
           FABRIC_ENVIRONMENT: PROD
           P10_EVENTHUB_CONNECTION_ID: ${{ secrets.P10_EVENTHUB_CONNECTION_ID }}
+          P11_MODEL_CONNECTION_ID: ${{ secrets.P11_MODEL_CONNECTION_ID }}
         run: python .deploy/deploy.py publish
       # The lakehouse lh_portfolio is looked up by name in the workspace.
       - name: Upload the wheel
@@ -148,3 +151,9 @@ jobs:
           FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
           P10_EVENTHUB_CONNECTION_ID: ${{ secrets.P10_EVENTHUB_CONNECTION_ID }}
         run: python .deploy/deploy.py ensure-gateway-shortcut
+      # Last: the model frames every table it reads, the gateway table (through the shortcut) included.
+      - name: Refresh the semantic model
+        env:
+          FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
+          P11_MODEL_CONNECTION_ID: ${{ secrets.P11_MODEL_CONNECTION_ID }}
+        run: python .deploy/deploy.py refresh-model

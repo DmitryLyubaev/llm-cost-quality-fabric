@@ -1,14 +1,18 @@
 """Deploy script run by GitHub Actions after azure/login (OIDC).
 
 Subcommands: upload-wheel, publish, ensure-shortcut, onelake-availability,
-ensure-gateway-shortcut. Every input comes from environment variables so nothing
-sensitive lands in argv or logs. Nothing here prints an environment value, a
+ensure-gateway-shortcut, refresh-model. Every input comes from environment variables so
+nothing sensitive lands in argv or logs. Nothing here prints an environment value, a
 token, a request body or a URL carrying the shortcut location or a query URI.
 
 The real-time path (project 10) is gated on P10_EVENTHUB_CONNECTION_ID: while it is
 unset or empty, publish leaves the real-time item types out and the two real-time
 subcommands skip, so project 9's deploys keep working before the Eventstream's
 connection exists and no Eventhouse idles on the capacity.
+
+The semantic model path (project 11) has its own, independent gate,
+P11_MODEL_CONNECTION_ID: while it is unset or empty, publish leaves SemanticModel and
+Report out and refresh-model skips.
 
 Not part of the `lakehouse` package. azure and fabric_cicd are imported lazily
 inside the seam functions, so the tests need neither installed.
@@ -18,6 +22,7 @@ import argparse
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -28,23 +33,59 @@ FABRIC_SCOPE = "https://api.fabric.microsoft.com/.default"
 # (Fabric view) gets the token with `--resource "https://api.kusto.windows.net"`:
 # https://learn.microsoft.com/en-us/kusto/api/rest/authentication?view=microsoft-fabric
 KUSTO_SCOPE = "https://api.kusto.windows.net/.default"
+# Learn documents the semantic model refresh as a Power BI REST call (refresh-dataset-in-group below).
+# Learn's Power BI REST troubleshooting page: the token's audience must be
+# https://analysis.windows.net/powerbi/api for the global cloud; Learn's service-principal embedding
+# samples ask for it as this `.default` scope. A service principal needs no delegated scope (its rights
+# are its workspace role plus the tenant setting that lets service principals call Power BI APIs):
+# https://learn.microsoft.com/en-us/power-bi/developer/embedded/troubleshoot-rest-api
+# https://learn.microsoft.com/en-us/power-bi/developer/embedded/embed-service-principal-certificate
+POWERBI_API_BASE = "https://api.powerbi.com/v1.0/myorg"
+POWERBI_SCOPE = "https://analysis.windows.net/powerbi/api/.default"
 # Resolved from the script location, never the working directory.
 REPOSITORY_DIRECTORY = str(Path(__file__).resolve().parent.parent / "fabric")
 REALTIME_ITEM_TYPES = ["Eventhouse", "KQLDatabase", "KQLQueryset", "KQLDashboard", "Reflex", "Eventstream"]
-ITEM_TYPES_IN_SCOPE = ["Lakehouse", "Notebook", "DataPipeline", *REALTIME_ITEM_TYPES]
+MODEL_ITEM_TYPES = ["SemanticModel", "Report"]
+ITEM_TYPES_IN_SCOPE = ["Lakehouse", "Notebook", "DataPipeline", *REALTIME_ITEM_TYPES, *MODEL_ITEM_TYPES]
 SHORTCUT_PATH = "Files"
 SHORTCUT_NAME = "cost_export"
 # The lakehouse is found by name, so a first prod deploy needs no ID that only exists after publish.
 LAKEHOUSE_NAME = "lh_portfolio"
+# Found by name too: it exists only after a publish with the model gate open.
+SEMANTIC_MODEL_NAME = "sm_portfolio"
 
 # R13: the real-time path runs only when the Eventstream's Fabric connection exists.
 REALTIME_GATE = "P10_EVENTHUB_CONNECTION_ID"
+# Project 11: the model and report deploy only when the model's Fabric connection exists. fabric-cicd
+# binds the model to it after publish (parameter.yml's semantic_model_binding), so refresh-model does not.
+MODEL_GATE = "P11_MODEL_CONNECTION_ID"
+# What each closed gate leaves out of publish, and how publish names it when it skips them.
+GATED_ITEM_TYPES = (
+    (REALTIME_GATE, REALTIME_ITEM_TYPES, "real-time items"),
+    (MODEL_GATE, MODEL_ITEM_TYPES, "model and report"),
+)
 # parameter.yml's $ENV: token needs this fabric-cicd 1.4.0 feature flag (fabric_cicd.append_feature_flag).
 ENV_REPLACEMENT_FLAG = "enable_environment_variable_replacement"
 # fabric-cicd 1.4.0 refuses the whole parameter file when an active $ENV: token's variable is not set
-# (_parameter._validate_dynamic_replacement_variables), whatever the item scope. With the gate off the
-# Eventstream is out of scope, so publish stands in git's own value, the empty GUID.
+# (_parameter._validate_dynamic_replacement_variables), whatever the item scope; a semantic_model_binding
+# connection_id left as the literal token fails its GUID check (_validate_connection_id) the same way.
+# With a gate off its items are out of scope, so publish stands in git's own value, the empty GUID.
 EMPTY_GUID = "00000000-0000-0000-0000-000000000000"
+
+# An enhanced refresh: any field besides notifyOption makes it one, and only an enhanced refresh can be
+# read back by its ID. notifyOption does not apply to a service principal. A full refresh of a Direct Lake
+# model reframes it on the lakehouse's current Delta versions; transactional keeps the old frame on failure.
+# https://learn.microsoft.com/en-us/rest/api/power-bi/datasets/refresh-dataset-in-group
+# https://learn.microsoft.com/en-us/power-bi/connect-data/asynchronous-refresh
+REFRESH_REQUEST = {"type": "Full", "commitMode": "transactional"}
+# Get Refresh Execution Details: extendedStatus (else status) of the refresh; anything else (NotStarted,
+# InProgress, Unknown) is still running.
+# https://learn.microsoft.com/en-us/rest/api/power-bi/datasets/get-refresh-execution-details-in-group
+REFRESH_DONE = "Completed"
+REFRESH_FAILED = ("Failed", "TimedOut", "Cancelled", "Disabled")
+REFRESH_POLL_SECONDS = 15
+REFRESH_TIMEOUT_SECONDS = 600
+_GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 # The gateway table in the Eventhouse, and its shortcut in lh_portfolio.
 KQL_DATABASE_NAME = "kql_gateway"
@@ -88,8 +129,8 @@ class StepFailed(Exception):
 
 
 def _error_code(body):
-    """The error code of a Fabric (`errorCode`) or Kusto (`error.code`) error body, if it is safe to
-    print; otherwise "unknown"."""
+    """The error code of a Fabric (`errorCode`) or Kusto or Power BI (`error.code`) error body, if it
+    is safe to print; otherwise "unknown"."""
     code = None
     if isinstance(body, dict):
         code = body.get("errorCode")
@@ -106,11 +147,25 @@ def _env(name):
     return value
 
 
-def _realtime_enabled():
-    return bool(os.environ.get(REALTIME_GATE))
+def _gate_open(gate):
+    """A gate is open when its connection variable is set and not empty (Actions passes a missing
+    secret as an empty string)."""
+    return bool(os.environ.get(gate))
+
+
+def _skipped(command, gate):
+    """True, after printing the skip line, when `command` must not run because `gate` is closed."""
+    if _gate_open(gate):
+        return False
+    print(f"{command}: skipped (no {gate})")
+    return True
 
 
 # --- seams (the tests replace these) ---------------------------------------
+
+
+_sleep = time.sleep
+_monotonic = time.monotonic
 
 
 def _credential():
@@ -152,6 +207,24 @@ def _http_get(url, token):
     except ValueError:
         body = {}
     return response.status_code, body
+
+
+def _http_post_location(url, json, token):
+    """POST json; return (status, parsed JSON body or {}, the Location header or None). For an
+    asynchronous start whose answer is in the header. Never logs anything."""
+    import requests
+
+    response = requests.post(
+        url,
+        json=json,
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        timeout=60,
+    )
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    return response.status_code, body, response.headers.get("Location")
 
 
 def _find_item(workspace_id, token, collection, name, kind):
@@ -249,13 +322,16 @@ def upload_wheel():
 def publish():
     workspace_id = _env("FABRIC_WORKSPACE_ID")
     environment = _env("FABRIC_ENVIRONMENT")
-    if _realtime_enabled():
-        item_types = list(ITEM_TYPES_IN_SCOPE)
-    else:
-        item_types = [t for t in ITEM_TYPES_IN_SCOPE if t not in REALTIME_ITEM_TYPES]
-        os.environ[REALTIME_GATE] = EMPTY_GUID  # see EMPTY_GUID; only this process sees it
+    item_types = list(ITEM_TYPES_IN_SCOPE)
+    for gate, gated_types, label in GATED_ITEM_TYPES:  # independent gates
+        if _gate_open(gate):
+            continue
+        item_types = [t for t in item_types if t not in gated_types]
+        os.environ[gate] = EMPTY_GUID  # see EMPTY_GUID; only this process sees it
         # Never raise fabric-cicd to debug (change_log_level): it logs substituted $ENV values there.
-        print(f"publish: real-time items skipped (no {REALTIME_GATE})")
+        # (At its default INFO level 1.4.0 still names the bound connection when it binds the model;
+        # Actions masks that value, as it does every secret.)
+        print(f"publish: {label} skipped (no {gate})")
     # fabric-cicd validates parameter.yml, $ENV: tokens included, when the workspace is built.
     _enable_feature_flag(ENV_REPLACEMENT_FLAG)
     workspace = _fabric_workspace(
@@ -304,8 +380,7 @@ def ensure_shortcut():
 
 def onelake_availability():
     """Expose gateway_calls in OneLake (Delta) so lh_portfolio can shortcut to it."""
-    if not _realtime_enabled():
-        print(f"onelake-availability: skipped (no {REALTIME_GATE})")
+    if _skipped("onelake-availability", REALTIME_GATE):
         return 0
     workspace_id = _env("FABRIC_WORKSPACE_ID")
     credential = _credential()
@@ -325,8 +400,7 @@ def ensure_gateway_shortcut():
     """A OneLake shortcut in lh_portfolio to the gateway table that onelake-availability exposes.
     The shortcut API takes a KQL database as a OneLake target item:
     https://learn.microsoft.com/en-us/rest/api/fabric/core/onelake-shortcuts/create-shortcut"""
-    if not _realtime_enabled():
-        print(f"ensure-gateway-shortcut: skipped (no {REALTIME_GATE})")
+    if _skipped("ensure-gateway-shortcut", REALTIME_GATE):
         return 0
     workspace_id = _env("FABRIC_WORKSPACE_ID")
     token = _credential().get_token(FABRIC_SCOPE).token
@@ -354,12 +428,67 @@ def ensure_gateway_shortcut():
     return 0
 
 
+def _wait_for_refresh(url, token):
+    """Poll Get Refresh Execution Details until the refresh completes (returns), fails (StepFailed
+    with Learn's status name) or REFRESH_TIMEOUT_SECONDS go by. A status outside Learn's list counts
+    as still running and is never printed. Sleeps through the _sleep / _monotonic seams."""
+    deadline = _monotonic() + REFRESH_TIMEOUT_SECONDS
+    while True:
+        status, body = _http_get(url, token)  # status before body; 202 while running, 200 when done
+        if not 200 <= status < 300 or not isinstance(body, dict):
+            raise StepFailed(f"HTTP {status} {_error_code(body)}")
+        state = body.get("extendedStatus") or body.get("status")
+        if state == REFRESH_DONE:
+            return
+        if state in REFRESH_FAILED:
+            raise StepFailed(f"refresh {state}")
+        if _monotonic() >= deadline:
+            # The refresh may still finish in the service; a re-run starts a new one once it has.
+            raise StepFailed(f"refresh did not finish in {REFRESH_TIMEOUT_SECONDS // 60} minutes")
+        _sleep(REFRESH_POLL_SECONDS)
+
+
+def _semantic_model_id(workspace_id, token):
+    """The ID of the semantic model named SEMANTIC_MODEL_NAME (see _find_item). List Semantic Models:
+    https://learn.microsoft.com/en-us/rest/api/fabric/semanticmodel/items/list-semantic-models"""
+    return str(_find_item(workspace_id, token, "semanticModels", SEMANTIC_MODEL_NAME, "semantic model")["id"])
+
+
+def refresh_model():
+    """Refresh (reframe) sm_portfolio after the deploy: fabric-cicd publishes the definition but
+    sends no refresh, and a Direct Lake table stays unprocessed, failing queries, until one runs.
+    The connection binding is fabric-cicd's (parameter.yml's semantic_model_binding, after publish),
+    so nothing is bound here. The deploy identity owns the model it published, as binding requires
+    ("The caller must be the owner of the semantic model"):
+    https://learn.microsoft.com/en-us/rest/api/fabric/semanticmodel/items/bind-semantic-model-connection"""
+    if _skipped("refresh-model", MODEL_GATE):
+        return 0
+    workspace_id = _env("FABRIC_WORKSPACE_ID")
+    credential = _credential()
+    model_id = _semantic_model_id(workspace_id, credential.get_token(FABRIC_SCOPE).token)
+    # A semantic model's Fabric item ID is its Power BI dataset ID.
+    token = credential.get_token(POWERBI_SCOPE).token
+    refreshes = f"{POWERBI_API_BASE}/groups/{workspace_id}/datasets/{model_id}/refreshes"
+    status, body, location = _http_post_location(refreshes, REFRESH_REQUEST, token)
+    if not 200 <= status < 300:  # status before body; Learn documents 202 Accepted
+        raise StepFailed(f"HTTP {status} {_error_code(body)}")
+    # The refresh ID is the Location header's last segment. Only the ID is used: the status URL is
+    # built here, so the token never goes to a host the response names.
+    refresh_id = (location or "").rstrip("/").rsplit("/", 1)[-1]
+    if not _GUID.fullmatch(refresh_id):
+        raise StepFailed("the refresh has no ID")
+    _wait_for_refresh(f"{refreshes}/{refresh_id}", token)
+    print("refresh-model: ok")
+    return 0
+
+
 COMMANDS = {
     "upload-wheel": upload_wheel,
     "publish": publish,
     "ensure-shortcut": ensure_shortcut,
     "onelake-availability": onelake_availability,
     "ensure-gateway-shortcut": ensure_gateway_shortcut,
+    "refresh-model": refresh_model,
 }
 
 

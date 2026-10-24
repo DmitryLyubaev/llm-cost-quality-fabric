@@ -768,5 +768,127 @@ def test_parameter_file_only_targets_prod_and_known_environment_variables():
         for rule in params[section]:
             assert set(rule["replace_value"]) == {"PROD"}
     text = (FABRIC / "parameter.yml").read_text(encoding="utf-8")
-    assert set(re.findall(r"\$ENV:(\w+)", text)) == {"P10_EVENTHUB_CONNECTION_ID"}
+    assert set(re.findall(r"\$ENV:(\w+)", text)) == {"P10_EVENTHUB_CONNECTION_ID", "P11_MODEL_CONNECTION_ID"}
     assert "enable_environment_variable_replacement" in text
+
+
+# --- The semantic model (project 11): rebinding and the connection -------------------------------
+
+MODEL_EXPRESSIONS = FABRIC / "sm_portfolio.SemanticModel" / "definition" / "expressions.tmdl"
+_G = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+ONELAKE_SOURCE = re.compile(rf'AzureStorage\.DataLake\("https://onelake\.dfs\.fabric\.microsoft\.com/({_G})/({_G})"')
+# What fabric-cicd resolves the two dynamic variables to on a PROD deploy (made-up IDs).
+PROD_WORKSPACE = "12121212-aaaa-bbbb-cccc-000000000012"
+PROD_LAKEHOUSE = "34343434-aaaa-bbbb-cccc-000000000034"
+RESOLVED = {"$workspace.$id": PROD_WORKSPACE, "$items.Lakehouse.lh_portfolio.$id": PROD_LAKEHOUSE}
+# fabric_cicd/_common/_validate_env_vars.py, VALID_GUID_REGEX (1.4.0): what a binding connection_id must be.
+VALID_GUID = re.compile(r"^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$")
+
+
+def _find_replace_rules(item_type: str) -> list[dict]:
+    return [r for r in _parameters()["find_replace"] if r["item_type"] == item_type]
+
+
+def _apply_find_replace(rule: dict, text: str, value: str) -> str:
+    """As fabric-cicd 1.4.0 applies an `is_regex` rule (fabric_workspace.py, _replace_parameters):
+    re.sub over every match, swapping only capture group 1 for the resolved value."""
+    pattern = re.compile(rule["find_value"])
+    assert pattern.groups == 1  # fabric-cicd's _validate_regex_structure
+    return pattern.sub(
+        lambda m: m.group(0)[: m.start(1) - m.start(0)] + value + m.group(0)[m.end(1) - m.start(0) :],
+        text,
+    )
+
+
+def test_every_find_replace_rule_is_checked():
+    """The notebook rules are evaluated above, the model's below; a new item type needs its own test."""
+    rules = _parameters()["find_replace"]
+    assert sorted(r["item_type"] for r in rules) == ["Notebook"] * 3 + ["SemanticModel"] * 2
+
+
+def test_model_rules_target_only_the_expression_file():
+    model_files = [
+        p for path, doc in _platforms().items() if doc["metadata"]["type"] == "SemanticModel"
+        for p in path.parent.rglob("*") if p.is_file()
+    ]
+    for rule in _find_replace_rules("SemanticModel"):
+        assert rule["is_regex"] == "true"
+        assert rule["file_path"] == "**/definition/expressions.tmdl"
+        assert set(rule["replace_value"]) == {"PROD"}
+        assert sorted(FABRIC.glob(rule["file_path"])) == [MODEL_EXPRESSIONS]
+        for path in model_files:
+            matches = re.findall(rule["find_value"], path.read_text(encoding="utf-8"))
+            assert len(matches) == (1 if path == MODEL_EXPRESSIONS else 0), (rule["find_value"], path)
+
+
+def test_model_rules_repoint_the_workspace_and_the_lakehouse():
+    text = MODEL_EXPRESSIONS.read_text(encoding="utf-8")
+    source = ONELAKE_SOURCE.search(text)
+    roles = {}
+    for rule in _find_replace_rules("SemanticModel"):
+        match = re.search(rule["find_value"], text)
+        # which of the URL's two GUIDs the capture group holds
+        roles[match.start(1) - source.start()] = rule["replace_value"]["PROD"]
+    assert roles == {
+        source.start(1) - source.start(): "$workspace.$id",
+        source.start(2) - source.start(): "$items.Lakehouse.lh_portfolio.$id",
+    }
+
+
+@pytest.mark.parametrize("order", [1, -1], ids=["as_written", "reversed"])
+def test_model_rules_change_only_the_two_guids_in_prod(order):
+    """Every find_replace rule fabric-cicd would apply to the file (its item type and glob match), in
+    turn: the second still matches after the first has swapped its GUID, and nothing else changes."""
+    text = MODEL_EXPRESSIONS.read_text(encoding="utf-8")
+    applied = [
+        r for r in _parameters()["find_replace"]
+        if r["item_type"] == "SemanticModel" and MODEL_EXPRESSIONS in FABRIC.glob(r["file_path"])
+    ]
+    assert len(applied) == 2
+    result = text
+    for rule in applied[::order]:
+        assert len(re.findall(rule["find_value"], result)) == 1
+        result = _apply_find_replace(rule, result, RESOLVED[rule["replace_value"]["PROD"]])
+
+    source = ONELAKE_SOURCE.search(text)
+    expected = (
+        text[: source.start(1)] + PROD_WORKSPACE + text[source.end(1) : source.start(2)]
+        + PROD_LAKEHOUSE + text[source.end(2) :]
+    )
+    assert result == expected
+    # the notebook rules, filtered out by item type, would not have matched the model either
+    for rule in _find_replace_rules("Notebook"):
+        assert not re.search(rule["find_value"], text)
+
+
+def test_parameter_file_binds_the_model_to_the_connection_from_the_environment():
+    """fabric-cicd 1.4.0 binds after publish (_items/_semanticmodel.py, post_publish_all); the new
+    dictionary format, since the legacy list format takes no per-environment value."""
+    assert _parameters()["semantic_model_binding"] == {
+        "models": [
+            {"semantic_model_name": "sm_portfolio", "connection_id": {"PROD": "$ENV:P11_MODEL_CONNECTION_ID"}}
+        ]
+    }
+
+
+def _with_environment(raw: str, environment: dict) -> dict:
+    """fabric-cicd 1.4.0's replace_variables_in_parameter_file (_parameter/_utils.py): every
+    `$ENV:<name>` token in the raw file is replaced before the YAML is loaded, and a token whose
+    variable is not set is kept as it is."""
+    return yaml.safe_load(
+        re.sub(r"\$ENV:(\w+)", lambda m: environment.get(m.group(1), m.group(0)), raw)
+    )
+
+
+def test_the_binding_connection_resolves_to_a_guid_only_when_the_variable_is_set():
+    raw = (FABRIC / "parameter.yml").read_text(encoding="utf-8")
+    connection = "56565656-aaaa-bbbb-cccc-000000000056"
+
+    def bound(environment):
+        return _with_environment(raw, environment)["semantic_model_binding"]["models"][0]["connection_id"]["PROD"]
+
+    assert bound({"P11_MODEL_CONNECTION_ID": connection}) == connection
+    # the gate closed: deploy.py stands in the empty GUID, which passes fabric-cicd's GUID check
+    assert VALID_GUID.match(bound({"P11_MODEL_CONNECTION_ID": EMPTY_GUID}))
+    # unset, the token stays and fabric-cicd refuses the whole file: hence the stand-in
+    assert not VALID_GUID.match(bound({}))

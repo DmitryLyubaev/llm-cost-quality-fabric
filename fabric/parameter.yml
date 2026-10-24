@@ -4,7 +4,8 @@
 # $ENV: values come from the deploy's OS environment (plain name, no prefix) and need fabric-cicd's
 # feature flag enable_environment_variable_replacement. fabric-cicd 1.4.0 refuses the parameter file when
 # a PROD $ENV: token's variable is unset, so a missing secret fails the deploy instead of passing silently;
-# .deploy/deploy.py stands in the empty GUID while the real-time items are out of scope (see VERIFY.md).
+# .deploy/deploy.py stands in the empty GUID while the real-time items, or the model and report, are out
+# of scope (see VERIFY.md).
 
 find_replace:
     # The notebooks' default lakehouse: lh_portfolio's logicalId in git -> its deployed id.
@@ -27,6 +28,22 @@ find_replace:
       is_regex: "true"
       item_type: "Notebook"
       file_path: "**/notebook-content.py"
+    # The semantic model's Direct Lake on OneLake source, AzureStorage.DataLake(".../<workspace>/<lakehouse>"):
+    # git holds the empty GUID for both until project 11 plan 2 commits dev's IDs (Fabric git does not swap
+    # them for logicalIds), so PROD rewrites both, whatever they are. One rule
+    # per GUID, since a capture group swaps one value and $ variables cannot sit inside a larger string.
+    - find_value: 'AzureStorage\.DataLake\("https://onelake\.dfs\.fabric\.microsoft\.com/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"'
+      replace_value:
+        PROD: "$workspace.$id"
+      is_regex: "true"
+      item_type: "SemanticModel"
+      file_path: "**/definition/expressions.tmdl"
+    - find_value: 'AzureStorage\.DataLake\("https://onelake\.dfs\.fabric\.microsoft\.com/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"'
+      replace_value:
+        PROD: "$items.Lakehouse.lh_portfolio.$id"
+      is_regex: "true"
+      item_type: "SemanticModel"
+      file_path: "**/definition/expressions.tmdl"
 
 key_value_replace:
     # The daily schedule is disabled in git (dev never runs on a timer); PROD turns it on.
@@ -67,3 +84,14 @@ key_value_replace:
       item_type: "Eventstream"
       item_name: "es_gateway"
       file_path: "**/eventstream.json"
+
+# The model's data source binds to a Fabric connection after publish (fabric-cicd 1.4.0,
+# _items/_semanticmodel.py: post_publish_all -> bindConnection). $ENV: tokens are replaced in the raw file
+# before it is loaded (_parameter/_utils.py, replace_variables_in_parameter_file), so this section reads the
+# connection's id from the environment like the rules above. The dictionary format takes a per-environment
+# value (the legacy list format does not). Only PROD is listed: dev's connection is set in the portal.
+semantic_model_binding:
+    models:
+        - semantic_model_name: "sm_portfolio"
+          connection_id:
+            PROD: "$ENV:P11_MODEL_CONNECTION_ID"

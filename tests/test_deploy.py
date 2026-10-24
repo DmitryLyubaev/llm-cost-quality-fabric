@@ -32,6 +32,18 @@ MIRRORING_COMMAND = (
 )
 REALTIME_TYPES = ["Eventhouse", "KQLDatabase", "KQLQueryset", "KQLDashboard", "Reflex", "Eventstream"]
 SKIP_REASON = "(no P10_EVENTHUB_CONNECTION_ID)"
+# Project 11: the semantic model and its refresh, behind P11_MODEL_CONNECTION_ID.
+MODEL = "88888888-aaaa-bbbb-cccc-000000000008"
+OTHER_MODEL = "99999999-aaaa-bbbb-cccc-000000000009"
+MODEL_CONNECTION = "aaaaaaaa-aaaa-bbbb-cccc-00000000000a"
+REFRESH = "bbbbbbbb-aaaa-bbbb-cccc-00000000000b"
+MODEL_LIST_URL = f"https://api.fabric.microsoft.com/v1/workspaces/{WS}/semanticModels"
+POWERBI_SCOPE = "https://analysis.windows.net/powerbi/api/.default"
+REFRESHES_URL = f"https://api.powerbi.com/v1.0/myorg/groups/{WS}/datasets/{MODEL}/refreshes"
+REFRESH_URL = f"{REFRESHES_URL}/{REFRESH}"
+MODEL_TYPES = ["SemanticModel", "Report"]
+MODEL_SKIP_REASON = "(no P11_MODEL_CONNECTION_ID)"
+EMPTY_GUID = "00000000-0000-0000-0000-000000000000"
 
 
 @pytest.fixture(autouse=True)
@@ -40,6 +52,13 @@ def no_realtime_gate(monkeypatch):
     undone afterwards (setenv first, so monkeypatch records the variable and restores its absence)."""
     monkeypatch.setenv("P10_EVENTHUB_CONNECTION_ID", "unset-by-fixture")
     monkeypatch.delenv("P10_EVENTHUB_CONNECTION_ID")
+
+
+@pytest.fixture(autouse=True)
+def no_model_gate(monkeypatch):
+    """The same for project 11's gate, P11_MODEL_CONNECTION_ID."""
+    monkeypatch.setenv("P11_MODEL_CONNECTION_ID", "unset-by-fixture")
+    monkeypatch.delenv("P11_MODEL_CONNECTION_ID")
 
 
 @pytest.fixture
@@ -58,7 +77,8 @@ class FakeCredential:
         self.scopes = scopes
         self.calls.append(scopes)
         # One token per audience, so a test can tell which one reached which call.
-        token = "kusto-tok-secret" if scopes == (KUSTO_SCOPE,) else "tok-secret-value"
+        tokens = {(KUSTO_SCOPE,): "kusto-tok-secret", (POWERBI_SCOPE,): "pbi-tok-secret"}
+        token = tokens.get(scopes, "tok-secret-value")
         return SimpleNamespace(token=token)
 
 
@@ -114,7 +134,9 @@ def seams(deploy, monkeypatch):
                             ws_kwargs=None, published=[], gets=[], pages=[(200, {"value": [
                                 {"displayName": "lh_other", "id": OTHER_LH},
                                 {"displayName": "lh_portfolio", "id": LH},
-                            ]})], routes=None, events=[], env_at_build=None)
+                            ]})], routes=None, events=[], env_at_build=None,
+                            model_env_at_build=None, location_response=(202, {}, REFRESH_URL),
+                            clock=0.0, sleeps=[])
 
     def datalake_client(credential):
         assert credential is cred
@@ -124,21 +146,36 @@ def seams(deploy, monkeypatch):
         state.posts.append((url, json, token))
         return state.response
 
+    def http_post_location(url, json, token):
+        state.posts.append((url, json, token))
+        return state.location_response
+
     def http_get(url, token):
         state.gets.append((url, token))
         if state.routes is not None:
-            return state.routes[url]
+            route = state.routes[url]
+            if isinstance(route, list):  # successive responses; the last one repeats
+                return route.pop(0) if len(route) > 1 else route[0]
+            return route
         return state.pages[len(state.gets) - 1]
+
+    def sleep(seconds):
+        state.sleeps.append(seconds)
+        state.clock += seconds
 
     def fabric_workspace(**kwargs):
         state.events.append("workspace")
         state.env_at_build = os.environ.get("P10_EVENTHUB_CONNECTION_ID")
+        state.model_env_at_build = os.environ.get("P11_MODEL_CONNECTION_ID")
         state.ws_kwargs = kwargs
         return "WS-OBJECT"
 
     monkeypatch.setattr(deploy, "_datalake_client", datalake_client)
     monkeypatch.setattr(deploy, "_http_post", http_post)
     monkeypatch.setattr(deploy, "_http_get", http_get)
+    monkeypatch.setattr(deploy, "_http_post_location", http_post_location)
+    monkeypatch.setattr(deploy, "_sleep", sleep)
+    monkeypatch.setattr(deploy, "_monotonic", lambda: state.clock)
     monkeypatch.setattr(deploy, "_fabric_workspace", fabric_workspace)
     monkeypatch.setattr(deploy, "_publish", state.published.append)
     monkeypatch.setattr(deploy, "_enable_feature_flag", lambda name: state.events.append(("flag", name)))
@@ -169,6 +206,36 @@ def realtime(monkeypatch, seams):
         KQL_LIST_URL: kql_list(kql_item("kql_other", OTHER_KQL), kql_item()),
     }
     seams.response = (200, {})
+    return seams
+
+
+def model_list(*items, token=None):
+    body = {"value": list(items)}
+    if token:
+        body["continuationToken"] = token
+    return 200, body
+
+
+def refresh_state(extended, status=None):
+    """A Get Refresh Execution Details response: 202 while running, 200 when finished."""
+    running = extended in ("NotStarted", "InProgress", "Unknown")
+    body = {"status": status or ("Unknown" if running else extended), "extendedStatus": extended}
+    return (202 if running else 200), body
+
+
+@pytest.fixture
+def model(monkeypatch, seams):
+    """The model path is on (P11) and the workspace holds sm_portfolio; its refresh runs once, then
+    completes. Ask for it after `realtime` when a test needs both: it adds to the routes."""
+    # setenv before any delenv in a test, so monkeypatch restores the variable's absence afterwards.
+    monkeypatch.setenv("P11_MODEL_CONNECTION_ID", MODEL_CONNECTION)
+    seams.routes = {
+        **(seams.routes or {}),
+        MODEL_LIST_URL: model_list(
+            {"displayName": "sm_other", "id": OTHER_MODEL}, {"displayName": "sm_portfolio", "id": MODEL}
+        ),
+        REFRESH_URL: [refresh_state("InProgress"), refresh_state("Completed")],
+    }
     return seams
 
 
@@ -316,8 +383,10 @@ def test_ensure_shortcut_subpath_must_start_with_slash(deploy, env, seams, monke
     assert seams.posts == []
 
 
-def test_an_unexpected_error_in_publish_prints_only_its_type(deploy, env, realtime, monkeypatch, capsys):
-    # gate on (realtime): nothing on stdout; the gate-off case is the next test
+def test_an_unexpected_error_in_publish_prints_only_its_type(
+    deploy, env, realtime, model, monkeypatch, capsys
+):
+    # both gates on (realtime, model): nothing on stdout; the gate-off case is the next test
     url = f"https://x/workspaces/{WS}/items"
 
     def failing_publish(workspace):
@@ -329,7 +398,7 @@ def test_an_unexpected_error_in_publish_prints_only_its_type(deploy, env, realti
     out, err = capsys.readouterr()
     assert err.strip() == "publish: failed (RuntimeError)"
     assert out == ""
-    for value in (url, WS, "https://x", "Traceback", EVENTHUB_CONNECTION):
+    for value in (url, WS, "https://x", "Traceback", EVENTHUB_CONNECTION, MODEL_CONNECTION):
         assert value not in out + err
 
 
@@ -343,16 +412,22 @@ def test_an_unexpected_error_in_publish_with_the_gate_off(deploy, env, seams, mo
 
     assert deploy.main(["publish"]) == 1
     out, err = capsys.readouterr()
-    assert out == "publish: real-time items skipped (no P10_EVENTHUB_CONNECTION_ID)\n"
+    assert out == (
+        "publish: real-time items skipped (no P10_EVENTHUB_CONNECTION_ID)\n"
+        "publish: model and report skipped (no P11_MODEL_CONNECTION_ID)\n"
+    )
     assert err == "publish: failed (RuntimeError)\n"
     for value in (url, WS, "https://x", "Traceback", "00000000-0000-0000-0000-000000000000"):
         assert value not in out + err
 
 
 @pytest.mark.parametrize(
-    "command", ["upload-wheel", "ensure-shortcut", "onelake-availability", "ensure-gateway-shortcut"]
+    "command",
+    ["upload-wheel", "ensure-shortcut", "onelake-availability", "ensure-gateway-shortcut", "refresh-model"],
 )
-def test_an_unexpected_error_prints_only_its_type(deploy, env, realtime, monkeypatch, capsys, command):
+def test_an_unexpected_error_prints_only_its_type(
+    deploy, env, realtime, model, monkeypatch, capsys, command
+):
     """No message, URL, workspace ID or traceback: a ConnectionError text carries the request URL."""
     url = f"https://x/workspaces/{WS}/lakehouses"
 
@@ -365,7 +440,9 @@ def test_an_unexpected_error_prints_only_its_type(deploy, env, realtime, monkeyp
     out, err = capsys.readouterr()
     assert err.strip() == f"{command}: failed (ConnectionError)"
     assert out == ""
-    for value in (url, WS, "https://x", "Traceback", "tok-secret-value", EVENTHUB_CONNECTION):
+    for value in (
+        url, WS, "https://x", "Traceback", "tok-secret-value", EVENTHUB_CONNECTION, MODEL_CONNECTION,
+    ):
         assert value not in out + err
     assert realtime.upload == {} and realtime.posts == []
 
@@ -401,31 +478,34 @@ def test_missing_env_names_variable_only(deploy, env, seams, monkeypatch, capsys
     ("ensure-shortcut", "COST_EXPORT_LOCATION"),
     ("onelake-availability", "FABRIC_WORKSPACE_ID"),
     ("ensure-gateway-shortcut", "FABRIC_WORKSPACE_ID"),
+    ("refresh-model", "FABRIC_WORKSPACE_ID"),
 ])
-def test_missing_env_per_command(deploy, env, realtime, monkeypatch, capsys, command, name):
+def test_missing_env_per_command(deploy, env, realtime, model, monkeypatch, capsys, command, name):
     monkeypatch.delenv(name)
     assert deploy.main([command]) == 2
     out, err = capsys.readouterr()
     assert err.strip() == f"missing environment variable {name}"
-    assert EVENTHUB_CONNECTION not in out + err
+    assert EVENTHUB_CONNECTION not in out + err and MODEL_CONNECTION not in out + err
     assert realtime.gets == [] and realtime.posts == []
 
 
 ALL_COMMANDS = (
     "upload-wheel", "publish", "ensure-shortcut", "onelake-availability", "ensure-gateway-shortcut",
+    "refresh-model",
 )
 
 
-def test_no_secret_in_output(deploy, env, realtime, capsys):
+def test_no_secret_in_output(deploy, env, realtime, model, capsys):
     for command in ALL_COMMANDS:
         assert deploy.main([command]) == 0, command
     realtime.response = (500, {"errorCode": "Boom", "message": LOCATION})
-    for command in ("ensure-shortcut", "onelake-availability", "ensure-gateway-shortcut"):
+    realtime.location_response = (500, {"error": {"code": "Boom", "message": f"{WS}/{MODEL}"}}, None)
+    for command in ("ensure-shortcut", "onelake-availability", "ensure-gateway-shortcut", "refresh-model"):
         assert deploy.main([command]) == 1, command
     out, err = capsys.readouterr()
     for value in list(env.values()) + [
-        "tok-secret-value", "kusto-tok-secret", LH, OTHER_LH, KQL, OTHER_KQL,
-        EVENTHUB_CONNECTION, QUERY_URI, "qs-secret-host",
+        "tok-secret-value", "kusto-tok-secret", "pbi-tok-secret", LH, OTHER_LH, KQL, OTHER_KQL,
+        EVENTHUB_CONNECTION, QUERY_URI, "qs-secret-host", MODEL, OTHER_MODEL, MODEL_CONNECTION, REFRESH,
     ]:
         assert value not in out + err
 
@@ -458,6 +538,7 @@ def test_publish_without_the_connection_leaves_the_realtime_items_out(
     out, err = capsys.readouterr()
     assert out.splitlines() == [
         f"publish: real-time items skipped {SKIP_REASON}",
+        f"publish: model and report skipped {MODEL_SKIP_REASON}",
         "publish: done",
     ]
     assert err == ""
@@ -473,10 +554,10 @@ def test_publish_with_the_connection_includes_the_realtime_items(deploy, env, re
     assert realtime.ws_kwargs["item_type_in_scope"] == [
         "Lakehouse", "Notebook", "DataPipeline", *REALTIME_TYPES,
     ]
-    assert deploy.ITEM_TYPES_IN_SCOPE == realtime.ws_kwargs["item_type_in_scope"]
     assert realtime.env_at_build == EVENTHUB_CONNECTION  # left as it is
     out, err = capsys.readouterr()
-    assert out.splitlines() == ["publish: done"]
+    # the P11 gate is off here; the line for it is project 11's (see the gate tests below)
+    assert out.splitlines() == [f"publish: model and report skipped {MODEL_SKIP_REASON}", "publish: done"]
     assert EVENTHUB_CONNECTION not in out + err
 
 
@@ -702,3 +783,247 @@ def test_ensure_gateway_shortcut_non_2xx_prints_status_and_code_only(deploy, env
     assert err.strip() == "ensure-gateway-shortcut: HTTP 409 ShortcutConflict"
     for value in (WS, LH, KQL, "tok-secret-value"):
         assert value not in out + err
+
+
+# --- P11: the semantic model, its gate and its refresh --------------------------------------------
+
+
+@pytest.mark.parametrize("realtime_value", [None, EVENTHUB_CONNECTION])
+@pytest.mark.parametrize("model_value", [None, "", MODEL_CONNECTION])
+def test_publish_scope_follows_two_independent_gates(
+    deploy, env, seams, monkeypatch, capsys, realtime_value, model_value
+):
+    """Review Focus 5: without P11_MODEL_CONNECTION_ID (unset, or empty as Actions passes a missing
+    secret) the model and report stay out, and projects 9 and 10 publish exactly as before."""
+    for name, value in (("P10_EVENTHUB_CONNECTION_ID", realtime_value), ("P11_MODEL_CONNECTION_ID", model_value)):
+        if value is not None:
+            monkeypatch.setenv(name, value)
+
+    assert deploy.main(["publish"]) == 0
+
+    expected = ["Lakehouse", "Notebook", "DataPipeline"]
+    lines = []
+    if realtime_value:
+        expected += REALTIME_TYPES
+    else:
+        lines.append(f"publish: real-time items skipped {SKIP_REASON}")
+    if model_value:
+        expected += MODEL_TYPES
+    else:
+        lines.append(f"publish: model and report skipped {MODEL_SKIP_REASON}")
+    assert seams.ws_kwargs["item_type_in_scope"] == expected
+    out, err = capsys.readouterr()
+    assert out.splitlines() == lines + ["publish: done"]
+    assert err == ""
+    # fabric-cicd 1.4.0 refuses parameter.yml when a $ENV: token is left unresolved (the
+    # semantic_model_binding connection_id must then be a GUID), so a closed gate stands in the empty
+    # GUID for the build; an open gate's value is passed through as it is.
+    assert seams.env_at_build == (realtime_value or EMPTY_GUID)
+    assert seams.model_env_at_build == (model_value or EMPTY_GUID)
+    assert seams.events == [("flag", "enable_environment_variable_replacement"), "workspace"]
+    assert seams.published == ["WS-OBJECT"]
+    for value in (WS, EVENTHUB_CONNECTION, MODEL_CONNECTION, EMPTY_GUID):
+        assert value not in out + err
+
+
+def test_all_item_types_are_in_scope_with_both_gates_open(deploy, env, realtime, model):
+    assert deploy.main(["publish"]) == 0
+    assert realtime.ws_kwargs["item_type_in_scope"] == [
+        "Lakehouse", "Notebook", "DataPipeline", *REALTIME_TYPES, *MODEL_TYPES,
+    ]
+    assert deploy.ITEM_TYPES_IN_SCOPE == realtime.ws_kwargs["item_type_in_scope"]
+    assert deploy.MODEL_ITEM_TYPES == MODEL_TYPES
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_refresh_model_skips_without_the_model_connection(deploy, env, realtime, monkeypatch, capsys, value):
+    """Review Focus 5: the skip comes first, so not even the workspace ID is needed, and the real-time
+    gate being open changes nothing."""
+    if value is not None:
+        monkeypatch.setenv("P11_MODEL_CONNECTION_ID", value)
+    monkeypatch.delenv("FABRIC_WORKSPACE_ID")
+
+    assert deploy.main(["refresh-model"]) == 0
+
+    out, err = capsys.readouterr()
+    assert out == f"refresh-model: skipped {MODEL_SKIP_REASON}\n"
+    assert err == ""
+    assert realtime.gets == [] and realtime.posts == [] and realtime.cred.calls == []
+
+
+@pytest.mark.parametrize("command", ["onelake-availability", "ensure-gateway-shortcut"])
+def test_the_realtime_commands_ignore_the_model_gate(deploy, env, seams, model, capsys, command):
+    """The gates are independent: P11 open does not open project 10's steps."""
+    assert deploy.main([command]) == 0
+    out, _ = capsys.readouterr()
+    assert out == f"{command}: skipped {SKIP_REASON}\n"
+    assert seams.gets == [] and seams.posts == []
+
+
+def test_refresh_model_starts_an_enhanced_refresh_and_waits_for_it(deploy, env, model, capsys):
+    """The realtime gate is closed here: the model path does not need it."""
+    assert deploy.main(["refresh-model"]) == 0
+
+    # sm_portfolio is found by name with a Fabric token; the refresh goes to the Power BI API with a
+    # Power BI token (the semantic model's item ID is its dataset ID).
+    assert model.gets[0] == (MODEL_LIST_URL, "tok-secret-value")
+    (url, body, token), = model.posts
+    assert url == REFRESHES_URL
+    # Any field besides notifyOption makes it an enhanced refresh, the kind that can be polled by ID;
+    # notifyOption itself does not apply to a service principal.
+    assert body == {"type": "Full", "commitMode": "transactional"}
+    assert token == "pbi-tok-secret"
+    assert model.gets[1:] == [(REFRESH_URL, "pbi-tok-secret")] * 2
+    assert model.cred.calls == [(FABRIC_SCOPE,), (POWERBI_SCOPE,)]
+    assert model.sleeps == [deploy.REFRESH_POLL_SECONDS]
+    out, err = capsys.readouterr()
+    assert out == "refresh-model: ok\n"
+    assert err == ""
+
+
+def test_refresh_model_binds_nothing_itself(deploy, env, model):
+    """The binding path chosen: fabric-cicd 1.4.0 replaces $ENV: tokens in the whole parameter file
+    before loading it, so its semantic_model_binding section binds the model during publish (see
+    parameter.yml and VERIFY.md). refresh-model only refreshes."""
+    assert deploy.main(["refresh-model"]) == 0
+    assert [url for url, _, _ in model.posts] == [REFRESHES_URL]
+    assert "bindConnection" not in DEPLOY_PY.read_text(encoding="utf-8")
+
+
+def test_refresh_model_polls_its_own_url_not_the_location_host(deploy, env, model):
+    """Only the refresh ID is taken from the Location header; the token never goes to its host."""
+    model.location_response = (202, {}, f"https://elsewhere.example.test/refreshes/{REFRESH}")
+    assert deploy.main(["refresh-model"]) == 0
+    assert {url for url, _ in model.gets[1:]} == {REFRESH_URL}
+
+
+@pytest.mark.parametrize("location", [None, "", f"{REFRESHES_URL}/", f"{REFRESHES_URL}/not-a-guid"])
+def test_refresh_model_without_a_refresh_id_fails(deploy, env, model, capsys, location):
+    model.location_response = (202, {}, location)
+    assert deploy.main(["refresh-model"]) == 1
+    out, err = capsys.readouterr()
+    assert err == "refresh-model: the refresh has no ID\n"
+    assert out == "" and len(model.gets) == 1  # the lookup only, no polling
+
+
+def test_refresh_model_waits_through_every_running_state(deploy, env, model, capsys):
+    model.routes[REFRESH_URL] = [
+        refresh_state("NotStarted"),
+        refresh_state("Unknown"),
+        refresh_state("InProgress"),
+        refresh_state("Completed"),
+    ]
+    assert deploy.main(["refresh-model"]) == 0
+    assert len(model.gets) == 1 + 4
+    assert model.sleeps == [deploy.REFRESH_POLL_SECONDS] * 3
+    assert capsys.readouterr().out == "refresh-model: ok\n"
+
+
+def test_refresh_model_reads_status_when_there_is_no_extended_status(deploy, env, model):
+    model.routes[REFRESH_URL] = [(202, {"status": "Unknown"}), (200, {"status": "Completed"})]
+    assert deploy.main(["refresh-model"]) == 0
+
+
+@pytest.mark.parametrize("state", ["Failed", "TimedOut", "Cancelled", "Disabled"])
+def test_refresh_model_fails_with_the_refresh_status(deploy, env, model, capsys, state):
+    http, body = refresh_state(state, status="Disabled" if state == "Disabled" else "Failed")
+    body["serviceExceptionJson"] = '{"errorCode":"x","workspace":"' + WS + '"}'
+    body["messages"] = [{"message": f"model {MODEL} at {LOCATION}", "type": "Error"}]
+    model.routes[REFRESH_URL] = [refresh_state("InProgress"), (http, body)]
+
+    assert deploy.main(["refresh-model"]) == 1
+
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert err == f"refresh-model: refresh {state}\n"
+    for value in (WS, MODEL, LOCATION, REFRESH, "pbi-tok-secret"):
+        assert value not in out + err
+
+
+def test_refresh_model_stops_waiting_after_10_minutes(deploy, env, model, capsys):
+    model.routes[REFRESH_URL] = [refresh_state("InProgress")]
+
+    assert deploy.main(["refresh-model"]) == 1
+
+    out, err = capsys.readouterr()
+    assert err == "refresh-model: refresh did not finish in 10 minutes\n"
+    assert out == ""
+    assert deploy.REFRESH_TIMEOUT_SECONDS == 600
+    assert sum(model.sleeps) == 600 and model.clock == 600
+    polls = len(model.gets) - 1
+    assert polls == 600 // deploy.REFRESH_POLL_SECONDS + 1  # one last look at the deadline
+
+
+def test_refresh_model_never_prints_an_unknown_status(deploy, env, model, capsys):
+    """A status outside Learn's list is treated as still running, and never printed."""
+    model.routes[REFRESH_URL] = [(202, {"extendedStatus": f"Odd {WS}"})]
+    assert deploy.main(["refresh-model"]) == 1
+    out, err = capsys.readouterr()
+    assert err == "refresh-model: refresh did not finish in 10 minutes\n"
+    assert WS not in out + err
+
+
+@pytest.mark.parametrize("body, code", [
+    ({"error": {"code": "InvalidRequest", "message": f"model {MODEL} is refreshing"}}, "InvalidRequest"),
+    ({"error": {"code": f"{WS} injected"}}, "unknown"),
+    ({"errorCode": "Unauthorized"}, "Unauthorized"),
+    ("not-json-object", "unknown"),
+])
+def test_refresh_model_start_error_prints_status_and_code_only(deploy, env, model, capsys, body, code):
+    model.location_response = (400, body, REFRESH_URL)
+    assert deploy.main(["refresh-model"]) == 1
+    out, err = capsys.readouterr()
+    assert err == f"refresh-model: HTTP 400 {code}\n"
+    assert out == "" and len(model.gets) == 1
+    for value in (WS, MODEL, REFRESH, "pbi-tok-secret"):
+        assert value not in out + err
+
+
+def test_refresh_model_poll_error_prints_status_and_code_only(deploy, env, model, capsys):
+    model.routes[REFRESH_URL] = [(404, {"error": {"code": "ItemNotFound", "message": f"{WS}/{MODEL}"}})]
+    assert deploy.main(["refresh-model"]) == 1
+    out, err = capsys.readouterr()
+    assert err == "refresh-model: HTTP 404 ItemNotFound\n"
+    assert WS not in out + err and MODEL not in out + err
+
+
+def test_missing_model_exits_1_without_ids(deploy, env, model, capsys):
+    model.routes[MODEL_LIST_URL] = model_list({"displayName": "sm_other", "id": OTHER_MODEL})
+    assert deploy.main(["refresh-model"]) == 1
+    out, err = capsys.readouterr()
+    assert err == "refresh-model: semantic model sm_portfolio not found\n"
+    assert out == "" and model.posts == []
+    for value in (WS, OTHER_MODEL, MODEL_CONNECTION, "tok-secret-value"):
+        assert value not in out + err
+
+
+def test_model_lookup_follows_continuation_tokens(deploy, seams):
+    seams.pages = [
+        model_list({"displayName": "sm_other", "id": OTHER_MODEL}, token="a b/c"),
+        model_list({"displayName": "sm_portfolio", "id": MODEL}),
+    ]
+    assert deploy._semantic_model_id(WS, "tok") == MODEL
+    assert [url for url, _ in seams.gets] == [MODEL_LIST_URL, f"{MODEL_LIST_URL}?continuationToken=a%20b%2Fc"]
+
+
+def test_model_lookup_stops_when_a_continuation_token_repeats(deploy, seams):
+    seams.pages = [model_list(token="same"), model_list(token="same")]
+    with pytest.raises(deploy.StepFailed, match="semantic model lookup did not finish"):
+        deploy._semantic_model_id(WS, "tok")
+    assert len(seams.gets) == 2
+
+
+def test_model_lookup_http_error_prints_status_and_code_only(deploy, env, model, capsys):
+    model.routes[MODEL_LIST_URL] = (403, {"errorCode": "InsufficientPrivileges", "message": WS})
+    assert deploy.main(["refresh-model"]) == 1
+    out, err = capsys.readouterr()
+    assert err == "refresh-model: HTTP 403 InsufficientPrivileges\n"
+    assert WS not in out + err and model.posts == []
+
+
+def test_the_refresh_is_polled_without_really_sleeping(deploy):
+    """The seams are the real clock and sleep, so the tests replace both."""
+    import time
+
+    assert deploy._sleep is time.sleep
+    assert deploy._monotonic is time.monotonic
