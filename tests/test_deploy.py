@@ -44,6 +44,11 @@ REFRESH_URL = f"{REFRESHES_URL}/{REFRESH}"
 MODEL_TYPES = ["SemanticModel", "Report"]
 MODEL_SKIP_REASON = "(no P11_MODEL_CONNECTION_ID)"
 EMPTY_GUID = "00000000-0000-0000-0000-000000000000"
+CONNECTIONS_URL = f"https://api.fabric.microsoft.com/v1/workspaces/{WS}/items/{MODEL}/connections"
+HISTORY_URL = f"{REFRESHES_URL}?$top=1"
+EARLIER_REFRESH = "cccccccc-aaaa-bbbb-cccc-00000000000c"
+OTHER_CONNECTION = "dddddddd-aaaa-bbbb-cccc-00000000000d"
+NOT_BOUND = "refresh-model: the model is not bound to its connection"
 
 
 @pytest.fixture(autouse=True)
@@ -223,10 +228,32 @@ def refresh_state(extended, status=None):
     return (202 if running else 200), body
 
 
+def connection(connection_id=MODEL_CONNECTION, connectivity="ShareableCloud"):
+    """A List Item Connections entry; an SSO (Automatic) entry has no id."""
+    entry = {
+        "connectivityType": connectivity,
+        "connectionDetails": {"type": "AzureDataLakeStorage", "path": f"https://onelake.example.test/{WS}/{LH}/"},
+    }
+    if connection_id is not None:
+        entry.update(id=connection_id, displayName="conn_portfolio")
+    return entry
+
+
+def history(*statuses):
+    """A Get Refresh History response ($top=1): the latest entry with that status, or no entry."""
+    return 200, {"value": [{"requestId": EARLIER_REFRESH, "refreshType": "ViaApi", "status": s} for s in statuses]}
+
+
+def refresh_polls(state):
+    """The status GETs refresh-model made for its own refresh (not the history)."""
+    return [url for url, _ in state.gets if url.startswith(f"{REFRESHES_URL}/")]
+
+
 @pytest.fixture
 def model(monkeypatch, seams):
-    """The model path is on (P11) and the workspace holds sm_portfolio; its refresh runs once, then
-    completes. Ask for it after `realtime` when a test needs both: it adds to the routes."""
+    """The model path is on (P11), the workspace holds sm_portfolio bound to its connection, no
+    other refresh is running, and its refresh runs once, then completes. Ask for it after `realtime`
+    when a test needs both: it adds to the routes."""
     # setenv before any delenv in a test, so monkeypatch restores the variable's absence afterwards.
     monkeypatch.setenv("P11_MODEL_CONNECTION_ID", MODEL_CONNECTION)
     seams.routes = {
@@ -234,6 +261,8 @@ def model(monkeypatch, seams):
         MODEL_LIST_URL: model_list(
             {"displayName": "sm_other", "id": OTHER_MODEL}, {"displayName": "sm_portfolio", "id": MODEL}
         ),
+        CONNECTIONS_URL: (200, {"value": [connection(None, "Automatic"), connection()]}),
+        HISTORY_URL: history("Completed"),
         REFRESH_URL: [refresh_state("InProgress"), refresh_state("Completed")],
     }
     return seams
@@ -864,16 +893,22 @@ def test_refresh_model_starts_an_enhanced_refresh_and_waits_for_it(deploy, env, 
     """The realtime gate is closed here: the model path does not need it."""
     assert deploy.main(["refresh-model"]) == 0
 
-    # sm_portfolio is found by name with a Fabric token; the refresh goes to the Power BI API with a
-    # Power BI token (the semantic model's item ID is its dataset ID).
-    assert model.gets[0] == (MODEL_LIST_URL, "tok-secret-value")
+    # sm_portfolio is found by name and its binding checked with a Fabric token; the refresh goes to
+    # the Power BI API with a Power BI token (the semantic model's item ID is its dataset ID), after
+    # the history shows no other refresh running.
+    assert model.gets == [
+        (MODEL_LIST_URL, "tok-secret-value"),
+        (CONNECTIONS_URL, "tok-secret-value"),
+        (HISTORY_URL, "pbi-tok-secret"),
+        (REFRESH_URL, "pbi-tok-secret"),
+        (REFRESH_URL, "pbi-tok-secret"),
+    ]
     (url, body, token), = model.posts
     assert url == REFRESHES_URL
     # Any field besides notifyOption makes it an enhanced refresh, the kind that can be polled by ID;
     # notifyOption itself does not apply to a service principal.
     assert body == {"type": "Full", "commitMode": "transactional"}
     assert token == "pbi-tok-secret"
-    assert model.gets[1:] == [(REFRESH_URL, "pbi-tok-secret")] * 2
     assert model.cred.calls == [(FABRIC_SCOPE,), (POWERBI_SCOPE,)]
     assert model.sleeps == [deploy.REFRESH_POLL_SECONDS]
     out, err = capsys.readouterr()
@@ -884,17 +919,18 @@ def test_refresh_model_starts_an_enhanced_refresh_and_waits_for_it(deploy, env, 
 def test_refresh_model_binds_nothing_itself(deploy, env, model):
     """The binding path chosen: fabric-cicd 1.4.0 replaces $ENV: tokens in the whole parameter file
     before loading it, so its semantic_model_binding section binds the model during publish (see
-    parameter.yml and VERIFY.md). refresh-model only refreshes."""
+    parameter.yml and VERIFY.md). refresh-model only checks the binding (GET) and refreshes: its one
+    POST is the refresh."""
     assert deploy.main(["refresh-model"]) == 0
     assert [url for url, _, _ in model.posts] == [REFRESHES_URL]
-    assert "bindConnection" not in DEPLOY_PY.read_text(encoding="utf-8")
 
 
 def test_refresh_model_polls_its_own_url_not_the_location_host(deploy, env, model):
     """Only the refresh ID is taken from the Location header; the token never goes to its host."""
     model.location_response = (202, {}, f"https://elsewhere.example.test/refreshes/{REFRESH}")
     assert deploy.main(["refresh-model"]) == 0
-    assert {url for url, _ in model.gets[1:]} == {REFRESH_URL}
+    assert set(refresh_polls(model)) == {REFRESH_URL}
+    assert not any("elsewhere" in url for url, _ in model.gets)
 
 
 @pytest.mark.parametrize("location", [None, "", f"{REFRESHES_URL}/", f"{REFRESHES_URL}/not-a-guid"])
@@ -903,7 +939,7 @@ def test_refresh_model_without_a_refresh_id_fails(deploy, env, model, capsys, lo
     assert deploy.main(["refresh-model"]) == 1
     out, err = capsys.readouterr()
     assert err == "refresh-model: the refresh has no ID\n"
-    assert out == "" and len(model.gets) == 1  # the lookup only, no polling
+    assert out == "" and refresh_polls(model) == []
 
 
 def test_refresh_model_waits_through_every_running_state(deploy, env, model, capsys):
@@ -914,7 +950,7 @@ def test_refresh_model_waits_through_every_running_state(deploy, env, model, cap
         refresh_state("Completed"),
     ]
     assert deploy.main(["refresh-model"]) == 0
-    assert len(model.gets) == 1 + 4
+    assert len(refresh_polls(model)) == 4
     assert model.sleeps == [deploy.REFRESH_POLL_SECONDS] * 3
     assert capsys.readouterr().out == "refresh-model: ok\n"
 
@@ -950,8 +986,7 @@ def test_refresh_model_stops_waiting_after_10_minutes(deploy, env, model, capsys
     assert out == ""
     assert deploy.REFRESH_TIMEOUT_SECONDS == 600
     assert sum(model.sleeps) == 600 and model.clock == 600
-    polls = len(model.gets) - 1
-    assert polls == 600 // deploy.REFRESH_POLL_SECONDS + 1  # one last look at the deadline
+    assert len(refresh_polls(model)) == 600 // deploy.REFRESH_POLL_SECONDS + 1  # one last look at the deadline
 
 
 def test_refresh_model_never_prints_an_unknown_status(deploy, env, model, capsys):
@@ -974,7 +1009,7 @@ def test_refresh_model_start_error_prints_status_and_code_only(deploy, env, mode
     assert deploy.main(["refresh-model"]) == 1
     out, err = capsys.readouterr()
     assert err == f"refresh-model: HTTP 400 {code}\n"
-    assert out == "" and len(model.gets) == 1
+    assert out == "" and refresh_polls(model) == []
     for value in (WS, MODEL, REFRESH, "pbi-tok-secret"):
         assert value not in out + err
 
@@ -1027,3 +1062,276 @@ def test_the_refresh_is_polled_without_really_sleeping(deploy):
 
     assert deploy._sleep is time.sleep
     assert deploy._monotonic is time.monotonic
+
+
+# --- Fix round 1 ------------------------------------------------------------------------------------
+# I-1: fabric-cicd's own log lines go through a redaction filter while publish runs.
+
+
+@pytest.fixture
+def fabric_cicd_console():
+    """A stand-in for fabric-cicd 1.4.0's console handler on the `fabric_cicd` logger (configure_logger
+    adds one at INFO when fabric_cicd is imported). Returns the stream it writes to."""
+    import io
+    import logging
+
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+    package = logging.getLogger("fabric_cicd")
+    level = package.level
+    package.setLevel(logging.INFO)
+    package.addHandler(handler)
+    yield SimpleNamespace(stream=stream, handler=handler, package=package)
+    package.removeHandler(handler)
+    package.setLevel(level)
+
+
+def _log_like_fabric_cicd():
+    """The 1.4.0 binding lines (_items/_semanticmodel.py) with an ID, a URL and a traceback."""
+    import logging
+
+    logger = logging.getLogger("fabric_cicd._items._semanticmodel")
+    logger.info(
+        "Binding semantic model '%s' (ID: %s) to connection '%s'", "sm_portfolio", MODEL, MODEL_CONNECTION
+    )
+    try:
+        raise ConnectionError(f"POST {REFRESHES_URL} failed")
+    except ConnectionError as error:
+        logger.error(f"Failed to bind 'sm_portfolio' to connection '{MODEL_CONNECTION}': {error!s}", exc_info=True)
+    # a logger fabric-cicd creates after the filter is in place still reaches the same handler
+    logging.getLogger("fabric_cicd._items._created_later").warning("workspace %s", WS)
+
+
+@pytest.mark.parametrize("gates", ["closed", "open"])
+def test_publish_redacts_ids_and_urls_in_fabric_cicd_logs(
+    deploy, env, seams, monkeypatch, caplog, fabric_cicd_console, gates
+):
+    import logging
+
+    if gates == "open":
+        monkeypatch.setenv("P11_MODEL_CONNECTION_ID", MODEL_CONNECTION)
+    original_workspace = deploy._fabric_workspace
+
+    def workspace_that_logs(**kwargs):
+        logging.getLogger("fabric_cicd.fabric_workspace").info("Workspace ID: %s", WS)
+        return original_workspace(**kwargs)
+
+    monkeypatch.setattr(deploy, "_fabric_workspace", workspace_that_logs)
+    monkeypatch.setattr(deploy, "_publish", lambda workspace: _log_like_fabric_cicd())
+    caplog.set_level(logging.INFO)
+
+    assert deploy.main(["publish"]) == 0
+
+    console = fabric_cicd_console.stream.getvalue()
+    propagated = caplog.text  # the root logger's handlers (fabric-cicd's log file sits there)
+    for text in (console, propagated):
+        assert "Binding semantic model 'sm_portfolio' (ID: <id>) to connection '<id>'" in text
+        assert "POST <url> failed" in text and "Traceback" in text
+        assert "workspace <id>" in text and "Workspace ID: <id>" in text
+        for value in (MODEL, MODEL_CONNECTION, WS, REFRESH_URL, "https://", "api.powerbi"):
+            assert value not in text
+    assert seams.ws_kwargs is not None  # the fake workspace still ran
+
+
+def test_publish_removes_the_redaction_afterwards_even_on_failure(
+    deploy, env, seams, monkeypatch, fabric_cicd_console
+):
+    import logging
+
+    def failing_publish(workspace):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(deploy, "_publish", failing_publish)
+    assert deploy.main(["publish"]) == 1
+
+    loggers = [logging.getLogger(), *(
+        logging.getLogger(name) for name in logging.Logger.manager.loggerDict
+        if name == "fabric_cicd" or name.startswith("fabric_cicd.") or name == "console_only"
+    )]
+    def ours(filterer):
+        return [f for f in filterer.filters if isinstance(f, deploy._RedactingFilter)]
+
+    for logger in loggers:
+        assert ours(logger) == [], logger.name
+        for handler in logger.handlers:
+            assert ours(handler) == [], (logger.name, handler)
+    # after publish, a fabric_cicd line is no longer rewritten
+    logging.getLogger("fabric_cicd.later").warning("id %s", MODEL)
+    assert MODEL in fabric_cicd_console.stream.getvalue()
+
+
+# I-2: refresh-model checks the fixed-identity binding before it refreshes (ruling R7).
+
+
+def test_refresh_model_checks_the_binding_before_refreshing(deploy, env, model):
+    assert deploy.main(["refresh-model"]) == 0
+    urls = [url for url, _ in model.gets]
+    assert urls.index(CONNECTIONS_URL) < urls.index(HISTORY_URL)
+    assert dict(model.gets)[CONNECTIONS_URL] == "tok-secret-value"  # a Fabric token
+    assert len(model.posts) == 1
+
+
+@pytest.mark.parametrize("entries", [
+    [],
+    [connection(None, "Automatic")],  # still on SSO: the bind was skipped
+    [connection(OTHER_CONNECTION)],  # bound to another connection
+    [connection(MODEL_CONNECTION, "PersonalCloud")],
+    [connection(MODEL_CONNECTION, "None")],
+    [{"id": MODEL_CONNECTION}],
+    ["not-an-object"],
+], ids=["none", "sso_only", "other_connection", "personal", "unbound", "no_type", "junk"])
+def test_refresh_model_refuses_a_model_not_bound_to_its_connection(deploy, env, model, capsys, entries):
+    model.routes[CONNECTIONS_URL] = (200, {"value": entries})
+
+    assert deploy.main(["refresh-model"]) == 1
+
+    out, err = capsys.readouterr()
+    assert err == f"{NOT_BOUND}\n"
+    assert out == "" and model.posts == []
+    assert HISTORY_URL not in [url for url, _ in model.gets]
+    for value in (WS, MODEL, MODEL_CONNECTION, OTHER_CONNECTION, "pbi-tok-secret", "tok-secret-value"):
+        assert value not in out + err
+
+
+def test_refresh_model_matches_the_connection_id_in_any_case(deploy, env, model):
+    model.routes[CONNECTIONS_URL] = (200, {"value": [connection(MODEL_CONNECTION.upper())]})
+    assert deploy.main(["refresh-model"]) == 0
+
+
+def test_refresh_model_follows_the_connection_list_pages(deploy, env, model):
+    model.routes[CONNECTIONS_URL] = (200, {"value": [connection(None, "Automatic")], "continuationToken": "a b"})
+    model.routes[f"{CONNECTIONS_URL}?continuationToken=a%20b"] = (200, {"value": [connection()]})
+    assert deploy.main(["refresh-model"]) == 0
+    assert f"{CONNECTIONS_URL}?continuationToken=a%20b" in [url for url, _ in model.gets]
+
+
+def test_refresh_model_stops_when_the_connection_list_repeats_a_token(deploy, env, model, capsys):
+    model.routes[CONNECTIONS_URL] = (200, {"value": [], "continuationToken": "same"})
+    model.routes[f"{CONNECTIONS_URL}?continuationToken=same"] = (200, {"value": [], "continuationToken": "same"})
+    assert deploy.main(["refresh-model"]) == 1
+    assert capsys.readouterr().err == "refresh-model: model connection lookup did not finish\n"
+    assert model.posts == []
+
+
+def test_refresh_model_connection_list_error_prints_status_and_code_only(deploy, env, model, capsys):
+    model.routes[CONNECTIONS_URL] = (404, {"errorCode": "ItemNotFound", "message": f"{WS}/{MODEL}"})
+    assert deploy.main(["refresh-model"]) == 1
+    out, err = capsys.readouterr()
+    assert err == "refresh-model: HTTP 404 ItemNotFound\n"
+    assert WS not in out + err and MODEL not in out + err and model.posts == []
+
+
+# Minor 1: a refresh that is already running is waited for first.
+
+
+def test_refresh_model_waits_for_a_running_refresh_before_starting_its_own(deploy, env, model, capsys):
+    model.routes[HISTORY_URL] = [history("Unknown"), history("Unknown"), history("Completed")]
+
+    assert deploy.main(["refresh-model"]) == 0
+
+    urls = [url for url, _ in model.gets]
+    assert urls.count(HISTORY_URL) == 3
+    assert model.sleeps == [deploy.REFRESH_POLL_SECONDS] * 3  # two for the earlier one, one for ours
+    assert len(model.posts) == 1
+    assert capsys.readouterr().out == "refresh-model: ok\n"
+
+
+@pytest.mark.parametrize("latest", [history(), history("Failed"), history("Disabled"), (200, {})],
+                         ids=["no_history", "failed", "disabled", "no_value"])
+def test_refresh_model_starts_at_once_when_nothing_is_running(deploy, env, model, latest):
+    """An earlier refresh that failed does not matter: this one replaces it."""
+    model.routes[HISTORY_URL] = latest
+    assert deploy.main(["refresh-model"]) == 0
+    assert [url for url, _ in model.gets].count(HISTORY_URL) == 1
+    assert len(model.posts) == 1
+
+
+def test_refresh_model_gives_up_when_the_running_refresh_never_ends(deploy, env, model, capsys):
+    model.routes[HISTORY_URL] = [history("Unknown")]
+    assert deploy.main(["refresh-model"]) == 1
+    out, err = capsys.readouterr()
+    assert err == "refresh-model: an earlier refresh did not finish in 10 minutes\n"
+    assert out == "" and model.posts == [] and sum(model.sleeps) == 600
+
+
+def test_refresh_model_shares_one_10_minute_cap_with_the_wait(deploy, env, model, capsys):
+    """Nine minutes waiting for the earlier refresh leave one for this one."""
+    model.routes[HISTORY_URL] = [history("Unknown")] * 37 + [history("Completed")]  # 37 sleeps: 555 s
+    model.routes[REFRESH_URL] = [refresh_state("InProgress")]
+    assert deploy.main(["refresh-model"]) == 1
+    assert capsys.readouterr().err == "refresh-model: refresh did not finish in 10 minutes\n"
+    assert sum(model.sleeps) == 600 and len(model.posts) == 1
+
+
+def test_refresh_model_history_error_prints_status_and_code_only(deploy, env, model, capsys):
+    model.routes[HISTORY_URL] = (403, {"error": {"code": "PowerBINotAuthorizedException", "message": WS}})
+    assert deploy.main(["refresh-model"]) == 1
+    out, err = capsys.readouterr()
+    assert err == "refresh-model: HTTP 403 PowerBINotAuthorizedException\n"
+    assert WS not in out + err and model.posts == []
+
+
+# Minor 2: the $ENV stand-in lives only while fabric-cicd reads the parameter file.
+
+
+@pytest.mark.parametrize("value", [None, "", "set"])
+@pytest.mark.parametrize("fails", [False, True], ids=["ok", "workspace_fails"])
+def test_publish_leaves_the_environment_as_it_found_it(deploy, env, seams, monkeypatch, value, fails):
+    for gate in ("P10_EVENTHUB_CONNECTION_ID", "P11_MODEL_CONNECTION_ID"):
+        if value is not None:
+            monkeypatch.setenv(gate, value if value != "set" else MODEL_CONNECTION)
+    before = {gate: os.environ.get(gate) for gate in ("P10_EVENTHUB_CONNECTION_ID", "P11_MODEL_CONNECTION_ID")}
+    seen = {}
+    original_workspace = deploy._fabric_workspace
+
+    def workspace(**kwargs):
+        seen.update({gate: os.environ.get(gate) for gate in before})
+        if fails:
+            raise RuntimeError("bad parameter file")
+        return original_workspace(**kwargs)
+
+    def publish_items(workspace):
+        seen["at_publish"] = {gate: os.environ.get(gate) for gate in before}
+
+    monkeypatch.setattr(deploy, "_fabric_workspace", workspace)
+    monkeypatch.setattr(deploy, "_publish", publish_items)
+
+    assert deploy.main(["publish"]) == (1 if fails else 0)
+
+    after = {gate: os.environ.get(gate) for gate in before}
+    assert after == before
+    for gate in before:
+        assert (gate in os.environ) == (before[gate] is not None)
+        assert seen[gate] == (before[gate] or EMPTY_GUID)  # the stand-in while the workspace is built
+    if not fails:
+        assert seen["at_publish"] == before  # and gone again before the items publish
+
+
+# Minor 3: an unexpected error while starting or polling the refresh prints only its type.
+
+
+@pytest.mark.parametrize("where", ["start", "poll", "history", "connections"])
+def test_an_unexpected_error_in_refresh_model_prints_only_its_type(deploy, env, model, monkeypatch, capsys, where):
+    failing_url = {"poll": REFRESH_URL, "history": HISTORY_URL, "connections": CONNECTIONS_URL}.get(where)
+    real_get = deploy._http_get
+
+    def get(url, token):
+        if url == failing_url:
+            raise ConnectionError(f"GET {url} with {token}")
+        return real_get(url, token)
+
+    def post(url, json, token):
+        raise ConnectionError(f"POST {url} with {token}")
+
+    monkeypatch.setattr(deploy, "_http_get", get)
+    if where == "start":
+        monkeypatch.setattr(deploy, "_http_post_location", post)
+
+    assert deploy.main(["refresh-model"]) == 1
+
+    out, err = capsys.readouterr()
+    assert err == "refresh-model: failed (ConnectionError)\n"
+    assert out == ""
+    for value in (WS, MODEL, REFRESH, MODEL_CONNECTION, "https://", "pbi-tok-secret", "tok-secret-value", "Traceback"):
+        assert value not in out + err

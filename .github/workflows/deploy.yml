@@ -152,6 +152,8 @@ jobs:
           P10_EVENTHUB_CONNECTION_ID: ${{ secrets.P10_EVENTHUB_CONNECTION_ID }}
         run: python .deploy/deploy.py ensure-gateway-shortcut
       # Last: the model frames every table it reads, the gateway table (through the shortcut) included.
+      # P11_MODEL_CONNECTION_ID is both the gate and the connection the model must be bound to: the
+      # step checks the binding before it refreshes.
       - name: Refresh the semantic model
         env:
           FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}

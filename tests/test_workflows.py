@@ -174,6 +174,8 @@ def test_prod_publish_gets_the_model_connection_gate(deploy):
 
 
 def test_prod_refreshes_the_model_after_the_gateway_shortcut_with_its_gate_at_step_scope(deploy):
+    """refresh-model reads P11_MODEL_CONNECTION_ID twice: as its gate, and as the connection it
+    checks the model is bound to (R7) before the refresh."""
     job_steps = steps(deploy["jobs"]["prod"])
     names = [s.get("name") for s in job_steps]
     refresh = names.index("Refresh the semantic model")

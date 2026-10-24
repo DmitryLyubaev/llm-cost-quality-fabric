@@ -19,6 +19,8 @@ inside the seam functions, so the tests need neither installed.
 """
 
 import argparse
+import contextlib
+import logging
 import os
 import re
 import sys
@@ -83,9 +85,19 @@ REFRESH_REQUEST = {"type": "Full", "commitMode": "transactional"}
 # https://learn.microsoft.com/en-us/rest/api/power-bi/datasets/get-refresh-execution-details-in-group
 REFRESH_DONE = "Completed"
 REFRESH_FAILED = ("Failed", "TimedOut", "Cancelled", "Disabled")
+# Get Refresh History (`?$top=1`, the latest entry): status `Unknown` means "the completion state is
+# unknown or a refresh is in progress". It lists every kind of refresh, not only enhanced ones.
+# https://learn.microsoft.com/en-us/rest/api/power-bi/datasets/get-refresh-history-in-group
+HISTORY_RUNNING = "Unknown"
 REFRESH_POLL_SECONDS = 15
+# One cap for the whole step: waiting for an earlier refresh and for this one.
 REFRESH_TIMEOUT_SECONDS = 600
+# R7: the model must be bound to its fixed-identity connection, not left on SSO (`Automatic`).
+# List Item Connections returns `value` entries with `id` and `connectivityType`, paged by
+# continuationToken: https://learn.microsoft.com/en-us/rest/api/fabric/core/items/list-item-connections
+BOUND_CONNECTIVITY = "ShareableCloud"
 _GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_URL = re.compile(r"https?://[^\s'\"<>]+")
 
 # The gateway table in the Eventhouse, and its shortcut in lh_portfolio.
 KQL_DATABASE_NAME = "kql_gateway"
@@ -161,6 +173,70 @@ def _skipped(command, gate):
     return True
 
 
+@contextlib.contextmanager
+def _stand_ins(gates):
+    """Set each of `gates` to EMPTY_GUID for the block (see EMPTY_GUID), then put back what was there:
+    the previous value, or no variable at all. Only this process sees it."""
+    saved = {gate: os.environ.get(gate) for gate in gates}
+    os.environ.update({gate: EMPTY_GUID for gate in gates})
+    try:
+        yield
+    finally:
+        for gate, value in saved.items():
+            if value is None:
+                os.environ.pop(gate, None)
+            else:
+                os.environ[gate] = value
+
+
+def _redact(text):
+    """`text` with every URL as <url> and every GUID as <id>."""
+    return _GUID.sub("<id>", _URL.sub("<url>", text))
+
+
+class _RedactingFilter(logging.Filter):
+    """Rewrites a log record's rendered message, traceback and stack text through _redact. Lets every
+    record through."""
+
+    def filter(self, record):
+        try:
+            message = record.getMessage()
+        except Exception:  # a record whose arguments do not fit its format
+            message = str(record.msg)
+        record.msg, record.args = _redact(message), None
+        if record.exc_info and not record.exc_text:
+            record.exc_text = logging.Formatter().formatException(record.exc_info)
+        if record.exc_text:
+            record.exc_text = _redact(record.exc_text)  # formatters use the cached text
+        if record.stack_info:
+            record.stack_info = _redact(record.stack_info)
+        return True
+
+
+@contextlib.contextmanager
+def _redacted_fabric_cicd_logs():
+    """fabric-cicd 1.4.0 logs item IDs and request URLs at INFO, its default level, for example
+    `Binding semantic model '...' (ID: <model id>) to connection '...'` and `{e!s}` on a failed bind
+    (_items/_semanticmodel.py). For the block, a _RedactingFilter sits on every `fabric_cicd` logger
+    (the records it creates) and on every handler those records reach: the `fabric_cicd` logger's
+    console handler, the `console_only` logger's, and the root logger's (its log file), so a logger
+    created later is covered too. Removed afterwards, whatever happens."""
+    redactor = _RedactingFilter()
+    names = {"fabric_cicd", "console_only"} | {
+        name for name in logging.Logger.manager.loggerDict if name.startswith("fabric_cicd.")
+    }
+    loggers = [logging.getLogger(name) for name in sorted(names)]
+    targets = loggers + [h for lg in [*loggers, logging.getLogger()] for h in lg.handlers]
+    targets = list({id(t): t for t in targets}.values())
+    for target in targets:
+        target.addFilter(redactor)
+    try:
+        yield
+    finally:
+        for target in targets:
+            target.removeFilter(redactor)
+
+
 # --- seams (the tests replace these) ---------------------------------------
 
 
@@ -227,29 +303,37 @@ def _http_post_location(url, json, token):
     return response.status_code, body, response.headers.get("Location")
 
 
-def _find_item(workspace_id, token, collection, name, kind):
-    """The item named `name` in the workspace's `collection` list (for example `lakehouses`),
-    following continuation tokens. StepFailed if the list call fails, no item has that name, or the
-    listing does not end (a continuation token repeats, or MAX_LOOKUP_PAGES pages go by without the
-    item). `kind` names the item in messages; nothing returned from the API is printed."""
-    url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/{collection}"
+def _paged(url, token, kind):
+    """Every entry (a dict) of a paged Fabric list, following continuation tokens. StepFailed if a
+    page call fails or the listing does not end (a continuation token repeats, or MAX_LOOKUP_PAGES
+    pages go by). `kind` names the list in messages; nothing returned from the API is printed."""
     next_url = url
     seen_tokens = set()
     for _ in range(MAX_LOOKUP_PAGES):
         status, body = _http_get(next_url, token)  # status before body
         if not 200 <= status < 300 or not isinstance(body, dict):
             raise StepFailed(f"HTTP {status} {_error_code(body)}")
-        for item in body.get("value") or []:
-            if isinstance(item, dict) and item.get("displayName") == name and item.get("id"):
-                return item
+        entries = body.get("value")
+        yield from (e for e in entries if isinstance(e, dict)) if isinstance(entries, list) else ()
         token_value = body.get("continuationToken")
         if not token_value:
-            raise StepFailed(f"{kind} {name} not found")
+            return
         if token_value in seen_tokens:
             break
         seen_tokens.add(token_value)
         next_url = f"{url}?continuationToken={quote(token_value, safe='')}"
     raise StepFailed(f"{kind} lookup did not finish")
+
+
+def _find_item(workspace_id, token, collection, name, kind):
+    """The item named `name` in the workspace's `collection` list (for example `lakehouses`), read
+    with _paged. StepFailed if the list call fails, no item has that name, or the listing does not
+    end. `kind` names the item in messages; nothing returned from the API is printed."""
+    url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/{collection}"
+    for item in _paged(url, token, kind):
+        if item.get("displayName") == name and item.get("id"):
+            return item
+    raise StepFailed(f"{kind} {name} not found")
 
 
 def _lakehouse_id(workspace_id, token):
@@ -323,25 +407,31 @@ def publish():
     workspace_id = _env("FABRIC_WORKSPACE_ID")
     environment = _env("FABRIC_ENVIRONMENT")
     item_types = list(ITEM_TYPES_IN_SCOPE)
+    closed = []
     for gate, gated_types, label in GATED_ITEM_TYPES:  # independent gates
         if _gate_open(gate):
             continue
         item_types = [t for t in item_types if t not in gated_types]
-        os.environ[gate] = EMPTY_GUID  # see EMPTY_GUID; only this process sees it
-        # Never raise fabric-cicd to debug (change_log_level): it logs substituted $ENV values there.
-        # (At its default INFO level 1.4.0 still names the bound connection when it binds the model;
-        # Actions masks that value, as it does every secret.)
+        closed.append(gate)
         print(f"publish: {label} skipped (no {gate})")
-    # fabric-cicd validates parameter.yml, $ENV: tokens included, when the workspace is built.
-    _enable_feature_flag(ENV_REPLACEMENT_FLAG)
-    workspace = _fabric_workspace(
-        workspace_id=workspace_id,
-        environment=environment,
-        repository_directory=REPOSITORY_DIRECTORY,
-        item_type_in_scope=item_types,
-        token_credential=_credential(),
-    )
-    _publish(workspace)  # no unpublish: orphans are left alone
+    _enable_feature_flag(ENV_REPLACEMENT_FLAG)  # imports fabric_cicd, which sets up its loggers
+    # Never raise fabric-cicd to debug (change_log_level): it logs substituted $ENV values there. At
+    # its default INFO level it still logs item IDs and request URLs (the model's ID when it binds
+    # it), so its log lines are redacted while it runs; the connection ID, a secret, is masked by
+    # Actions as well.
+    with _redacted_fabric_cicd_logs():
+        # fabric-cicd reads and validates parameter.yml, $ENV: tokens included, only while the
+        # workspace is built (FabricWorkspace.__init__ -> _refresh_parameter_file), so a closed gate's
+        # stand-in is needed only for that.
+        with _stand_ins(closed):
+            workspace = _fabric_workspace(
+                workspace_id=workspace_id,
+                environment=environment,
+                repository_directory=REPOSITORY_DIRECTORY,
+                item_type_in_scope=item_types,
+                token_credential=_credential(),
+            )
+        _publish(workspace)  # no unpublish: orphans are left alone
     print("publish: done")
     return 0
 
@@ -428,24 +518,44 @@ def ensure_gateway_shortcut():
     return 0
 
 
-def _wait_for_refresh(url, token):
-    """Poll Get Refresh Execution Details until the refresh completes (returns), fails (StepFailed
-    with Learn's status name) or REFRESH_TIMEOUT_SECONDS go by. A status outside Learn's list counts
-    as still running and is never printed. Sleeps through the _sleep / _monotonic seams."""
-    deadline = _monotonic() + REFRESH_TIMEOUT_SECONDS
+def _poll(url, token, finished, deadline, what):
+    """GET `url` every REFRESH_POLL_SECONDS until `finished(body)` returns a state (returned), or
+    StepFailed once `deadline` (a _monotonic time) has passed, naming `what` did not finish. Sleeps
+    through the _sleep / _monotonic seams; nothing returned from the API is printed."""
     while True:
-        status, body = _http_get(url, token)  # status before body; 202 while running, 200 when done
+        status, body = _http_get(url, token)  # status before body
         if not 200 <= status < 300 or not isinstance(body, dict):
             raise StepFailed(f"HTTP {status} {_error_code(body)}")
-        state = body.get("extendedStatus") or body.get("status")
-        if state == REFRESH_DONE:
-            return
-        if state in REFRESH_FAILED:
-            raise StepFailed(f"refresh {state}")
+        state = finished(body)
+        if state is not None:
+            return state
         if _monotonic() >= deadline:
             # The refresh may still finish in the service; a re-run starts a new one once it has.
-            raise StepFailed(f"refresh did not finish in {REFRESH_TIMEOUT_SECONDS // 60} minutes")
+            raise StepFailed(f"{what} did not finish in {REFRESH_TIMEOUT_SECONDS // 60} minutes")
         _sleep(REFRESH_POLL_SECONDS)
+
+
+def _refresh_outcome(body):
+    """A Get Refresh Execution Details body's final state (Learn's names), or None while it runs
+    (202 with NotStarted / InProgress / Unknown, or a state outside Learn's list, never printed)."""
+    state = body.get("extendedStatus") or body.get("status")
+    return state if state == REFRESH_DONE or state in REFRESH_FAILED else None
+
+
+def _history_idle(body):
+    """'idle' unless the latest Get Refresh History entry is still running (status Unknown)."""
+    entries = body.get("value")
+    latest = entries[0] if isinstance(entries, list) and entries else None
+    running = isinstance(latest, dict) and latest.get("status") == HISTORY_RUNNING
+    return None if running else "idle"
+
+
+def _wait_for_refresh(url, token, deadline):
+    """Poll Get Refresh Execution Details at `url` until the refresh completes (returns) or fails
+    (StepFailed with Learn's status name), or `deadline` passes."""
+    state = _poll(url, token, _refresh_outcome, deadline, "refresh")
+    if state != REFRESH_DONE:
+        raise StepFailed(f"refresh {state}")
 
 
 def _semantic_model_id(workspace_id, token):
@@ -454,21 +564,46 @@ def _semantic_model_id(workspace_id, token):
     return str(_find_item(workspace_id, token, "semanticModels", SEMANTIC_MODEL_NAME, "semantic model")["id"])
 
 
+def _require_binding(workspace_id, model_id, connection_id, token):
+    """R7: fabric-cicd's bind is best-effort (skipped or only warned about when it cannot bind), so
+    check the result: one of the model's connections (List Item Connections, paged) must be
+    `connection_id` with connectivityType ShareableCloud. An SSO (`Automatic`) entry has no id.
+    StepFailed otherwise, naming no ID."""
+    url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/items/{model_id}/connections"
+    for entry in _paged(url, token, "model connection"):
+        entry_id = entry.get("id")
+        if (
+            isinstance(entry_id, str)
+            and entry_id.lower() == connection_id.lower()
+            and entry.get("connectivityType") == BOUND_CONNECTIVITY
+        ):
+            return
+    raise StepFailed("the model is not bound to its connection")
+
+
 def refresh_model():
     """Refresh (reframe) sm_portfolio after the deploy: fabric-cicd publishes the definition but
     sends no refresh, and a Direct Lake table stays unprocessed, failing queries, until one runs.
-    The connection binding is fabric-cicd's (parameter.yml's semantic_model_binding, after publish),
-    so nothing is bound here. The deploy identity owns the model it published, as binding requires
-    ("The caller must be the owner of the semantic model"):
+    The connection binding is fabric-cicd's (parameter.yml's semantic_model_binding, after publish);
+    this step only checks it (_require_binding) and binds nothing. The deploy identity owns the model
+    it published, as binding requires ("The caller must be the owner of the semantic model"):
     https://learn.microsoft.com/en-us/rest/api/fabric/semanticmodel/items/bind-semantic-model-connection"""
     if _skipped("refresh-model", MODEL_GATE):
         return 0
     workspace_id = _env("FABRIC_WORKSPACE_ID")
+    connection_id = _env(MODEL_GATE)  # open gate: the connection the model must be bound to
     credential = _credential()
-    model_id = _semantic_model_id(workspace_id, credential.get_token(FABRIC_SCOPE).token)
+    fabric_token = credential.get_token(FABRIC_SCOPE).token
+    model_id = _semantic_model_id(workspace_id, fabric_token)
+    _require_binding(workspace_id, model_id, connection_id, fabric_token)
     # A semantic model's Fabric item ID is its Power BI dataset ID.
     token = credential.get_token(POWERBI_SCOPE).token
     refreshes = f"{POWERBI_API_BASE}/groups/{workspace_id}/datasets/{model_id}/refreshes"
+    deadline = _monotonic() + REFRESH_TIMEOUT_SECONDS
+    # The service takes one refresh at a time per model and answers a second with 400 (Learn's
+    # enhanced-refresh page), so wait for one already running, an automatic one included, to end.
+    # How it ended does not matter: this refresh replaces it.
+    _poll(f"{refreshes}?$top=1", token, _history_idle, deadline, "an earlier refresh")
     status, body, location = _http_post_location(refreshes, REFRESH_REQUEST, token)
     if not 200 <= status < 300:  # status before body; Learn documents 202 Accepted
         raise StepFailed(f"HTTP {status} {_error_code(body)}")
@@ -477,7 +612,7 @@ def refresh_model():
     refresh_id = (location or "").rstrip("/").rsplit("/", 1)[-1]
     if not _GUID.fullmatch(refresh_id):
         raise StepFailed("the refresh has no ID")
-    _wait_for_refresh(f"{refreshes}/{refresh_id}", token)
+    _wait_for_refresh(f"{refreshes}/{refresh_id}", token, deadline)
     print("refresh-model: ok")
     return 0
 
