@@ -1134,6 +1134,23 @@ def test_publish_redacts_ids_and_urls_in_fabric_cicd_logs(
     assert seams.ws_kwargs is not None  # the fake workspace still ran
 
 
+@pytest.mark.parametrize(
+    "text, redacted",
+    [
+        ("see https://a.example/x/y.", "see <url>."),
+        ("(see https://a.example/x/y)", "(see <url>)"),
+        ("(see https://a.example/x/y).", "(see <url>)."),
+        ("a https://a.example/x, b https://b.example/y, c", "a <url>, b <url>, c"),
+        ("failed: https://a.example/x?q=1.2,3).", "failed: <url>)."),
+        ("POST https://a.example/x/y failed", "POST <url> failed"),
+        ('url="https://a.example/x/y"', 'url="<url>"'),
+        ("https://a.example/v1.0/x", "<url>"),
+    ],
+)
+def test_redact_leaves_the_punctuation_after_a_url(deploy, text, redacted):
+    assert deploy._redact(text) == redacted
+
+
 def test_publish_removes_the_redaction_afterwards_even_on_failure(
     deploy, env, seams, monkeypatch, fabric_cicd_console
 ):

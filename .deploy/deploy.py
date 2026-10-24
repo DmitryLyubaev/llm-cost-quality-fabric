@@ -97,7 +97,8 @@ REFRESH_TIMEOUT_SECONDS = 600
 # continuationToken: https://learn.microsoft.com/en-us/rest/api/fabric/core/items/list-item-connections
 BOUND_CONNECTIVITY = "ShareableCloud"
 _GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
-_URL = re.compile(r"https?://[^\s'\"<>]+")
+# A URL does not end in `)`, `,` or `.`: those close the sentence around it, so they stay outside the match.
+_URL = re.compile(r"https?://[^\s'\"<>]*[^\s'\"<>).,]")
 
 # The gateway table in the Eventhouse, and its shortcut in lh_portfolio.
 KQL_DATABASE_NAME = "kql_gateway"
