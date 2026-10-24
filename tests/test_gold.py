@@ -481,7 +481,8 @@ def test_eval_rows_carry_their_project(spark, loaded_lake):
         assert frame.where(F.col("project").isNull()).count() == 0, table
         pairs = {(r["study"], r["project"]) for r in frame.select("study", "project").distinct().collect()}
         assert pairs == {(study, seed[study]) for study, _ in pairs}, table
-    assert {r["study"] for r in _loaded(spark, loaded_lake, "fact_eval_attempt").select("study").distinct().collect()} == set(seed)
+    attempts = _loaded(spark, loaded_lake, "fact_eval_attempt")
+    assert {r["study"] for r in attempts.select("study").distinct().collect()} == set(seed)
 
 
 def test_a_study_missing_from_the_seed_fails_the_build(spark, silver, tmp_path):

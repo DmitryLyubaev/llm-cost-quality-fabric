@@ -407,6 +407,10 @@ def _parquet_files(spark, path):
     return DeltaTable.forPath(spark, path).detail().first()["numFiles"]
 
 
+def _latest_operation(spark, path):
+    return DeltaTable.forPath(spark, path).history(1).first()["operation"]
+
+
 def test_optimize_tables_compacts_small_files_and_keeps_the_content(spark, tmp_path):
     """OPTIMIZE rewrites files, not rows: the content fingerprint is the same before and after.
     (A table of one file has nothing to compact and gets no OPTIMIZE entry, so this one is built
@@ -414,13 +418,15 @@ def test_optimize_tables_compacts_small_files_and_keeps_the_content(spark, tmp_p
     path = str(tmp_path / "fragmented")
     for n in range(5):
         spark.range(n * 10, n * 10 + 10).write.format("delta").mode("append").save(path)
-    assert _parquet_files(spark, path) >= 5
+    files_before = _parquet_files(spark, path)
+    assert files_before >= 5
     before = table_fingerprint(spark, path)
 
     optimize_tables(spark, [path])
 
     assert _latest_operation(spark, path) == "OPTIMIZE"
-    assert _parquet_files(spark, path) == 1
+    files_after = _parquet_files(spark, path)
+    assert 1 <= files_after < files_before  # fewer files; how many depends on the target file size
     assert table_fingerprint(spark, path) == before
 
 
@@ -430,21 +436,26 @@ def test_run_load_compacts_every_gold_table_before_fingerprinting(spark, loaded_
     fingerprint is taken. The fingerprint is content-based, so the re-run check is unchanged."""
     paths, seeds, first = _copy(loaded_lake, tmp_path)
     calls = []
-    real = run_module.optimize_tables
+    events = []  # OPTIMIZE and the fingerprint, in the order run_load makes them
+    real_optimize = run_module.optimize_tables
+    real_fingerprint = run_module.gold_fingerprint
 
-    def spy(spark_session, table_paths):
+    def optimize_spy(spark_session, table_paths):
         assert all(DeltaTable.isDeltaTable(spark_session, p) for p in table_paths)
         calls.append(list(table_paths))
-        real(spark_session, table_paths)
+        events.append("optimize")
+        real_optimize(spark_session, table_paths)
 
-    monkeypatch.setattr(run_module, "optimize_tables", spy)
+    def fingerprint_spy(spark_session, lake_paths):
+        events.append("fingerprint")
+        return real_fingerprint(spark_session, lake_paths)
+
+    monkeypatch.setattr(run_module, "optimize_tables", optimize_spy)
+    monkeypatch.setattr(run_module, "gold_fingerprint", fingerprint_spy)
 
     second = run(spark, paths, seeds)
 
+    assert events == ["optimize", "fingerprint"]
     assert calls == [[paths.table("gold", name) for name in GOLD_TABLES]]
     assert "identical" in _rerun_detail(second).detail
     assert second.fingerprint == first.fingerprint == gold_fingerprint(spark, paths)
-
-
-def _latest_operation(spark, path):
-    return DeltaTable.forPath(spark, path).history(1).first()["operation"]
