@@ -88,6 +88,18 @@ def N(value, percent=False, currency=None, *, marked=None, decimal=None, range=F
         ("5-7 checks", [N(5, range=True)]),
         ("5–7 checks", [N(5, range=True)]),
         ("A$3.40-A$3.60", [N(3.4, currency="AUD", range=True)]),
+        ("A$3.40–A$3.60", [N(3.4, currency="AUD", range=True)]),
+        ("6 to 8 checks", [N(6, range=True)]),
+        ("from A$3.40 to A$3.60", [N(3.4, currency="AUD", range=True)]),
+        ("between 5 and 7 checks", [N(5, range=True)]),
+        ("Between A$3.40 and A$3.60", [N(3.4, currency="AUD", range=True)]),
+        # an em dash, or a hyphen or en dash with spaces on both sides, separates two figures
+        ("98.3% — 59 of 60", [N(98.3, True), N(59), N(60)]),
+        ("98.3%—59 of 60", [N(98.3, True), N(59), N(60)]),
+        ("A$3.50 - 12 days", [N(3.5, currency="AUD"), N(12)]),
+        ("A$3.50 – 12 days", [N(3.5, currency="AUD"), N(12)]),
+        ("between 5 checks", [N(5)]),
+        ("6 to go", [N(6)]),
         # sentence punctuation is not part of the number
         ("It spent A$3.50.", [N(3.5, currency="AUD")]),
         ("6, 8 and 12", [N(6), N(8), N(12)]),
@@ -207,6 +219,28 @@ def test_money_prefers_a_bare_dollar_figure_over_plain_numbers():
 
     assert score(answer, _money(3.5), "money").correct
     assert not score("Across 10 projects, p3 spent $3.80 over 3.5 days", _money(3.5), "money").correct
+
+
+def test_separators_are_not_ranges():
+    assert score("The success rate was 98.3% — 59 of 60 runs.", _plain(0.9833), "rate").correct
+    assert score("p3 spent A$3.50 - 12 days of usage.", _money(3.5), "money").correct
+    assert score("In October 2026 - 6 checks failed", _plain(6), "count").correct
+
+
+@pytest.mark.parametrize("answer", ["A$3.40 to A$3.60", "between A$3.40 and A$3.60", "A$3.40–A$3.60"])
+def test_every_range_form_is_unreadable_for_money(answer):
+    verdict = score(answer, _money(3.4), "money")
+
+    assert not verdict.correct
+    assert "unreadable" in verdict.reason
+
+
+def test_plain_numbers_are_not_money_when_another_figure_is_marked():
+    # the only marked figure is in another currency, so "3.5 days" is not read as the money
+    verdict = score("p3 spent US$2.30 over 3.5 days", _money(3.5), "money")
+
+    assert not verdict.correct
+    assert "currency" in verdict.reason
 
 
 def test_a_money_range_is_unreadable():
@@ -397,6 +431,34 @@ def test_labels_negated_mentions_are_not_present():
     assert not score("p1, p4 and p2.", _labels("p1", "p4"), "labels").correct
 
 
+def test_a_negating_cue_covers_only_the_list_right_after_it():
+    expected = _labels("p4", "p6", "p7", "p8")
+
+    assert score("Every project except p5 had a failure (p4, p6, p7 and p8).", expected, "labels").correct
+    assert score("All except p5 or p2 failed, so p4, p6, p7 and p8.", expected, "labels").correct
+    assert score("Excluding p5, the failures were p4, p6, p7 and p8.", expected, "labels").correct
+    assert score("Other than p5 and p1, they all failed: p4, p6, p7, p8.", expected, "labels").correct
+    # the list is negated as a whole, so a wrong answer is still wrong
+    assert not score("Every project except p4 and p6 failed: p5, p7 and p8.", expected, "labels").correct
+
+
+def test_besides_and_apart_from_are_ambiguous_and_unreadable():
+    # "besides p4" may mean "in addition to p4" or "except p4": never guessed, always unreadable
+    expected = _labels("p4", "p6", "p7", "p8")
+
+    for answer in ("Besides p4, p6 and p7 also failed, as did p8.", "Apart from p5, all failed: p4, p6, p7, p8."):
+        verdict = score(answer, expected, "labels")
+        assert not verdict.correct
+        assert "unreadable" in verdict.reason and "ambiguous" in verdict.reason
+
+
+def test_with_no_does_not_negate_a_label():
+    verdict = score("p4, p6, p7, p8 and p5 with no exceptions.", _labels("p4", "p6", "p7", "p8"), "labels")
+
+    assert not verdict.correct
+    assert "extra" in verdict.reason
+
+
 def test_labels_do_not_read_a_study_name_as_a_project():
     expected = _labels("p1", "p4", "untagged")
 
@@ -479,8 +541,12 @@ def test_an_empty_answer_is_unreadable():
         "There is no version change recorded for gpt-5.6-luna.",
         "The model version didn't change during the study.",
         "THE DATA DOES NOT RECORD MORE THAN ONE VERSION.",
-        "I can't say whether it improved: only one version of gpt-5.6-luna was tested.",
-        "Its success rate was 50%, but the data has only one version, so I can't compare.",
+        # a model named with its version date states no figure
+        "Every model ran on a single version (gpt-4.1-mini 2025-04-14), so the data can't show quality by version.",
+        "Only one version of gpt-5.6-luna (2026-07-09) was tested, so I can't compare versions.",
+        "There is no version 2 in the data; I can't answer that.",
+        "I can't break down quality by model version: there is only one version per model.",
+        "The data isn't set up to hold versions, so I can't compare them.",
     ],
 )
 def test_unanswerable_passes_on_a_refusal_or_caveat(answer):
@@ -501,6 +567,17 @@ def test_unanswerable_passes_on_a_refusal_or_caveat(answer):
         "It didn't change a lot.",
         "There is no version history, but quality improved after the upgrade.",
         "The data has only one version: 50% then 60%.",
+        # fix round 2: a refusal phrase never rescues a figure or a direction
+        "Quality got better after the upgrade, but I can't say by how much.",
+        "The new version scores 98.3%; I can't say more than that.",
+        "If you ask me, quality rose after the upgrade; I can't tell exactly.",
+        "I can't say whether it improved: only one version of gpt-5.6-luna was tested.",
+        "Its success rate was 50%, but the data has only one version, so I can't compare.",
+        "The newer version is worse, though I can't tell why.",
+        "Success was higher on the second version; the data can't show more.",
+        "It went down after the upgrade; that is not in the data in detail.",
+        "Quality gained a little, but I cannot determine how much.",
+        "I can't compare versions: only 1 run used it.",
     ],
 )
 def test_unanswerable_fails_on_an_answer(answer):
@@ -516,6 +593,9 @@ def test_refusal_lists_are_fixed_lowercase_tuples():
         assert phrase in REFUSAL_PHRASES
     for verb in ("can't", "cannot", "unable to"):
         assert verb in REFUSAL_VERBS
+    for word in ("better", "worse", "improved", "rose", "fell", "increased", "decreased", "dropped",
+                 "higher", "lower", "up", "down", "grew", "declined", "gained"):  # fmt: skip
+        assert word in score_module.CHANGE_WORDS
     for words in (REFUSAL_PHRASES, REFUSAL_VERBS, score_module.REFUSAL_OBJECTS, score_module.CHANGE_WORDS):
         assert all(p == p.lower().strip() and p for p in words)
     # a plain numeric answer is never a refusal

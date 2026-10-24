@@ -5,10 +5,11 @@ it (`{"value", "currency", "rows"}`; ignored for `unanswerable`) and one of five
 `score_question(answer_text, expected, question)` does the same from a question dict, passing a
 count question's selected `verdict` along.
 
-- **money**: a figure within 1% or 0.01 (whichever is wider) of the expected value. Currency is
-  judged per figure: a figure stated in another currency is ignored (neither a match nor counted
-  toward the shotgun limit). Of the rest, figures with a currency marker (a bare `$` included)
-  are preferred to plain numbers. If every figure is in another currency, the answer is wrong.
+- **money**: a figure within 1% or 0.01 (whichever is wider) of the expected value. Once any
+  figure carries a currency marker (a bare `$` included), plain numbers (days, counts) are not
+  money. Currency is then judged per figure: a figure stated in another currency is ignored
+  (neither a match nor counted toward the shotgun limit). If every figure is in another
+  currency, the answer is wrong.
 - **count**: a plain number (no currency marker, no percent) exactly equal to the expected count.
   With a `verdict` (`fail`, `pass` or `not-run`) and several counts in an answer that uses verdict
   words, each count belongs to its nearest verdict word; the count nearest to a word for the
@@ -20,26 +21,31 @@ count question's selected `verdict` along.
   The text is searched for the expected labels and for any label of the same shape (digits
   generalised, so `p5` is found next to an expected `p4`); a label must stand alone, so the `p3`
   in `p3-agent` is not one. When the labels are project IDs (`p4`), `project 4` and
-  `projects 4 and 6` read as `p4` and `p6`. A label is not present when it is negated: after
-  `except`, `excluding`, `other than`, `apart from`, `besides`, `but not` or `not including` in
-  the same clause (clauses end at `.`, `;`, `:` or a newline), straight after `not`, or straight
-  before `had none`, `has no ...` and the like. Single-letter labels would match prose and are not
+  `projects 4 and 6` read as `p4` and `p6`. A label is not present when it is negated: when it is
+  in the list straight after a cue from `NEGATING_CUES` (`except p5 and p6`; the list is labels
+  joined by commas, `and`, `or`, `nor` or `&`, and ends at the first other word), or straight
+  before `had none`, `has no ...` and the like. A cue from `AMBIGUOUS_CUES` (`besides`,
+  `apart from`) before a label may mean "in addition to" or "except", so the answer is
+  `unreadable` (wrong), never guessed. Single-letter labels would match prose and are not
   supported.
-- **unanswerable**: wrong if the text states two or more figures, or claims a change with a word
-  from `CHANGE_WORDS` (unless `whether` or `if` comes shortly before it). Otherwise it passes only
-  on a caveat from `REFUSAL_PHRASES`, on a verb from `REFUSAL_VERBS` followed (at most two words
-  later) by an object from `REFUSAL_OBJECTS` (`can't tell`, `cannot be determined`), or on
-  `didn't change` not followed by `much`, `a lot` and the like.
+- **unanswerable**: passes only if all three hold: the text has a refusal or caveat (a phrase from
+  `REFUSAL_PHRASES`; a verb from `REFUSAL_VERBS` followed, at most two words later, by an object
+  from `REFUSAL_OBJECTS`, as in `can't tell` or `cannot be determined`; or `didn't change` not
+  followed by `much`, `a lot` and the like); it states no figure at all (`parse_numbers` is
+  empty: dates and `version 2` are not figures); and it uses no word from `CHANGE_WORDS`
+  anywhere, whatever comes before it (`if` and `whether` do not excuse it). The `down` of
+  `break down` and the `up` of `set up`, `look up`, `make up`, `sum up` and `add up` are not
+  directions.
 
 For money, count and rate, an answer with no figure of the scored kind is wrong (`unreadable`), as
-is one whose scored figure is a range (`5-7`, `A$3.40-A$3.60`); one with more than
-`SHOTGUN_LIMIT` such figures is wrong (`shotgun`) even if one matches.
+is one whose scored figure is a range; one with more than `SHOTGUN_LIMIT` such figures is wrong
+(`shotgun`) even if one matches.
 
 `parse_numbers(text)` is the documented parser. It first blanks out what is not a quantity: ISO
 dates and times (`2026-10-25`, `2026-10`, `2026-10-09T14:05:00Z`, `14:05`), `10/25/2026`,
 month-name dates with a year (`October 2026`, `25 October 2026`, `Oct 9, 2026`) or day-first
-without one (`25 October`; not `October 6`, which may be a month and a count), `project 3` and
-`top 1`. It then reads each number that does not touch a letter, digit, `.` or `-` before it (so
+without one (`25 October`; not `October 6`, which may be a month and a count), `project 3`,
+`top 1` and `version 2`. It then reads each number that does not touch a letter, digit, `.` or `-` before it (so
 `p3`, `E3`, `gpt-5.6-luna` and `top-1` hold none) and no letter or digit after it (so `3rd` and
 `3ms` are not numbers). Digits are read atomically: a failed suffix never backtracks into them.
 
@@ -53,8 +59,10 @@ without one (`25 October`; not `October 6`, which may be a month and a count), `
   (`AUD`, `USD`, `EUR`, `GBP`), which sets `marked`. `A$`, `AU$` and `AUD` are AUD; `US$` and
   `USD` are USD; a bare `$` names no currency (None), and a code after it names it;
 - `decimal` is set when the digits hold a `.`;
-- a dash (`-`, `–`, `—`) and a second figure straight after make a range: one Number, the first
-  end, with `range` set.
+- a range is one Number, the first end, with `range` set. Only three forms are ranges: two
+  figures joined by a hyphen or en dash with no space (`5-7`, `A$3.40–A$3.60`), `X to Y`, and
+  `between X and Y` (or `between X-Y`). An em dash, or a hyphen or en dash with spaces on both
+  sides, separates two figures (`98.3% — 59 of 60`, `A$3.50 - 12 days`).
 
 Number words (`six`) are not read.
 """
@@ -112,9 +120,10 @@ REFUSAL_OBJECTS = (  # each word may take an ending: "determine" also matches "d
 )
 NO_CHANGE = ("didn't change", "did not change")
 NO_CHANGE_UNLESS = ("much", "a lot", "significantly", "greatly", "substantially", "that much", "very much", "by")
-CHANGE_WORDS = (
-    "rose", "risen", "fell", "fallen", "increased", "decreased", "dropped", "improved", "declined",
-    "grew", "went up", "went down", "jumped", "climbed",
+CHANGE_WORDS = (  # direction and comparison words, matched as whole words anywhere in the answer
+    "better", "worse", "improved", "improvement", "worsened", "rose", "risen", "fell", "fallen",
+    "increased", "decreased", "dropped", "higher", "lower", "up", "down", "grew", "grown",
+    "declined", "gained", "jumped", "climbed",
 )  # fmt: skip
 VERDICT_WORDS = {
     "fail": r"fail(?:s|ed|ing|ures?)?",
@@ -163,11 +172,17 @@ _NOT_QUANTITIES = [
     re.compile(rf"\b{_ORDINAL}\s+{_MONTH_NOT_MAY}\b", re.I),
     re.compile(r"\bprojects?\s+\d+\b", re.I),
     re.compile(r"\btop[-\s]?\d+\b", re.I),
+    re.compile(r"\bversions?\s+v?\d+(?:\.\d+)*\b", re.I),
 ]
 _PRE = r"A\$|AU\$|US\$|\$|€|£|(?:AUD|USD|EUR|GBP)(?=\s?[-.\d])"
 _CODE = r"AUD|USD|EUR|GBP"
+# The second end of a range: after "and" or "to" (spaces allowed), or straight after a hyphen or
+# en dash (no space). An em dash, or a dash with spaces, separates two figures instead.
+_FIG_TIGHT = rf"(?:{_PRE})?-?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:[kKmM](?![A-Za-z]))?(?:\s?%|\s?(?i:per\s?cent)\b)?(?:\s?(?:{_CODE})\b)?"
+_FIG = rf"(?:(?:{_PRE})\s?)?{_FIG_TIGHT}"
 _NUMBER = re.compile(
     rf"""
+    (?P<between>(?i:\bbetween)\s+)?
     (?<![\w.\-])
     (?P<lead>-)?
     (?:(?P<pre>{_PRE})\s?)?
@@ -181,7 +196,11 @@ _NUMBER = re.compile(
     (?P<suffix>[kKmMx×](?![A-Za-z]))?
     (?:\s?(?P<pct>%|(?i:per\s?cent)\b)|(?!\w))
     (?:\s?(?P<post>{_CODE})\b)?
-    (?P<range>\s?[-–—]\s?(?:{_PRE})?\s?-?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:[kKmM](?![A-Za-z]))?(?:\s?%)?(?:\s?(?:{_CODE})\b)?)?
+    (?P<range>
+        [-–]{_FIG_TIGHT}
+        |\s+(?i:to)\s+{_FIG}
+        |(?(between)\s+(?i:and)\s+{_FIG}|(?!))
+    )?
     """,
     re.VERBOSE,
 )
@@ -260,10 +279,11 @@ def _score_money(numbers: list[Number], expected: dict) -> Verdict:
     want = _expected_number(expected, "money")
     currency = expected.get("currency")
     amounts = [n for n in numbers if not n.percent]
-    kept = [n for n in amounts if currency is None or n.currency in (None, currency)]
-    if amounts and not kept:
+    # once any figure carries a currency marker, plain numbers (days, counts) are not money
+    amounts = [n for n in amounts if n.marked] or amounts
+    candidates = [n for n in amounts if currency is None or n.currency in (None, currency)]
+    if amounts and not candidates:
         return _wrong(f"currency: every figure is in {sorted({n.currency for n in amounts})}, not {currency}")
-    candidates = [n for n in kept if n.marked] or kept
     refused = _unscorable(candidates, "money")
     if refused:
         return refused
@@ -327,11 +347,14 @@ def _shape(label: str) -> str:
 
 
 _PROJECT_NUMBERS = re.compile(r"\bprojects?\s+(\d+(?:(?:\s*,\s*(?:and\s+|or\s+)?|\s+and\s+|\s+or\s+|\s*&\s*)\d+)*)\b", re.I)
-_CLAUSE = re.compile(r"[^.;:\n]+")
-_EXCEPT = re.compile(r"\b(?:except|excluding|other than|apart from|besides|but not|not including)\b", re.I)
-_NOT_BEFORE = re.compile(r"\bnot\s+$", re.I)
+# A cue negates the list of labels straight after it (labels joined by commas, "and", "or", "nor"
+# or "&"); the list ends at the first word that is neither a label nor a connector.
+NEGATING_CUES = ("except for", "except", "excluding", "other than", "but not", "not including", "not")
+# "besides p4" and "apart from p4" may mean "in addition to p4" or "except p4": never guessed.
+AMBIGUOUS_CUES = ("besides", "apart from")
+_CONNECTOR = r"(?:\s*,\s*(?:and\s+|or\s+)?|\s+and\s+|\s+or\s+|\s+nor\s+|\s*&\s*)"
 _NONE_AFTER = re.compile(
-    r"\s*(?:\([^)]*\)\s*)?(?:(?:had|has|have|showed|shows|with)\s+(?:none|nothing|zero|no\s+\w+)|-\s*none\b)", re.I
+    r"\s*(?:\([^)]*\)\s*)?(?:(?:had|has|have|showed|shows)\s+(?:none|nothing|zero|no\s+\w+)|-\s*none\b)", re.I
 )
 
 
@@ -344,15 +367,19 @@ def _score_labels(text: str, expected: dict) -> Verdict:
     if any(re.fullmatch(r"p\d+", v) for v in want):
         text = _PROJECT_NUMBERS.sub(lambda m: re.sub(r"\d+", lambda d: f"p{d.group(0)}", m.group(1)), text)
     shapes = sorted({_shape(v) for v in value}, key=len, reverse=True)
-    pattern = re.compile(r"(?<![\w\-])(?:" + "|".join(shapes) + r")(?![\w\-])", re.I)
+    label = r"(?<![\w\-])(?:" + "|".join(shapes) + r")(?![\w\-])"
+    label_list = rf"{label}(?:{_CONNECTOR}{label})*"
+    ambiguous = re.search(rf"\b(?:{_words(AMBIGUOUS_CUES)})\s+(?={label})", text, re.I)
+    if ambiguous:
+        return _wrong(f"unreadable: ambiguous {ambiguous.group(0).strip()!r} before a label")
+    negated = [
+        m.span(1) for m in re.finditer(rf"\b(?:{_words(NEGATING_CUES)})\s+({label_list})", text, re.I)
+    ]
     found = set()
-    for clause in _CLAUSE.finditer(text):
-        part = clause.group(0)
-        for m in pattern.finditer(part):
-            before, after = part[: m.start()], part[m.end() :]
-            if _EXCEPT.search(before) or _NOT_BEFORE.search(before) or _NONE_AFTER.match(after):
-                continue
-            found.add(m.group(0).lower())
+    for m in re.finditer(label, text, re.I):
+        if any(start <= m.start() < end for start, end in negated) or _NONE_AFTER.match(text, m.end()):
+            continue
+        found.add(m.group(0).lower())
     if not found:
         return _wrong("unreadable: no label in the answer")
     if found == want:
@@ -374,18 +401,21 @@ def _words(words: tuple[str, ...], ending: bool = False) -> str:
 _REFUSAL = re.compile(rf"\b(?:{_words(REFUSAL_VERBS)})\s+(?:\w+\s+){{0,2}}?(?:{_words(REFUSAL_OBJECTS, True)})\b")
 _NO_CHANGE = re.compile(rf"\b(?:{_words(NO_CHANGE)})\b(?!\s+(?:{_words(NO_CHANGE_UNLESS)})\b)")
 _CHANGE = re.compile(rf"\b(?:{_words(CHANGE_WORDS)})\b")
-_HEDGE = re.compile(r"\b(?:whether|if)\b")
+# Phrasal verbs whose "up" or "down" is not a direction; blanked before CHANGE_WORDS are looked for.
+_NOT_A_DIRECTION = re.compile(
+    r"\b(?:break|breaks|broke|broken|breaking)\s+(?:\w+\s+)?down\b|\b(?:set|sets|look|looked|make|made|sum|add|adds)\s+up\b"
+)
 
 
 def _score_unanswerable(text: str) -> Verdict:
     text = _normalise(text)
     figures = parse_numbers(text)
-    if len(figures) >= 2:
-        return _wrong(f"refusal: the answer states {len(figures)} figures")
+    if figures:
+        return _wrong(f"refusal: the answer states {len(figures)} figure(s)")
     lowered = text.lower()
-    for m in _CHANGE.finditer(lowered):
-        if not _HEDGE.search(lowered[max(0, m.start() - 40) : m.start()]):
-            return _wrong(f"refusal: the answer claims a change ({m.group(0)!r})")
+    change = _CHANGE.search(_NOT_A_DIRECTION.sub(" ", lowered))
+    if change:
+        return _wrong(f"refusal: the answer uses a direction or comparison word ({change.group(0)!r})")
     for phrase in REFUSAL_PHRASES:
         if phrase in lowered:
             return Verdict(True, f"correct: caveat ({phrase!r})")
