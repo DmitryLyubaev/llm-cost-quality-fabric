@@ -343,10 +343,12 @@ def test_cost_per_call_divides_the_days_gateway_cost_by_every_call(spark, tmp_la
     answer = _answer(spark, tmp_lake)
 
     assert frame.columns == [
-        "call_date", "calls", "tokens_total", "tokens_per_call", "billing_currency", "apim_cost", "cost_per_call",
+        "call_date", "calls", "refused", "tokens_total", "tokens_per_call", "billing_currency", "apim_cost",
+        "cost_per_call",
     ]
     row = answer[(date(2026, 11, 12), "AUD")]
     assert row["calls"] == 4  # refused calls counted
+    assert row["refused"] == 2  # ruling R5: the model's `Refused by gateway` mirrors this
     assert row["tokens_total"] == 400
     assert row["tokens_per_call"] == pytest.approx(100.0)
     assert row["apim_cost"] == pytest.approx(4.0)
@@ -362,7 +364,16 @@ def test_cost_per_call_without_cost_rows_keeps_the_day_with_null_cost(spark, tmp
     assert list(answer) == [(date(2026, 11, 12), None)]
     row = answer[(date(2026, 11, 12), None)]
     assert row["calls"] == 2
+    assert row["refused"] == 1
     assert row["apim_cost"] is None and row["cost_per_call"] is None
+
+
+def test_cost_per_call_counts_zero_refused_calls_as_zero(spark, tmp_lake):
+    _load(spark, tmp_lake, [_call("req-01"), _call("req-02"), _refused("req-03", session=OTHER_SESSION)])
+
+    row = _answer(spark, tmp_lake)[(date(2026, 11, 12), None)]
+
+    assert row["refused"] == 0
 
 
 def test_cost_per_call_matches_the_resource_group_case_insensitively(spark, tmp_lake):
@@ -450,6 +461,7 @@ def test_load_gateway_runs_silver_gold_check_and_answer(spark, entry_lake):
         {
             "call_date": "2026-11-12",
             "calls": 2,
+            "refused": 1,
             "tokens_total": 120,
             "tokens_per_call": 60.0,
             "billing_currency": "AUD",

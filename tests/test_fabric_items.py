@@ -21,13 +21,15 @@ GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-
 NOTEBOOKS = ["nb_ingest_public", "nb_load"]  # the pipeline's, in activity order
 GATEWAY_NOTEBOOK = "nb_gateway_load"  # run by hand after a session, never by the pipeline
 ACCESS_NOTEBOOK = "nb_access_load"  # run by hand after access.csv is uploaded, never by the pipeline
-HAND_RUN_NOTEBOOKS = [GATEWAY_NOTEBOOK, ACCESS_NOTEBOOK]
+MODEL_CHECK_NOTEBOOK = "nb_model_check"  # run by hand, as a user, after the model refreshes
+HAND_RUN_NOTEBOOKS = [GATEWAY_NOTEBOOK, ACCESS_NOTEBOOK, MODEL_CHECK_NOTEBOOK]
 ALL_NOTEBOOKS = NOTEBOOKS + HAND_RUN_NOTEBOOKS
 PARAMETERS = {  # None: the notebook has no parameters cell
     "nb_ingest_public": ['load_date = ""'],
     "nb_load": ['load_date = ""'],
     GATEWAY_NOTEBOOK: ['session = ""', 'eventhouse_count = ""'],
     ACCESS_NOTEBOOK: None,
+    MODEL_CHECK_NOTEBOOK: ['sessions = ""'],
 }
 # Patterns that would mean a storage endpoint or a lake path with real IDs slipped in.
 FORBIDDEN_IN_NOTEBOOKS = [
@@ -90,6 +92,7 @@ def test_expected_items_exist():
         "nb_load.Notebook",
         "nb_gateway_load.Notebook",
         "nb_access_load.Notebook",
+        "nb_model_check.Notebook",
         "pl_daily_load.DataPipeline",
         "sm_portfolio.SemanticModel",
     } | REALTIME_ITEMS
@@ -196,6 +199,7 @@ def test_notebook_default_lakehouse_is_lh_portfolio_in_this_workspace(name):
             "lakehouse.fabric_entry.load_gateway(session, eventhouse_count, notebookutils.runtime.context)",
         ),
         (ACCESS_NOTEBOOK, "lakehouse.fabric_entry.load_access(notebookutils.runtime.context)"),
+        (MODEL_CHECK_NOTEBOOK, "lakehouse.fabric_entry.check_model(notebookutils.runtime.context, sessions)"),
     ],
 )
 def test_notebook_calls_its_entry_point_with_the_runtime_context(name, call):
@@ -230,6 +234,20 @@ def test_access_notebook_runs_by_hand_and_prints_counts_only():
     assert "security.user_project" in markdown
     assert "never from the pipeline" in markdown
     assert "counts" in markdown
+    call_cell = text.rsplit(CELL_MARKER, 1)[1]
+    assert call_cell.count("print(") == 1
+    assert "print(json.dumps(summary" in call_cell
+    assert "@" not in text
+
+
+def test_model_check_notebook_runs_as_a_user_and_never_from_the_pipeline():
+    text = _notebook(MODEL_CHECK_NOTEBOOK)
+    markdown = " ".join(text.split(MARKDOWN_MARKER, 1)[1].split(PARAMETERS_MARKER, 1)[0].lower().split())
+    assert "as a user" in markdown
+    assert "never from the pipeline" in markdown
+    assert "service principal" in markdown and "not supported" in markdown
+    assert "sessions" in markdown and "comma-separated" in markdown
+    assert "never prints a upn" in markdown
     call_cell = text.rsplit(CELL_MARKER, 1)[1]
     assert call_cell.count("print(") == 1
     assert "print(json.dumps(summary" in call_cell

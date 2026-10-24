@@ -207,3 +207,149 @@ def test_load_access_needs_the_files_mount(monkeypatch):
 
     with pytest.raises(ValueError, match=r"files mount"):
         fabric_entry.load_access(CONTEXT)
+
+
+# --- check_model: the model-versus-gold check (Task 6) ------------------------------------------
+
+
+class _Scalar:
+    """A numpy scalar as far as the normaliser sees one: `.item()` gives the Python value."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def item(self):
+        return self.value
+
+
+class _Timestamp:
+    """A pandas Timestamp as far as the normaliser sees one."""
+
+    def __init__(self, moment):
+        self.moment = moment
+
+    def to_pydatetime(self):
+        return self.moment
+
+
+class NAType:
+    """pandas' NA as far as the normaliser sees it: a type of that name (comparing it raises)."""
+
+    def __eq__(self, other):
+        raise TypeError("boolean value of NA is ambiguous")
+
+    __ne__ = __eq__
+
+
+class _Frame:
+    """The part of the pandas DataFrame `evaluate_dax` returns that the wrapper reads."""
+
+    def __init__(self, columns, rows):
+        self.columns = list(columns)
+        self.rows = [tuple(r) for r in rows]
+
+    def itertuples(self, index=True, name="Pandas"):
+        assert index is False and name is None
+        return iter(self.rows)
+
+
+def test_dax_rows_take_the_names_inside_the_brackets():
+    from datetime import datetime
+
+    frame = _Frame(
+        ["fact_daily_cost[billing_currency]", "'dim project'[project]", "[total]", "[n]", "[call_date]", "[at]"],
+        [
+            ["AUD", "p1", _Scalar(12.5), _Scalar(3), _Timestamp(datetime(2026, 11, 12)),
+             _Timestamp(datetime(2026, 11, 12, 1, 30))],
+            [None, "p2", float("nan"), _Scalar(float("nan")), None, NAType()],
+        ],
+    )
+
+    rows = fabric_entry._dax_rows(frame)
+
+    assert rows == [
+        {"billing_currency": "AUD", "project": "p1", "total": 12.5, "n": 3, "call_date": date(2026, 11, 12),
+         "at": datetime(2026, 11, 12, 1, 30)},
+        {"billing_currency": None, "project": "p2", "total": None, "n": None, "call_date": None, "at": None},
+    ]
+    assert type(rows[0]["n"]) is int
+
+
+def test_dax_rows_refuse_two_columns_with_one_name():
+    frame = _Frame(["fact_eval_attempt[model_version]", "dim_model_deployment[model_version]"], [])
+    with pytest.raises(ValueError, match="model_version"):
+        fabric_entry._dax_rows(frame)
+
+
+class _Conf:
+    def __init__(self):
+        self.values = {}
+
+    def set(self, key, value):
+        self.values[key] = value
+
+
+class _Spark:
+    def __init__(self):
+        self.conf = _Conf()
+
+
+@pytest.fixture
+def model_check(monkeypatch):
+    """check_model with a fake semantic link and a stub check; returns what each saw."""
+    seen = {"dax": [], "spark": _Spark()}
+
+    def fake_evaluate_dax(**kwargs):
+        seen["dax"].append(kwargs)
+        return _Frame(["fact_daily_cost[project]", "[total]"], [["p1", _Scalar(1.5)]])
+
+    def fake_check(spark, paths, evaluate, sessions):
+        seen.update(paths=paths, sessions=sessions, spark_seen=spark)
+        seen["owner_rows"] = evaluate("EVALUATE owner", None)
+        seen["user_rows"] = evaluate("EVALUATE lead", "lead.one@example.test")
+        return seen.get("result", CheckResult("model_matches_gold", True, "matches"))
+
+    monkeypatch.setattr(fabric_entry, "_sempy_evaluate_dax", fake_evaluate_dax)
+    monkeypatch.setattr(fabric_entry, "check_model_matches_gold", fake_check)
+    monkeypatch.setattr(fabric_entry, "get_active_spark", lambda: seen["spark"])
+    return seen
+
+
+def test_check_model_calls_evaluate_dax_as_the_owner_then_as_a_user(model_check):
+    summary = fabric_entry.check_model(CONTEXT, " p10-2026-11-12, p10-2026-11-19 ,, ")
+
+    assert model_check["dax"] == [
+        {"dataset": "sm_portfolio", "dax_string": "EVALUATE owner"},
+        {"dataset": "sm_portfolio", "dax_string": "EVALUATE lead", "effective_user_name": "lead.one@example.test"},
+    ]
+    assert model_check["owner_rows"] == model_check["user_rows"] == [{"project": "p1", "total": 1.5}]
+    assert model_check["sessions"] == ["p10-2026-11-12", "p10-2026-11-19"]
+    assert model_check["paths"] == fabric_entry.fabric_paths(CONTEXT)
+    assert model_check["spark"].conf.values["spark.sql.session.timeZone"] == "UTC"
+    assert summary == {
+        "sessions": ["p10-2026-11-12", "p10-2026-11-19"],
+        "checks": [{"name": "model_matches_gold", "passed": True, "detail": "matches"}],
+    }
+    json.dumps(summary)
+
+
+@pytest.mark.parametrize("sessions", ["", "  ", " , "])
+def test_check_model_with_no_sessions_passes_an_empty_list(model_check, sessions):
+    fabric_entry.check_model(CONTEXT, sessions)
+    assert model_check["sessions"] == []
+
+
+def test_check_model_raises_on_a_mismatch(model_check):
+    model_check["result"] = CheckResult("model_matches_gold", False, "cost_per_project differs")
+
+    with pytest.raises(QualityCheckFailed, match="model_matches_gold: cost_per_project differs"):
+        fabric_entry.check_model(CONTEXT)
+
+
+def test_semantic_link_is_imported_only_when_called():
+    """Fabric Runtime 2.0 preinstalls sempy; CI does not have it, so the module must import without it."""
+    import sys
+
+    assert "sempy" not in sys.modules
+    with pytest.raises(ModuleNotFoundError, match="sempy"):
+        fabric_entry._sempy_evaluate_dax(dataset="sm_portfolio", dax_string="EVALUATE {1}")
