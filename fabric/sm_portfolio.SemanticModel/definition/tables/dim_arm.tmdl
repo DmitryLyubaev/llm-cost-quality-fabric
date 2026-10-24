@@ -1,0 +1,58 @@
+table dim_arm
+	sourceLineageTag: [gold].[dim_arm]
+
+	column study
+		dataType: string
+		sourceColumn: study
+		sourceLineageTag: study
+		summarizeBy: none
+
+	column arm
+		dataType: string
+		sourceColumn: arm
+		sourceLineageTag: arm
+		summarizeBy: none
+
+	column label
+		dataType: string
+		sourceColumn: label
+		sourceLineageTag: label
+		summarizeBy: none
+
+	column account_alias
+		dataType: string
+		sourceColumn: account_alias
+		sourceLineageTag: account_alias
+		summarizeBy: none
+
+	column deployment_name
+		dataType: string
+		sourceColumn: deployment_name
+		sourceLineageTag: deployment_name
+		summarizeBy: none
+
+	column model
+		dataType: string
+		sourceColumn: model
+		sourceLineageTag: model
+		summarizeBy: none
+
+	column arm_key
+		dataType: string
+		isHidden
+		sourceColumn: arm_key
+		sourceLineageTag: arm_key
+		summarizeBy: none
+
+	column project
+		dataType: string
+		sourceColumn: project
+		sourceLineageTag: project
+		summarizeBy: none
+
+	partition dim_arm = entity
+		mode: directLake
+		source
+			entityName: dim_arm
+			schemaName: gold
+			expressionSource: 'DirectLake - lh_portfolio'

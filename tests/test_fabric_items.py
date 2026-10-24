@@ -91,6 +91,7 @@ def test_expected_items_exist():
         "nb_gateway_load.Notebook",
         "nb_access_load.Notebook",
         "pl_daily_load.DataPipeline",
+        "sm_portfolio.SemanticModel",
     } | REALTIME_ITEMS
 
 

@@ -4,7 +4,8 @@ Fabric rules: a Fabric `notebook-content.py` must hold no cell-output marker, an
 `shortcuts.metadata.json` must be an empty JSON array (a shortcut's target serialises the storage
 account URL; the deploy creates the shortcut instead, so it never lands in git). No file may hold a
 named Event Hubs namespace host (`<name>.servicebus.windows.net`) or Eventhouse query host
-(`<name>.kusto.fabric.microsoft.com`): the deploy injects both.
+(`<name>.kusto.fabric.microsoft.com`): the deploy injects both. No file may hold an
+`@<name>.onmicrosoft.com` address: UPNs live only in the git-ignored access file and OneLake.
 
 Forbidden values (for example a tenant ID or storage account name) come from the
 HYGIENE_FORBIDDEN environment variable, comma-separated, so they never live in the repo.
@@ -45,14 +46,18 @@ def _fabric_notebook_has_outputs(text: str) -> bool:
 
 # A named Event Hubs namespace or Eventhouse (Kusto) host: identifiers that the deploy injects and git
 # never holds. A bare suffix, or one after a template placeholder such as `${var.x}.` or `<namespace>.`,
-# is not a host and passes.
-FORBIDDEN_HOSTS = {
+# is not a host and passes. Messages name the kind of match, never the matched text.
+FORBIDDEN_PATTERNS = {
     "an Event Hubs namespace host": re.compile(
         r"(?<![\w.-])[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.servicebus\.windows\.net", re.IGNORECASE
     ),
     "a Kusto query host": re.compile(
         r"(?<![\w.-])[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.kusto\.fabric\.microsoft\.com", re.IGNORECASE
     ),
+    # A user or tenant address in any Entra tenant's initial domain (a UPN, for example the access
+    # table's). Generic, so the check itself names no tenant. A placeholder such as
+    # `fabric@<tenant>.` or a bare `fabric@` is not an address and passes.
+    "an onmicrosoft.com address": re.compile(r"@[a-z0-9][a-z0-9-]*\.onmicrosoft\.com", re.IGNORECASE),
 }
 
 
@@ -83,7 +88,7 @@ def check_hygiene(paths: list[Path], forbidden: list[str]) -> list[str]:
             problem = _shortcuts_problem(text)
             if problem:
                 problems.append(f"{path}: {problem}")
-        for what, pattern in FORBIDDEN_HOSTS.items():
+        for what, pattern in FORBIDDEN_PATTERNS.items():
             if pattern.search(text):
                 problems.append(f"{path}: contains {what}")
         lowered = text.lower()

@@ -1,0 +1,63 @@
+table fact_live_check
+	sourceLineageTag: [gold].[fact_live_check]
+
+	column project
+		dataType: string
+		sourceColumn: project
+		sourceLineageTag: project
+		summarizeBy: none
+
+	column session_date
+		dataType: dateTime
+		sourceColumn: session_date
+		sourceLineageTag: session_date
+		summarizeBy: none
+
+	column session
+		dataType: string
+		sourceColumn: session
+		sourceLineageTag: session
+		summarizeBy: none
+
+	column check_id
+		dataType: string
+		sourceColumn: check_id
+		sourceLineageTag: check_id
+		summarizeBy: none
+
+	column verdict
+		dataType: string
+		sourceColumn: verdict
+		sourceLineageTag: verdict
+		summarizeBy: none
+
+	column measured_value
+		dataType: double
+		sourceColumn: measured_value
+		sourceLineageTag: measured_value
+		summarizeBy: none
+
+	column unit
+		dataType: string
+		sourceColumn: unit
+		sourceLineageTag: unit
+		summarizeBy: none
+
+	column source_report
+		dataType: string
+		sourceColumn: source_report
+		sourceLineageTag: source_report
+		summarizeBy: none
+
+	column source_sha
+		dataType: string
+		sourceColumn: source_sha
+		sourceLineageTag: source_sha
+		summarizeBy: none
+
+	partition fact_live_check = entity
+		mode: directLake
+		source
+			entityName: fact_live_check
+			schemaName: gold
+			expressionSource: 'DirectLake - lh_portfolio'
