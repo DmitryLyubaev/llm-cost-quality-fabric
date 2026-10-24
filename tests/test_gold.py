@@ -13,7 +13,8 @@ from lake_helpers import cost_export_maker
 from lakehouse.attribution import load_rg_rules, load_session_windows
 from lakehouse.gold.build import GOLD_TABLES, GRAINS, PROJECTS, SESSION_TABLES, build_gold
 from lakehouse.gold.fingerprint import gold_fingerprint
-from lakehouse.seeding import SEEDS_DIR
+from lakehouse.answers import cost_per_result
+from lakehouse.seeding import SEEDS_DIR, read_study_projects
 from lakehouse.silver.costs import normalise_costs, read_cost_export, replace_month
 from lakehouse.silver.deployments import (
     CHANGES_SCHEMA,
@@ -432,3 +433,80 @@ def test_live_checks_seed_valid():
     # every report contributes rows, and failures are kept
     assert {r["source_report"] for r in rows} == allowed_reports
     assert {r["verdict"] for r in rows} == {"pass", "fail", "not-run"}
+
+
+# --- keys and project columns (project 11: relationships and row-level security) ----------------
+
+
+def _loaded(spark, loaded_lake, name):
+    paths, _, _ = loaded_lake
+    return spark.read.format("delta").load(paths.table("gold", name))
+
+
+def test_study_and_arm_keys_are_unique(spark, loaded_lake):
+    for table, key in (("dim_study", "study_key"), ("dim_arm", "arm_key"), ("dim_model_deployment", "deployment_sk")):
+        frame = _loaded(spark, loaded_lake, table)
+        assert frame.count() > 0
+        assert frame.where(F.col(key).isNull()).count() == 0, (table, key)
+        assert frame.select(key).distinct().count() == frame.count(), (table, key)
+
+
+def test_every_fact_key_resolves(spark, loaded_lake):
+    facts = _loaded(spark, loaded_lake, "fact_eval_attempt")
+    assert facts.count() > 0
+    for key, table in (("study_key", "dim_study"), ("arm_key", "dim_arm"), ("deployment_sk", "dim_model_deployment")):
+        dimension = _loaded(spark, loaded_lake, table).select(key).distinct()
+        orphans = facts.select(key).distinct().join(dimension, key, "left_anti")
+        assert orphans.count() == 0, (key, [r[key] for r in orphans.collect()])
+    assert facts.where(F.col("study_key") != F.concat_ws("|", "study", "run_id")).count() == 0
+    assert facts.where(F.col("arm_key") != F.concat_ws("|", "study", "arm")).count() == 0
+
+
+def test_eval_rows_carry_their_project(spark, loaded_lake):
+    seed = read_study_projects(loaded_lake[1])
+    assert seed == {"p1-three-arm": "p1", "p2-retrieval": "p2", "p3-agent": "p3"}
+    for table in ("fact_eval_attempt", "dim_study", "dim_arm"):
+        frame = _loaded(spark, loaded_lake, table)
+        assert frame.where(F.col("project").isNull()).count() == 0, table
+        pairs = {(r["study"], r["project"]) for r in frame.select("study", "project").distinct().collect()}
+        assert pairs == {(study, seed[study]) for study, _ in pairs}, table
+    assert {r["study"] for r in _loaded(spark, loaded_lake, "fact_eval_attempt").select("study").distinct().collect()} == set(seed)
+
+
+def test_a_study_missing_from_the_seed_fails_the_build(spark, silver, tmp_path):
+    paths, _ = silver
+    seeds = tmp_path / "seeds"
+    shutil.copytree(SEEDS, seeds)
+    lines = (seeds / "study_projects.csv").read_text(encoding="utf-8").splitlines(keepends=True)
+    (seeds / "study_projects.csv").write_text(
+        "".join(line for line in lines if not line.startswith("p2-retrieval,")), encoding="utf-8", newline=""
+    )
+
+    with pytest.raises(ValueError, match=r"p2-retrieval"):
+        build_gold(spark, paths, str(seeds))
+
+    assert not DeltaTable.isDeltaTable(spark, paths.table("gold", "fact_eval_attempt"))
+
+
+def test_cost_per_result_is_unchanged_by_the_project_column(spark, loaded_lake):
+    """The rows the answer gave when it mapped study to project in Python (fixture values)."""
+    rows = {r["project"]: r for r in cost_per_result(spark, loaded_lake[0]).collect()}
+
+    assert sorted(rows) == ["p1", "p2", "p3"]
+    expected = {
+        "p1": (6, 0.1, 4.28),
+        "p2": (12, 7.6e-06, 1.75),
+        "p3": (4, 0.0031504, 3.5),
+    }
+    for project, (results, estimated, actual) in expected.items():
+        row = rows[project]
+        assert row["results"] == results, project
+        assert row["unpriced_results"] == 0, project
+        assert row["estimated_usd_total"] == pytest.approx(estimated), project
+        assert row["estimated_usd_per_result"] == pytest.approx(estimated / results), project
+        assert row["estimated_currency"] == "USD", project
+        assert row["actual_total"] == pytest.approx(actual), project
+        assert row["actual_per_result"] == pytest.approx(actual / results), project
+        assert row["actual_currency"] == "AUD", project
+        assert row["fx_month"] == "2026-10", project
+        assert row["fx_usd_to_billing"] is None and row["estimated_in_billing_total"] is None, project

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pyspark.sql.types import DateType, DoubleType, LongType, StringType, StructField, StructType
 
-from lakehouse.seeding import SEEDS_DIR, read_seed_rows, seed_df
+from lakehouse.seeding import SEEDS_DIR, read_seed_rows, read_study_projects, seed_df
 
 SCHEMA = StructType(
     [
@@ -66,7 +66,7 @@ def test_read_seed_rows_rejects_empty_file(tmp_path):
 def test_packaged_seeds_dir_holds_the_seeds():
     names = {p.name for p in Path(SEEDS_DIR).iterdir()}
 
-    assert {"dim_arm.csv", "ingest_manifest.json", "rg_rules.csv"} <= names
+    assert {"dim_arm.csv", "ingest_manifest.json", "rg_rules.csv", "study_projects.csv"} <= names
     assert Path(SEEDS_DIR).parts[-2:] == ("lakehouse", "seeds")
 
 
@@ -108,3 +108,19 @@ def test_wheel_contains_seeds(tmp_path):
     assert expected  # the seeds exist
     for name in expected:
         assert f"lakehouse/seeds/{name}" in names
+
+
+def test_study_projects_seed_maps_each_study_and_cites_its_report():
+    assert read_study_projects(SEEDS_DIR) == {"p1-three-arm": "p1", "p2-retrieval": "p2", "p3-agent": "p3"}
+    assert all(row["evidence"].strip() for row in read_seed_rows(SEEDS_DIR, "study_projects.csv"))
+
+
+def test_study_projects_refuses_a_wrong_header_a_blank_cell_or_a_repeated_study(tmp_path):
+    for text, message in (
+        ("study,project\np1-three-arm,p1\n", r"header"),
+        ("study,project,evidence\np1-three-arm,,x\n", r"row 1.*blank"),
+        ("study,project,evidence\na,p1,x\na,p2,y\n", r"row 2.*'a' appears twice"),
+    ):
+        seeds = _seed(tmp_path, text, name="study_projects.csv")
+        with pytest.raises(ValueError, match=message):
+            read_study_projects(seeds)

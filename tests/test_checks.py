@@ -21,6 +21,7 @@ from lakehouse.checks import (
 )
 from lakehouse.gold.fingerprint import gold_fingerprint, table_fingerprint
 from lakehouse.paths import LakePaths
+from lakehouse.seeding import read_study_projects
 from lakehouse.attribution import load_rg_rules, load_session_windows
 from lakehouse.silver.costs import normalise_costs, read_cost_export, replace_month
 
@@ -370,7 +371,7 @@ def test_cost_per_result_counts_unpriced_results_and_withholds_the_estimate(spar
 # --- cost_per_result: the estimate in the billing currency, at the export's own rate ----------
 
 _FX_FACT_SCHEMA = (
-    "study string, attempt_kind string, started_at timestamp, cost_usd double, cost_basis string"
+    "study string, project string, attempt_kind string, started_at timestamp, cost_usd double, cost_basis string"
 )
 _FX_COST_SCHEMA = (
     "project string, billing_currency string, cost double, billing_month string, "
@@ -381,8 +382,9 @@ _FX_COST_SCHEMA = (
 def _fx_lake(spark, tmp_lake, attempts, costs):
     """Synthetic gold tables: scored attempts (study, started_at, cost_usd, cost_basis) and cost
     lines (project, billing currency, cost, billing month, pricing currency, rate)."""
+    project_of = read_study_projects(SEEDS)  # gold stamps each attempt with its study's project
     rows = [
-        (study, kind, datetime.fromisoformat(started).replace(tzinfo=UTC), cost_usd, basis)
+        (study, project_of[study], kind, datetime.fromisoformat(started).replace(tzinfo=UTC), cost_usd, basis)
         for study, kind, started, cost_usd, basis in attempts
     ]
     spark.createDataFrame(rows, _FX_FACT_SCHEMA).write.format("delta").save(

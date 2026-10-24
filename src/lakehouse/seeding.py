@@ -50,6 +50,29 @@ def read_seed_rows(seeds_dir: str, name: str) -> list[dict[str, str]]:
     return rows
 
 
+STUDY_PROJECTS_HEADER = ["study", "project", "evidence"]
+
+
+def read_study_projects(seeds_dir: str, name: str = "study_projects.csv") -> dict[str, str]:
+    """`study_projects.csv` as study -> project, read strictly.
+
+    ValueError naming the file if the header is not `study,project,evidence`, a study or project
+    is blank, or a study appears twice.
+    """
+    header = _header(seeds_dir, name)
+    if header != STUDY_PROJECTS_HEADER:
+        raise ValueError(f"seed {name}: header {header} is not {STUDY_PROJECTS_HEADER}")
+    mapping: dict[str, str] = {}
+    for number, row in enumerate(read_seed_rows(seeds_dir, name), start=1):
+        study, project = row["study"].strip(), row["project"].strip()
+        if not study or not project:
+            raise ValueError(f"seed {name}: row {number} has a blank study or project")
+        if study in mapping:
+            raise ValueError(f"seed {name}: row {number}: study {study!r} appears twice")
+        mapping[study] = project
+    return mapping
+
+
 def _header(seeds_dir: str, name: str) -> list[str]:
     with open(Path(seeds_dir) / name, encoding="utf-8", newline="") as handle:
         return next(csv.reader(handle), [])

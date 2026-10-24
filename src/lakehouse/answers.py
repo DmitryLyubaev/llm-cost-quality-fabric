@@ -19,8 +19,6 @@ ESTIMATE_CURRENCY = "USD"
 PRICING_CURRENCY = "USD"  # the pricing currency whose export rate converts the estimate
 NO_MODEL_BASIS = "no_model"  # cost_basis of an arm with no model: its cost is a true zero
 ALWAYS_PRESENT = [UNTAGGED, SHARED_PROJECT]
-# The project each study measured (dim_study has no project column; the tracker's names).
-STUDY_PROJECT = {"p1-three-arm": "p1", "p2-retrieval": "p2", "p3-agent": "p3"}
 
 
 def _gold(spark: SparkSession, paths: LakePaths, name: str) -> DataFrame:
@@ -131,11 +129,9 @@ def cost_per_result(spark: SparkSession, paths: LakePaths) -> DataFrame:
     zone = spark.conf.get("spark.sql.session.timeZone")
     if zone != "UTC":
         raise ValueError(f"cost_per_result needs a UTC session (spark.sql.session.timeZone), got {zone!r}")
-    project = F.create_map(*[x for pair in STUDY_PROJECT.items() for x in (F.lit(pair[0]), F.lit(pair[1]))])
     facts = _gold(spark, paths, "fact_eval_attempt").where(F.col("attempt_kind") == SCORED)
     estimated = (
-        facts.withColumn("project", project[F.col("study")])
-        .groupBy("project")
+        facts.groupBy("project")
         .agg(
             F.count("*").alias("results"),
             F.count(F.when(F.col("cost_usd").isNull() & (F.col("cost_basis") != NO_MODEL_BASIS), 1)).alias(

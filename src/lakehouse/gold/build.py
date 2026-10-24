@@ -8,6 +8,11 @@ The Type 2 join: attempt -> `dim_arm` on (study, arm) -> `dim_model_deployment` 
 (account_alias, deployment_name) with `valid_from <= started_at < coalesce(valid_to, 9999-12-31)`.
 An attempt that resolves to exactly one version lands in `fact_eval_attempt`; one that resolves
 to none or to several goes to `reject.eval_unresolved` with a reason. Nothing is dropped.
+
+Keys for relationships: `dim_study.study_key` (`study|run_id`) and `dim_arm.arm_key` (`study|arm`)
+are single-column keys that `fact_eval_attempt` carries as `study_key` and `arm_key` (with
+`deployment_sk` already there). Each of the three also carries `project`, read from the
+`study_projects.csv` seed; a study the seed does not name fails the build.
 """
 
 from datetime import date
@@ -18,7 +23,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import DateType, DoubleType, StringType, StructField, StructType
 
 from lakehouse.paths import LakePaths
-from lakehouse.seeding import seed_df
+from lakehouse.seeding import read_study_projects, seed_df
 from lakehouse.silver.deployments import read_dim_arm
 from lakehouse.silver.eval_attempts import EVAL_COLUMNS, EVAL_KEY
 
@@ -142,6 +147,21 @@ def resolve_attempts(attempts: DataFrame, dim_arm: DataFrame, deployments: DataF
     return resolved, unresolved
 
 
+def _project_map(mapping: dict[str, str]):
+    """A Spark map column expression study -> project."""
+    return F.create_map(*[F.lit(x) for pair in mapping.items() for x in pair])
+
+
+def _require_projects(mapping: dict[str, str], *frames: DataFrame) -> None:
+    """ValueError naming every study in `frames` that the study_projects seed does not name."""
+    studies: set[str] = set()
+    for frame in frames:
+        studies.update(r["study"] for r in frame.select("study").distinct().collect())
+    missing = sorted(s for s in studies if s not in mapping)
+    if missing:
+        raise ValueError(f"study_projects.csv does not name the project of study {missing}")
+
+
 def _dim_date(spark: SparkSession, last: date) -> DataFrame:
     days = spark.createDataFrame([(DATE_FROM, max(last, DATE_FROM))], "first date, last date").select(
         F.explode(F.sequence("first", "last")).alias("date")
@@ -175,6 +195,7 @@ def build_gold(spark: SparkSession, paths: LakePaths, seeds_dir: str) -> dict[st
     costs = _silver(spark, paths.table("silver", "daily_cost"))
     deployments = _silver(spark, paths.table("silver", "model_deployment"))
     dim_arm = read_dim_arm(spark, seeds_dir)
+    study_projects = read_study_projects(seeds_dir)
     checks = seed_df(spark, seeds_dir, "live_checks.csv", _LIVE_CHECK_SCHEMA)
 
     # A blank cell is null, and `isin` is null for null, so a null verdict needs its own guard.
@@ -186,9 +207,22 @@ def build_gold(spark: SparkSession, paths: LakePaths, seeds_dir: str) -> dict[st
     if bad:
         raise ValueError(f"live_checks.csv has verdicts outside {VERDICTS}: {bad}")
 
-    resolved, unresolved = resolve_attempts(attempts, dim_arm, deployments)
+    _require_projects(study_projects, attempts, dim_arm)
+    project_of = _project_map(study_projects)
+    study_key = F.concat_ws("|", "study", "run_id")
+    arm_key = F.concat_ws("|", "study", "arm")
 
-    dim_study = attempts.groupBy("study", "run_id").agg(F.min("started_at").alias("started_at"))
+    resolved, unresolved = resolve_attempts(attempts, dim_arm, deployments)
+    resolved = resolved.select(
+        "*", study_key.alias("study_key"), arm_key.alias("arm_key"), project_of[F.col("study")].alias("project")
+    )
+    dim_arm = dim_arm.select("*", arm_key.alias("arm_key"), project_of[F.col("study")].alias("project"))
+
+    dim_study = (
+        attempts.groupBy("study", "run_id")
+        .agg(F.min("started_at").alias("started_at"))
+        .select("*", study_key.alias("study_key"), project_of[F.col("study")].alias("project"))
+    )
     dim_project = spark.createDataFrame(PROJECTS, "project string, name string")
     # R18: the raw resource ID never reaches gold; a short hash of it identifies the resource.
     fact_cost = costs.select(
