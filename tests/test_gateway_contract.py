@@ -56,6 +56,12 @@ def test_backend_failure_has_null_backend_and_tokens_without_refusal():
     assert validate_event(failed) == []
 
 
+def test_answered_call_may_have_null_tokens():
+    # R4: a non-refused call that a backend answered, with no token count reported
+    assert validate_event(_event(answered_by="primary", tokens=None)) == []
+    assert validate_event(_event(answered_by="secondary", tokens=None)) == []
+
+
 def test_null_backend_with_tokens_rejected():
     assert validate_event(_event(status=502, answered_by=None)) != []
 
@@ -92,6 +98,10 @@ def test_unknown_key_rejected():
         {"status": 200.0},
         {"refused_by_gateway": 0},
         {"tokens": "12"},
+        {"tokens": True},
+        {"latency_ms": True},
+        {"latency_ms": 840.0},
+        {"event_time": "٢٠٢٦-11-12T01:02:03Z"},
         {"latency_ms": None},
         {"request_id": 7},
         {"event_time": "2026-11-12T01:02:03"},

@@ -8,7 +8,7 @@ row's ingestion time, and `first_ingested`, the earliest ingestion time of any c
 
 | ID | What it measures | File |
 |---|---|---|
-| `delay_p50_p95_max` | End-to-end delay to first availability, `first_ingested` minus `event_time` in seconds: p50 and p95 (estimated (T-Digest)), max (the max is exact) and the number of calls `n` | `queries/delay_p50_p95_max.kql` |
+| `delay_p50_p95_max` | End-to-end delay to first availability, `first_ingested` minus `event_time` in seconds: p50 and p95 (estimated, using T-Digest), max (exact) and the number of calls `n` | `queries/delay_p50_p95_max.kql` |
 | `refusals_per_minute` | Calls the gateway itself refused, by status, per minute | `queries/refusals_per_minute.kql` |
 | `answered_by_per_minute` | Calls per backend (`primary`, `secondary`) per minute; calls with no backend are left out | `queries/answered_by_per_minute.kql` |
 | `tokens_per_minute_per_caller` | Tokens consumed per caller per minute | `queries/tokens_per_minute_per_caller.kql` |
@@ -17,4 +17,5 @@ row's ingestion time, and `first_ingested`, the earliest ingestion time of any c
 | `token_spike_minutes` | Caller-minutes whose tokens exceed the threshold (5000 here; set from the session plan when deployed) | `queries/token_spike_minutes.kql` |
 
 The delay can be negative if the gateway clock runs ahead of the ingestion clock; `first_ingested` minus
-`event_time` is not clamped, so a negative minimum would show the skew rather than hide it.
+`event_time` is not clamped, so a negative p50 or p95 (or a negative max, if every call is affected) would show the skew
+rather than hide it. The query reports no minimum.

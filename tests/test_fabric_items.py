@@ -685,7 +685,7 @@ def _rule_files(rule: dict) -> list[Path]:
     ]
     assert len(folders) == 1, rule
     return [
-        p for p in folders[0].iterdir()
+        p for p in folders[0].rglob("*")  # recursive, as fabric-cicd walks an item folder
         if p.is_file() and fnmatch.fnmatch(p.relative_to(FABRIC).as_posix(), rule["file_path"])
     ]
 
@@ -699,21 +699,37 @@ def _leaves(node, path=()) -> dict[tuple, object]:
     return {path: node}
 
 
-# What each key_value_replace rule must change, worked out from the documents without JSONPath.
+# What each key_value_replace rule must change, worked out from the documents without JSONPath. Keyed by
+# (item_name, find_key), so a second rule for the same item is a new entry, not an overwrite.
+ACT_KEY = '$[?(@.payload.definition.type=="Rule")].payload.definition.settings.shouldRun'
+PIPELINE_KEY = '$.schedules[?(@.jobType=="Execute")].enabled'
+QUERYSET_KEY = "$.queryset.dataSources[*].clusterUri"
+DASHBOARD_KEY = "$.dataSources[*].clusterUri"
+EVENTSTREAM_KEY = '$.sources[?(@.type=="AzureEventHub")].properties.dataConnectionId'
 EXPECTED_KEY_LEAVES = {
-    "act_gateway": lambda doc: [
+    ("act_gateway", ACT_KEY): lambda doc: [
         (i, "payload", "definition", "settings", "shouldRun")
         for i, e in enumerate(doc)
         if e["type"] == "timeSeriesView-v1" and e["payload"]["definition"]["type"] == "Rule"
     ],
-    "pl_daily_load": lambda doc: [
+    ("pl_daily_load", PIPELINE_KEY): lambda doc: [
         ("schedules", i, "enabled") for i, s in enumerate(doc["schedules"]) if s["jobType"] == "Execute"
     ],
-    "kq_gateway": lambda doc: [("queryset", "dataSources", 0, "clusterUri")],
-    "rtd_gateway": lambda doc: [("dataSources", 0, "clusterUri")],
-    "es_gateway": lambda doc: [("sources", 0, "properties", "dataConnectionId")],
+    ("kq_gateway", QUERYSET_KEY): lambda doc: [("queryset", "dataSources", 0, "clusterUri")],
+    ("rtd_gateway", DASHBOARD_KEY): lambda doc: [("dataSources", 0, "clusterUri")],
+    ("es_gateway", EVENTSTREAM_KEY): lambda doc: [("sources", 0, "properties", "dataConnectionId")],
 }
-EXPECTED_KEY_MATCHES = {"act_gateway": 2, "pl_daily_load": 1, "kq_gateway": 1, "rtd_gateway": 1, "es_gateway": 1}
+EXPECTED_KEY_MATCHES = {
+    ("act_gateway", ACT_KEY): 2,
+    ("pl_daily_load", PIPELINE_KEY): 1,
+    ("kq_gateway", QUERYSET_KEY): 1,
+    ("rtd_gateway", DASHBOARD_KEY): 1,
+    ("es_gateway", EVENTSTREAM_KEY): 1,
+}
+
+
+def _rule_key(rule: dict) -> tuple[str, str]:
+    return rule["item_name"], rule["find_key"]
 
 
 def _key_value_rules() -> list[dict]:
@@ -722,7 +738,8 @@ def _key_value_rules() -> list[dict]:
 
 def test_every_key_value_rule_is_checked_and_matches_something():
     rules = _key_value_rules()
-    assert sorted(r["item_name"] for r in rules) == sorted(EXPECTED_KEY_MATCHES)
+    assert sorted(_rule_key(r) for r in rules) == sorted(EXPECTED_KEY_MATCHES)
+    assert set(EXPECTED_KEY_LEAVES) == set(EXPECTED_KEY_MATCHES)
     for rule in rules:
         files = _rule_files(rule)
         assert files, rule
@@ -737,10 +754,10 @@ def test_key_value_rule_changes_exactly_its_leaves_in_prod(rule):
     [path] = _rule_files(rule)
     doc = json.loads(path.read_text(encoding="utf-8"))
     before = _leaves(doc)
-    expected = EXPECTED_KEY_LEAVES[rule["item_name"]](doc)
+    expected = EXPECTED_KEY_LEAVES[_rule_key(rule)](doc)
 
     matches = jsonpath_parse(rule["find_key"]).find(doc)
-    assert len(matches) == EXPECTED_KEY_MATCHES[rule["item_name"]] == len(expected)
+    assert len(matches) == EXPECTED_KEY_MATCHES[_rule_key(rule)] == len(expected)
     value = rule["replace_value"]["PROD"]
     for match in matches:
         match.full_path.update(doc, value)
@@ -757,7 +774,7 @@ def test_parameter_file_turns_every_activator_rule_on_in_prod_only():
     assert rule["item_name"] == "act_gateway"
     assert rule["replace_value"] == {"PROD": True}
     entities = _json("act_gateway.Reflex/ReflexEntities.json")
-    for key in EXPECTED_KEY_LEAVES["act_gateway"](entities):
+    for key in EXPECTED_KEY_LEAVES[_rule_key(rule)](entities):
         assert _leaves(entities)[key] is False  # git (dev) value; PROD gets True
 
 

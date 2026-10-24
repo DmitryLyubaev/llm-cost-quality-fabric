@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Gateway event",
-  "description": "One JSON object per AI gateway call. Mirrors EVENT_FIELDS in lakehouse.gateway.contract; A refused call (refused_by_gateway true) has answered_by and tokens null; a null answered_by forces tokens null, but a call that was not refused may still have a null answered_by (a backend failure or timeout, for example status 502). request_id may be a GUID (API Management's per-request ID); no other string value may be GUID-shaped.",
+  "description": "One JSON object per AI gateway call. Mirrors EVENT_FIELDS in lakehouse.gateway.contract. A refused call (refused_by_gateway true) has answered_by and tokens null; a null answered_by forces tokens null, but a call that was not refused may still have a null answered_by (a backend failure or timeout, for example status 502). request_id may be a GUID (API Management's per-request ID); no other string value may be GUID-shaped.",
   "type": "object",
   "properties": {
     "event_time": {
@@ -45,7 +45,7 @@
         "secondary",
         null
       ],
-      "description": "The backend that answered; null when the gateway refused the call."
+      "description": "The backend that answered; null when the gateway refused the call, or when no backend answered (for example, a backend failure)."
     },
     "status": {
       "type": "integer",
@@ -60,7 +60,7 @@
         "integer",
         "null"
       ],
-      "description": "Tokens consumed; null when the gateway refused the call."
+      "description": "Tokens consumed; null when the gateway refused the call, or when no backend answered (for example, a backend failure). May also be null for a non-refused call that a backend answered."
     },
     "latency_ms": {
       "type": "integer",
