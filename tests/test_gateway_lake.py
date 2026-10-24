@@ -8,6 +8,7 @@ import json
 from datetime import UTC, date, datetime
 
 import pytest
+from delta.tables import DeltaTable
 from pyspark.sql import functions as F
 
 from lakehouse import fabric_entry
@@ -15,6 +16,8 @@ from lakehouse.checks import CheckResult, QualityCheckFailed, check_gateway_coun
 from lakehouse.gateway.answers import cost_per_gateway_call
 from lakehouse.gateway.build import (
     FACT_GATEWAY_CALL_SCHEMA,
+    GOLD_TABLE,
+    SILVER_TABLE,
     build_fact_gateway_call,
     build_gateway_calls,
     count_duplicate_request_ids,
@@ -457,6 +460,27 @@ def test_load_gateway_runs_silver_gold_check_and_answer(spark, entry_lake):
 
     again = fabric_entry.load_gateway(SESSION, "2", {})
     assert again["silver"] == {"inserted": 0, "updated": 0}
+
+
+def test_load_gateway_compacts_its_silver_and_gold_tables(spark, entry_lake, monkeypatch):
+    """Direct Lake on OneLake errors past 1,000 Parquet files per table: once both tables are
+    written, the load runs OPTIMIZE on silver `gateway_calls` and gold `fact_gateway_call`."""
+    _source(spark, entry_lake, [_call("req-01"), _refused("req-02")])
+    _gold_dims(spark, entry_lake)
+    calls = []
+    real = fabric_entry.optimize_tables
+
+    def spy(spark_session, paths):
+        assert all(DeltaTable.isDeltaTable(spark_session, p) for p in paths)
+        calls.append(list(paths))
+        real(spark_session, paths)
+
+    monkeypatch.setattr(fabric_entry, "optimize_tables", spy)
+
+    summary = fabric_entry.load_gateway(SESSION, "2", {})
+
+    assert calls == [[entry_lake.table("silver", SILVER_TABLE), entry_lake.table("gold", GOLD_TABLE)]]
+    assert summary["gold_rows"] == 2
 
 
 def test_load_gateway_raises_when_the_count_check_fails(spark, entry_lake):

@@ -210,6 +210,18 @@ def _latest(*frames_and_columns) -> date:
     return latest
 
 
+def optimize_tables(spark: SparkSession, paths: list[str]) -> None:
+    """Compact the Delta table at each path (`OPTIMIZE`): small files become fewer, larger ones.
+
+    A Direct Lake on OneLake table with more than 1,000 Parquet files gives an error instead of
+    falling back, and the daily Delta MERGEs keep adding files, so every load compacts the tables
+    the semantic model reads. Compaction rewrites files, not rows: a content fingerprint, as
+    project 9's re-run check uses, is the same before and after.
+    """
+    for path in paths:
+        DeltaTable.forPath(spark, path).optimize().executeCompaction()
+
+
 def build_gold(spark: SparkSession, paths: LakePaths, seeds_dir: str) -> dict[str, int]:
     """Rebuild every gold table and the reject table; return table -> row count.
 

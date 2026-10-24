@@ -17,6 +17,7 @@ from lakehouse.bronze.fetch_public import fetch_manifest
 from lakehouse.checks import QualityCheckFailed, check_gateway_counts
 from lakehouse.gateway.answers import cost_per_gateway_call
 from lakehouse.gateway.build import (
+    GOLD_TABLE,
     REPLAY_SESSION,
     SILVER_TABLE,
     build_fact_gateway_call,
@@ -24,7 +25,7 @@ from lakehouse.gateway.build import (
     count_duplicate_request_ids,
     merge_gateway_calls,
 )
-from lakehouse.gold.build import PROJECTS
+from lakehouse.gold.build import PROJECTS, optimize_tables
 from lakehouse.paths import LakePaths
 from lakehouse.run import RunSummary, run_load
 from lakehouse.seeding import SEEDS_DIR
@@ -120,11 +121,12 @@ def _plain(value):
 def load_gateway(session: str, eventhouse_count: str, context: dict) -> dict:
     """Project 10's gateway load, run once after a session (never from the pipeline).
 
-    Silver from the shortcut (MERGE into `gateway_calls`), gold `fact_gateway_call`, then the
-    count check against `eventhouse_count` (the Eventhouse's distinct count for `session`, read
-    by the operator); a failed check raises `QualityCheckFailed`. Returns the MERGE counts, the
-    number of request IDs that had more than one source row (R15), the gold row count, the check
-    and the cost-per-call rows, all JSON-ready.
+    Silver from the shortcut (MERGE into `gateway_calls`), gold `fact_gateway_call`, an OPTIMIZE of
+    both (Direct Lake errors past 1,000 files per table), then the count check against
+    `eventhouse_count` (the Eventhouse's distinct count for `session`, read by the operator); a
+    failed check raises `QualityCheckFailed`. Returns the MERGE counts, the number of request IDs
+    that had more than one source row (R15), the gold row count, the check and the cost-per-call
+    rows, all JSON-ready.
 
     ValueError, before reading anything, for an empty or "replay" session or an
     `eventhouse_count` that is not a non-negative integer.
@@ -148,6 +150,8 @@ def load_gateway(session: str, eventhouse_count: str, context: dict) -> dict:
     duplicates = count_duplicate_request_ids(spark, source)
     merged = merge_gateway_calls(spark, calls, paths.table("silver", SILVER_TABLE))
     gold_rows = build_fact_gateway_call(spark, paths)
+    # Direct Lake on OneLake errors past 1,000 Parquet files per table, and every session adds some.
+    optimize_tables(spark, [paths.table("silver", SILVER_TABLE), paths.table("gold", GOLD_TABLE)])
 
     check = check_gateway_counts(spark, paths, name, expected)
     if not check.passed:
