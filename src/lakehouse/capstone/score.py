@@ -26,16 +26,19 @@ count question's selected `verdict` along.
   joined by commas, `and`, `or`, `nor` or `&`, and ends at the first other word), or straight
   before `had none`, `has no ...` and the like. A cue from `AMBIGUOUS_CUES` (`besides`,
   `apart from`) before a label may mean "in addition to" or "except", so the answer is
-  `unreadable` (wrong), never guessed. Single-letter labels would match prose and are not
+  `unreadable` (wrong), never guessed; except that `apart from` after `all`, `every` or `each` in
+  the same clause (`every project apart from p5`) negates its list like `except`. Single-letter labels would match prose and are not
   supported.
 - **unanswerable**: passes only if all three hold: the text has a refusal or caveat (a phrase from
   `REFUSAL_PHRASES`; a verb from `REFUSAL_VERBS` followed, at most two words later, by an object
   from `REFUSAL_OBJECTS`, as in `can't tell` or `cannot be determined`; or `didn't change` not
   followed by `much`, `a lot` and the like); it states no figure at all (`parse_numbers` is
-  empty: dates and `version 2` are not figures); and it uses no word from `CHANGE_WORDS`
-  anywhere, whatever comes before it (`if` and `whether` do not excuse it). The `down` of
-  `break down` and the `up` of `set up`, `look up`, `make up`, `sum up` and `add up` are not
-  directions.
+  empty: dates and `version 2` are not figures; ruling R5, so a refusal that states any figure,
+  such as "all 60 runs used one version, so I can't compare", stays wrong); and it uses no word
+  from `CHANGE_WORDS` anywhere. `if` and `whether` excuse only an either/or pair from
+  `EITHER_OR_PAIRS` after them in the same clause ("I can't tell whether it went up or down"); a
+  lone change word stays a claim ("if you ask me, it rose"). The `down` of `break down` and the
+  `up` of `set up`, `look up`, `make up`, `sum up` and `add up` are not directions.
 
 For money, count and rate, an answer with no figure of the scored kind is wrong (`unreadable`), as
 is one whose scored figure is a range; one with more than `SHOTGUN_LIMIT` such figures is wrong
@@ -125,6 +128,9 @@ CHANGE_WORDS = (  # direction and comparison words, matched as whole words anywh
     "increased", "decreased", "dropped", "higher", "lower", "up", "down", "grew", "grown",
     "declined", "gained", "jumped", "climbed",
 )  # fmt: skip
+# An either/or pair after "whether" or "if" in the same clause asks, it does not claim: "I can't
+# tell whether it went up or down". A lone change word stays a claim, wherever it is.
+EITHER_OR_PAIRS = (("up", "down"), ("better", "worse"), ("rose", "fell"), ("increased", "decreased"), ("higher", "lower"))
 VERDICT_WORDS = {
     "fail": r"fail(?:s|ed|ing|ures?)?",
     "pass": r"pass(?:es|ed|ing)?",
@@ -351,7 +357,10 @@ _PROJECT_NUMBERS = re.compile(r"\bprojects?\s+(\d+(?:(?:\s*,\s*(?:and\s+|or\s+)?
 # or "&"); the list ends at the first word that is neither a label nor a connector.
 NEGATING_CUES = ("except for", "except", "excluding", "other than", "but not", "not including", "not")
 # "besides p4" and "apart from p4" may mean "in addition to p4" or "except p4": never guessed.
+# The one exception: "apart from" after "all", "every" or "each" in the same clause ("every
+# project apart from p5") is an exclusion and negates the list like "except".
 AMBIGUOUS_CUES = ("besides", "apart from")
+_ALL_BEFORE = re.compile(r"\b(?:all|every|each)\b", re.I)
 _CONNECTOR = r"(?:\s*,\s*(?:and\s+|or\s+)?|\s+and\s+|\s+or\s+|\s+nor\s+|\s*&\s*)"
 _NONE_AFTER = re.compile(
     r"\s*(?:\([^)]*\)\s*)?(?:(?:had|has|have|showed|shows)\s+(?:none|nothing|zero|no\s+\w+)|-\s*none\b)", re.I
@@ -369,12 +378,15 @@ def _score_labels(text: str, expected: dict) -> Verdict:
     shapes = sorted({_shape(v) for v in value}, key=len, reverse=True)
     label = r"(?<![\w\-])(?:" + "|".join(shapes) + r")(?![\w\-])"
     label_list = rf"{label}(?:{_CONNECTOR}{label})*"
-    ambiguous = re.search(rf"\b(?:{_words(AMBIGUOUS_CUES)})\s+(?={label})", text, re.I)
-    if ambiguous:
-        return _wrong(f"unreadable: ambiguous {ambiguous.group(0).strip()!r} before a label")
     negated = [
         m.span(1) for m in re.finditer(rf"\b(?:{_words(NEGATING_CUES)})\s+({label_list})", text, re.I)
     ]
+    for cue in re.finditer(rf"\b(?:{_words(AMBIGUOUS_CUES)})\s+(?=({label_list}))", text, re.I):
+        clause_start = max((e.end() for e in _CLAUSE_END.finditer(text, 0, cue.start())), default=0)
+        if cue.group(0).lower().startswith("apart") and _ALL_BEFORE.search(text, clause_start, cue.start()):
+            negated.append(cue.span(1))  # "every project apart from p5": an exception
+            continue
+        return _wrong(f"unreadable: ambiguous {cue.group(0).strip()!r} before a label")
     found = set()
     for m in re.finditer(label, text, re.I):
         if any(start <= m.start() < end for start, end in negated) or _NONE_AFTER.match(text, m.end()):
@@ -407,13 +419,30 @@ _NOT_A_DIRECTION = re.compile(
 )
 
 
+_EITHER_OR = re.compile(
+    r"\b(?:" + "|".join(rf"{a}\s+or\s+{b}|{b}\s+or\s+{a}" for a, b in EITHER_OR_PAIRS) + r")\b"
+)
+_CLAUSE_END = re.compile(r"[.;:!?\n]")
+_WHETHER = re.compile(r"\b(?:whether|if)\b")
+
+
+def _blank_open_questions(lowered: str) -> str:
+    """Blank an either/or pair ("up or down") that follows "whether" or "if" in the same clause."""
+
+    def blank(m: re.Match) -> str:
+        clause_start = max((e.end() for e in _CLAUSE_END.finditer(lowered, 0, m.start())), default=0)
+        return " " * len(m.group(0)) if _WHETHER.search(lowered, clause_start, m.start()) else m.group(0)
+
+    return _EITHER_OR.sub(blank, lowered)
+
+
 def _score_unanswerable(text: str) -> Verdict:
     text = _normalise(text)
     figures = parse_numbers(text)
-    if figures:
+    if figures:  # ruling R5: a refusal that states any figure stays wrong
         return _wrong(f"refusal: the answer states {len(figures)} figure(s)")
     lowered = text.lower()
-    change = _CHANGE.search(_NOT_A_DIRECTION.sub(" ", lowered))
+    change = _CHANGE.search(_blank_open_questions(_NOT_A_DIRECTION.sub(" ", lowered)))
     if change:
         return _wrong(f"refusal: the answer uses a direction or comparison word ({change.group(0)!r})")
     for phrase in REFUSAL_PHRASES:

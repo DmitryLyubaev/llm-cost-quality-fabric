@@ -442,6 +442,25 @@ def test_a_negating_cue_covers_only_the_list_right_after_it():
     assert not score("Every project except p4 and p6 failed: p5, p7 and p8.", expected, "labels").correct
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Every project apart from p5 had at least one failed check: p4, p6, p7 and p8.",
+        "All projects apart from p5 had a failure; p4, p6, p7 and p8.",
+        "Each one apart from p5 and p1 failed, namely p4, p6, p7, p8.",
+    ],
+)
+def test_apart_from_after_all_every_or_each_negates(answer):
+    assert score(answer, _labels("p4", "p6", "p7", "p8"), "labels").correct
+
+
+def test_besides_after_every_stays_ambiguous():
+    verdict = score("Every project besides p5 failed: p4, p6, p7 and p8.", _labels("p4", "p6", "p7", "p8"), "labels")
+
+    assert not verdict.correct
+    assert "ambiguous" in verdict.reason
+
+
 def test_besides_and_apart_from_are_ambiguous_and_unreadable():
     # "besides p4" may mean "in addition to p4" or "except p4": never guessed, always unreadable
     expected = _labels("p4", "p6", "p7", "p8")
@@ -547,6 +566,12 @@ def test_an_empty_answer_is_unreadable():
         "There is no version 2 in the data; I can't answer that.",
         "I can't break down quality by model version: there is only one version per model.",
         "The data isn't set up to hold versions, so I can't compare them.",
+        # fix round 3: an either/or pair after "whether" or "if" is not a claim
+        "Only one version of gpt-5.6-luna is in the data, so I can't tell whether its success rate went up or down.",
+        "The data has a single version per model, so I can't say if it got better or worse.",
+        "With one version only, I can't say whether it rose or fell.",
+        "I can't tell if it increased or decreased: there is no version history.",
+        "Whether quality is higher or lower on a newer version is not in the data.",
     ],
 )
 def test_unanswerable_passes_on_a_refusal_or_caveat(answer):
@@ -578,6 +603,11 @@ def test_unanswerable_passes_on_a_refusal_or_caveat(answer):
         "It went down after the upgrade; that is not in the data in detail.",
         "Quality gained a little, but I cannot determine how much.",
         "I can't compare versions: only 1 run used it.",
+        # fix round 3: a lone change word is a claim even after "whether"; a figure is never allowed (R5)
+        "I can't say whether it rose, but it's higher now.",
+        "Up or down, it rose; I can't tell exactly.",
+        "It went up or down; it went up. I can't say why.",
+        "All 60 scored runs used a single model version, so I can't compare versions.",
     ],
 )
 def test_unanswerable_fails_on_an_answer(answer):
