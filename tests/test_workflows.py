@@ -124,11 +124,12 @@ def test_prod_publishes_then_uploads_then_shortcuts(deploy):
     ]
 
 
-def test_deploy_never_touches_the_capstone():
-    """The capstone's data agent is deployed by hand as fabric@ (publish-capstone), never by the
-    deploy service principal from Actions."""
-    text = (WORKFLOWS / "deploy.yml").read_text(encoding="utf-8")
-    for value in ("publish-capstone", "fabric-capstone", "capstone", "CAPSTONE"):
+@pytest.mark.parametrize("name", ["deploy.yml", "ci.yml"])
+def test_no_workflow_touches_the_capstone(name):
+    """The capstone's data agent is deployed by hand as fabric@ (publish-capstone), never from
+    Actions, whether by the deploy service principal or by CI."""
+    text = (WORKFLOWS / name).read_text(encoding="utf-8")
+    for value in ("publish-capstone", "fabric-capstone", "CAPSTONE_WORKSPACE_ID", "capstone", "CAPSTONE"):
         assert value not in text
 
 

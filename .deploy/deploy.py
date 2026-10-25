@@ -3,7 +3,8 @@
 Subcommands: upload-wheel, publish, ensure-shortcut, onelake-availability,
 ensure-gateway-shortcut, refresh-model, and publish-capstone, which is never run from Actions:
 the owner runs it by hand as fabric@, signed in through the Azure CLI, against the capstone
-workspace. Every input comes from environment variables so
+workspace named by its own variable, CAPSTONE_WORKSPACE_ID (never FABRIC_WORKSPACE_ID).
+Every input comes from environment variables so
 nothing sensitive lands in argv or logs. Nothing here prints an environment value, a
 token, a request body or a URL carrying the shortcut location or a query URI.
 
@@ -653,8 +654,11 @@ def publish_capstone():
     """Deploy fabric-capstone/ (lh_capstone, its notebooks, da_portfolio) to the capstone workspace,
     then publish da_portfolio: fabric-cicd deploys the definition, whose draft stage is all it writes,
     and an unpublished data agent cannot be reached over MCP or from Foundry. Run by hand as fabric@
-    (the AzureCliCredential of _credential); a re-run deploys and publishes again."""
-    workspace_id = _env("FABRIC_WORKSPACE_ID")
+    (the AzureCliCredential of _credential); a re-run deploys and publishes again.
+
+    The workspace comes from CAPSTONE_WORKSPACE_ID only, never FABRIC_WORKSPACE_ID: a shell with prod's
+    ID exported must not deploy the capstone's items into prod. Missing, the step exits 2 naming it."""
+    workspace_id = _env("CAPSTONE_WORKSPACE_ID")
     credential = _credential()
     _load_fabric_cicd()  # its loggers and handlers exist before the redaction goes on them
     # The same redaction as publish: fabric-cicd logs item IDs and request URLs at INFO.

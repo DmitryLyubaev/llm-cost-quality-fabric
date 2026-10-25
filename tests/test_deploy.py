@@ -1366,15 +1366,17 @@ DATASOURCE = (
     / "lakehouse-tables-lh_capstone" / "datasource.json"
 )
 CAPSTONE_TYPES = ["Lakehouse", "Notebook", "DataAgent"]
-DATA_AGENT = "eeeeeeee-aaaa-bbbb-cccc-00000000000e"
+# The capstone workspace, read from its own variable; `env` sets FABRIC_WORKSPACE_ID to prod's WS.
+CAPSTONE_WS = "13131313-aaaa-bbbb-cccc-000000000013"
+DATA_AGENT ="eeeeeeee-aaaa-bbbb-cccc-00000000000e"
 OTHER_AGENT = "ffffffff-aaaa-bbbb-cccc-00000000000f"
 CAPSTONE_LH = "12121212-aaaa-bbbb-cccc-000000000012"
-AGENT_LIST_URL = f"https://api.fabric.microsoft.com/v1/workspaces/{WS}/dataAgents"
+AGENT_LIST_URL = f"https://api.fabric.microsoft.com/v1/workspaces/{CAPSTONE_WS}/dataAgents"
 # Learn, Items - Publish Data Agent (DataAgent): POST .../dataAgents/{dataAgentId}/staging/publish,
 # body {publishedDescription}, 200 OK (not a long-running operation).
 PUBLISH_AGENT_URL = f"{AGENT_LIST_URL}/{DATA_AGENT}/staging/publish"
 # What fabric-cicd resolves the two dynamic variables to on a CAPSTONE deploy (made-up IDs).
-CAPSTONE_RESOLVED = {"$workspace.$id": WS, "$items.Lakehouse.lh_capstone.$id": CAPSTONE_LH}
+CAPSTONE_RESOLVED = {"$workspace.$id": CAPSTONE_WS, "$items.Lakehouse.lh_capstone.$id": CAPSTONE_LH}
 
 
 def agent_list(*items, token=None):
@@ -1386,8 +1388,9 @@ def agent_list(*items, token=None):
 
 @pytest.fixture
 def capstone(deploy, monkeypatch, seams):
-    """The capstone workspace holds da_portfolio (after another agent); the Publish call answers 200.
-    Every seam call lands in `events`, in order."""
+    """CAPSTONE_WORKSPACE_ID names the capstone workspace, which holds da_portfolio (after another
+    agent); the Publish call answers 200. Every seam call lands in `events`, in order."""
+    monkeypatch.setenv("CAPSTONE_WORKSPACE_ID", CAPSTONE_WS)
     seams.routes = {
         **(seams.routes or {}),
         AGENT_LIST_URL: agent_list(
@@ -1419,7 +1422,7 @@ def capstone(deploy, monkeypatch, seams):
 def test_publish_capstone_deploys_fabric_capstone_then_publishes_the_agent(deploy, env, capstone, capsys):
     assert deploy.main(["publish-capstone"]) == 0
     assert capstone.ws_kwargs == {
-        "workspace_id": WS,
+        "workspace_id": CAPSTONE_WS,
         "environment": "CAPSTONE",
         "repository_directory": str(CAPSTONE_DIR),
         "item_type_in_scope": CAPSTONE_TYPES,
@@ -1467,11 +1470,47 @@ def test_publish_capstone_ignores_the_prod_environment_name(deploy, env, capston
 
 
 def test_publish_capstone_missing_workspace_names_the_variable_only(deploy, env, capstone, monkeypatch, capsys):
+    monkeypatch.delenv("CAPSTONE_WORKSPACE_ID")
     monkeypatch.delenv("FABRIC_WORKSPACE_ID")
     assert deploy.main(["publish-capstone"]) == 2
     out, err = capsys.readouterr()
-    assert err == "missing environment variable FABRIC_WORKSPACE_ID\n" and out == ""
+    assert err == "missing environment variable CAPSTONE_WORKSPACE_ID\n" and out == ""
     assert capstone.ws_kwargs is None and capstone.gets == [] and capstone.posts == []
+    assert capstone.events == []
+
+
+def test_publish_capstone_never_falls_back_to_the_prod_workspace(deploy, env, capstone, monkeypatch, capsys):
+    """A shell with prod's FABRIC_WORKSPACE_ID exported must not deploy the capstone into prod."""
+    monkeypatch.delenv("CAPSTONE_WORKSPACE_ID")
+    assert os.environ["FABRIC_WORKSPACE_ID"] == WS
+    assert deploy.main(["publish-capstone"]) == 2
+    out, err = capsys.readouterr()
+    assert err == "missing environment variable CAPSTONE_WORKSPACE_ID\n" and out == ""
+    assert WS not in out + err
+    assert capstone.ws_kwargs is None and capstone.published == []
+    assert capstone.gets == [] and capstone.posts == [] and capstone.events == []
+
+
+def test_publish_capstone_uses_the_capstone_workspace_not_prods(deploy, env, capstone):
+    assert os.environ["FABRIC_WORKSPACE_ID"] == WS != CAPSTONE_WS
+    assert deploy.main(["publish-capstone"]) == 0
+    assert capstone.ws_kwargs["workspace_id"] == CAPSTONE_WS
+    assert all(WS not in url for url, _ in capstone.gets)
+    assert all(WS not in url for url, _, _ in capstone.posts)
+
+
+def test_publish_capstone_reads_only_its_own_workspace_variable():
+    source = DEPLOY_PY.read_text(encoding="utf-8")
+    body = source[source.index("def publish_capstone():"):source.index("COMMANDS = {")]
+    assert body.count("_env(") == 1 and '_env("CAPSTONE_WORKSPACE_ID")' in body
+    assert "os.environ" not in body and "getenv" not in body
+
+
+def test_publish_never_loads_fabric_cicd_through_the_capstone_seam(deploy, env, realtime, model, monkeypatch):
+    calls = []
+    monkeypatch.setattr(deploy, "_load_fabric_cicd", lambda: calls.append("load"))
+    assert deploy.main(["publish"]) == 0
+    assert calls == []
 
 
 def test_publish_capstone_agent_lookup_follows_continuation_tokens(deploy, env, capstone):
@@ -1504,20 +1543,20 @@ def test_publish_capstone_without_the_agent_fails_without_ids(deploy, env, capst
     out, err = capsys.readouterr()
     assert err == "publish-capstone: data agent da_portfolio not found\n"
     assert out == "" and capstone.posts == []
-    for value in (WS, OTHER_AGENT):
+    for value in (CAPSTONE_WS, OTHER_AGENT):
         assert value not in out + err
 
 
 def test_publish_capstone_lookup_error_prints_status_and_code_only(deploy, env, capstone, capsys):
-    capstone.routes[AGENT_LIST_URL] = (403, {"errorCode": "InsufficientPrivileges", "message": f"ws {WS}"})
+    capstone.routes[AGENT_LIST_URL] = (403, {"errorCode": "InsufficientPrivileges", "message": f"ws {CAPSTONE_WS}"})
     assert deploy.main(["publish-capstone"]) == 1
     out, err = capsys.readouterr()
     assert err == "publish-capstone: HTTP 403 InsufficientPrivileges\n"
-    assert out == "" and capstone.posts == [] and WS not in err
+    assert out == "" and capstone.posts == [] and CAPSTONE_WS not in err
 
 
 @pytest.mark.parametrize("response, line", [
-    ((404, {"errorCode": "ItemNotFound", "message": f"agent {DATA_AGENT} in {WS}"}), "HTTP 404 ItemNotFound"),
+    ((404, {"errorCode": "ItemNotFound", "message": f"agent {DATA_AGENT} in {CAPSTONE_WS}"}), "HTTP 404 ItemNotFound"),
     ((400, {"errorCode": "InvalidRequest", "requestId": DATA_AGENT}), "HTTP 400 InvalidRequest"),
     ((429, {"message": f"slow down {PUBLISH_AGENT_URL}"}), "HTTP 429 unknown"),
     ((500, "not-json-object"), "HTTP 500 unknown"),
@@ -1531,7 +1570,7 @@ def test_publish_capstone_publish_error_prints_status_and_code_only(deploy, env,
     out, err = capsys.readouterr()
     assert err == f"publish-capstone: {line}\n"
     assert out == ""
-    for value in (WS, DATA_AGENT, PUBLISH_AGENT_URL, "https://", "tok-secret-value", "slow down"):
+    for value in (CAPSTONE_WS, DATA_AGENT, PUBLISH_AGENT_URL, "https://", "tok-secret-value", "slow down"):
         assert value not in out + err
 
 
@@ -1539,7 +1578,7 @@ def test_publish_capstone_publish_error_prints_status_and_code_only(deploy, env,
 def test_an_unexpected_error_in_publish_capstone_prints_only_its_type(
     deploy, env, capstone, monkeypatch, capsys, where
 ):
-    url = f"https://x/workspaces/{WS}/dataAgents/{DATA_AGENT}"
+    url = f"https://x/workspaces/{CAPSTONE_WS}/dataAgents/{DATA_AGENT}"
 
     def fail(*args, **kwargs):
         raise ConnectionError(f"{url} tok-secret-value")
@@ -1550,7 +1589,7 @@ def test_an_unexpected_error_in_publish_capstone_prints_only_its_type(
     assert deploy.main(["publish-capstone"]) == 1
     out, err = capsys.readouterr()
     assert err == "publish-capstone: failed (ConnectionError)\n" and out == ""
-    for value in (url, WS, DATA_AGENT, "https://", "tok-secret-value", "Traceback"):
+    for value in (url, CAPSTONE_WS, DATA_AGENT, "https://", "tok-secret-value", "Traceback"):
         assert value not in out + err
     if where in ("workspace", "publish"):
         assert capstone.gets == [] and capstone.posts == []  # no Publish after a failed deploy
@@ -1563,7 +1602,7 @@ def test_publish_capstone_redacts_fabric_cicd_logs_and_removes_the_filter_afterw
 
     def publish_that_logs(workspace):
         capstone.events.append("publish")
-        logging.getLogger("fabric_cicd.fabric_workspace").info("Workspace ID: %s", WS)
+        logging.getLogger("fabric_cicd.fabric_workspace").info("Workspace ID: %s", CAPSTONE_WS)
         logging.getLogger("fabric_cicd._items._dataagent").info(
             "Published DataAgent 'da_portfolio' (%s) via %s", DATA_AGENT, PUBLISH_AGENT_URL
         )
@@ -1575,7 +1614,7 @@ def test_publish_capstone_redacts_fabric_cicd_logs_and_removes_the_filter_afterw
     for text in (fabric_cicd_console.stream.getvalue(), caplog.text):
         assert "Workspace ID: <id>" in text
         assert "Published DataAgent 'da_portfolio' (<id>) via <url>" in text
-        for value in (WS, DATA_AGENT, "https://"):
+        for value in (CAPSTONE_WS, DATA_AGENT, "https://"):
             assert value not in text
     for target in [fabric_cicd_console.package, *fabric_cicd_console.package.handlers]:
         assert not [f for f in target.filters if isinstance(f, deploy._RedactingFilter)]
@@ -1695,11 +1734,11 @@ def test_capstone_rules_change_only_the_two_ids_in_the_datasource(order):
         result = _apply_find_replace(rule, result, CAPSTONE_RESOLVED[rule["replace_value"]["CAPSTONE"]])
 
     before, after = json.loads(text), json.loads(result)
-    assert after["workspaceId"] == WS and after["artifactId"] == CAPSTONE_LH
+    assert after["workspaceId"] == CAPSTONE_WS and after["artifactId"] == CAPSTONE_LH
     assert {k: v for k, v in after.items() if k not in ("workspaceId", "artifactId")} == {
         k: v for k, v in before.items() if k not in ("workspaceId", "artifactId")
     }
-    assert result.replace(WS, EMPTY_GUID).replace(CAPSTONE_LH, EMPTY_GUID) == text
+    assert result.replace(CAPSTONE_WS, EMPTY_GUID).replace(CAPSTONE_LH, EMPTY_GUID) == text
 
 
 def test_the_prod_parameter_file_knows_nothing_of_the_capstone():

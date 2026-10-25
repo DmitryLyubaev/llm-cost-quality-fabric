@@ -47,6 +47,7 @@ come from `docs/research/2026-10-25-data-agent-facts.md`, sections 2 and 3. This
 
 | File | Key | What to check |
 |---|---|---|
+| `.deploy/deploy.py` | `CAPSTONE_WORKSPACE_ID` | The capstone workspace comes from its own variable, never `FABRIC_WORKSPACE_ID`, so a shell with prod's ID exported cannot deploy the capstone into prod; unset, the step exits 2 before any call. Export the capstone workspace's ID (from `infra/capstone`'s output) in the `fabric@` shell before the run, and check it is not prod's. |
 | `parameter.yml` | the two `find_replace` rules | fabric-cicd reads this file because it is in the repository directory it is given (`fabric-capstone/`). Check the deploy log shows the parameter file validated for `CAPSTONE`, and the deployed `datasource.json` holds the capstone workspace and `lh_capstone`'s ID. |
 | `.deploy/deploy.py` | Publish Data Agent response | Learn documents `200 OK` only, so any other status, `202` included, fails the step. If the live call answers `202` with a `Location`, the publish is long-running after all: add a poll before relying on it. Check the agent shows as published afterwards. |
 | `.deploy/deploy.py` | `DATA_AGENT_DESCRIPTION` | The `publishedDescription` sent on every run. Check it shows as the agent's published description. Fabric stores it in `Files/Config/publish_info.json`, which is not committed, so the freeze does not hash it. |
