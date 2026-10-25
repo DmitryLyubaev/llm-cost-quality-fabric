@@ -1,4 +1,4 @@
-"""The freeze: one hash over everything that decides the capstone's score.
+r"""The freeze: one hash over everything that decides the capstone's score.
 
 Before a measured run the questions, the expected answers, the scoring rules, the snapshot time,
 the data agent definition, the analyst's instructions and both models are hashed. Each run refuses
@@ -7,25 +7,53 @@ this docstring is the specification; `capstone/freeze-vector.json` is the shared
 
 Algorithm (every hash is SHA-256, written as 64 lowercase hex characters):
 
-LF normalisation
-    Replace every CR LF byte pair (0x0D 0x0A) with a single LF (0x0A). A lone CR is kept.
-    Nothing else is changed: no trimming, no Unicode normalisation, no BOM handling.
+Reading files: raw bytes, never text
+    Every file is read as raw bytes. A leading UTF-8 BOM (EF BB BF) is hashed like any other bytes
+    and is never stripped. WARNING for the C# port: File.ReadAllText and StreamReader strip a BOM
+    and decode the text; use File.ReadAllBytes and normalise the bytes. The same goes for the
+    instructions read from `git show`: hash the blob's bytes, never a decoded string. There is no
+    Unicode normalisation (NFC, NFD...) of any content or any path: bytes and code points are hashed
+    exactly as stored.
+
+LF normalisation (applied to file content, in one pass over the bytes)
+    Every CR LF pair (0D 0A) becomes one LF (0A), and every CR (0D) that is not followed by an LF
+    becomes one LF. Equivalently, replace each match of the pattern \r\n? by \n. Examples:
+    "a\r\nb" -> "a\nb"; "a\rb" -> "a\nb"; "a\r\r\nb" -> "a\n\nb" (the first CR is lone, the second
+    is part of the CR LF pair); a lone LF is unchanged. Nothing else changes: no trimming, no
+    added or removed trailing newline.
 
 Components (eight, in this order; the names are exactly these)
-    questions             SHA-256 of the LF-normalised UTF-8 bytes of capstone/questions.json.
-    expected              SHA-256 of the LF-normalised UTF-8 bytes of capstone/expected.json.
-    rules                 SHA-256 of the LF-normalised UTF-8 bytes of src/lakehouse/capstone/score.py.
+    questions             SHA-256 of the LF-normalised bytes of capstone/questions.json.
+    expected              SHA-256 of the LF-normalised bytes of capstone/expected.json.
+    rules                 SHA-256 of the LF-normalised bytes of src/lakehouse/capstone/score.py.
     snapshot_time         SHA-256 of the UTF-8 bytes of the snapshot time string, as given (no
                           normalisation: it has no line breaks).
-    data_agent            SHA-256 over the concatenation, for every file under the data agent
-                          folder (recursively, files only), taken in sorted order of its relative
-                          POSIX path (forward slashes, no leading "./", sorted by the path's UTF-8
-                          bytes), of: the path as UTF-8, one LF, the file's LF-normalised content
-                          bytes, one LF.
-    analyst_instructions  SHA-256 of the LF-normalised UTF-8 bytes of the analyst's
+    data_agent            SHA-256 of the concatenation, over the files under the data agent folder
+                          taken in sorted path order, of: the file's relative path as UTF-8, one LF,
+                          the file's LF-normalised content bytes, one LF. See "The data agent
+                          folder" below.
+    analyst_instructions  SHA-256 of the LF-normalised bytes of the analyst's
                           src/Portfolio.Analyst/instructions.md (read at a pinned commit).
     model_direct          SHA-256 of the UTF-8 bytes of the direct model name.
     model_foundry         SHA-256 of the UTF-8 bytes of the Foundry model name.
+
+The data agent folder
+    - Every file counts, found recursively, with no exclusions: dotfiles and hidden files and
+      files in dot-folders are hashed like any other. An empty file contributes its path line and
+      an empty content line. A directory contributes nothing by itself, so an empty folder (or one
+      holding only empty directories) hashes the empty byte string.
+    - A folder that does not exist, or is not a directory, is an error (`DataAgentError`), never an
+      empty hash. Symbolic links are REJECTED: a link anywhere beneath the folder, to a file or to a
+      directory, is a `DataAgentError`. (The folder argument itself may be a link.)
+    - A path is the file's path relative to the folder: "/"-separated (POSIX style, whatever the
+      platform), no leading "./", UTF-8 encoded, case as stored (so "Readme.md" and "readme.md"
+      are different files), with no Unicode normalisation.
+    - Paths are sorted as whole strings by their UTF-8 BYTES (ordinal byte order), not per folder
+      level and not in file system order. So "a.json" sorts before "a/b.md" ("." is 2E, "/" is 2F)
+      although a tree walk would visit the folder "a" first. WARNING for the C# port:
+      StringComparer.Ordinal compares UTF-16 code units, which orders supplementary characters
+      (encoded as surrogates D800..DFFF) before U+E000..U+FFFF, the reverse of UTF-8 byte order. Sort
+      by the UTF-8 bytes (for example by comparing the byte arrays) instead.
 
 Overall hash
     Build one line per component, "name=hex" followed by a LF, where hex is the component's hash.
@@ -40,6 +68,8 @@ from the inputs and raises `FreezeBroken(component)` on the first mismatch.
 """
 
 import hashlib
+import os
+import re
 from pathlib import Path
 
 COMPONENTS = (
@@ -56,6 +86,10 @@ SHORT_LENGTH = 12
 RULES_PATH = Path(__file__).resolve().parent / "score.py"
 
 
+class DataAgentError(Exception):
+    """The data agent folder is missing, is not a directory, or holds a symbolic link."""
+
+
 class FreezeBroken(Exception):
     """A frozen component no longer matches; `component` names it ("hash" is the overall hash)."""
 
@@ -68,12 +102,16 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+_LINE_BREAK = re.compile(rb"\r\n?")
+
+
 def _lf(data: bytes) -> bytes:
-    return data.replace(b"\r\n", b"\n")
+    """CR LF and a lone CR each become one LF, in a single pass (see the module docstring)."""
+    return _LINE_BREAK.sub(b"\n", data)
 
 
 def _file_bytes(source: "str | bytes | Path") -> bytes:
-    """A Path is a file to read; a str or bytes is the content itself. Returned LF-normalised."""
+    """A Path is a file to read; a str (UTF-8 encoded) or bytes is the content itself. LF-normalised."""
     if isinstance(source, Path):
         return _lf(source.read_bytes())
     if isinstance(source, str):
@@ -81,11 +119,29 @@ def _file_bytes(source: "str | bytes | Path") -> bytes:
     return _lf(bytes(source))
 
 
+def _raise(error: OSError):
+    raise error
+
+
 def _data_agent_bytes(folder: Path) -> bytes:
-    files = {p.relative_to(folder).as_posix(): p for p in folder.rglob("*") if p.is_file()}
+    if not folder.exists():
+        raise DataAgentError("the data agent folder does not exist")
+    if not folder.is_dir():
+        raise DataAgentError("the data agent folder is not a directory")
+    files: dict[str, str] = {}
+    for current, dirnames, filenames in os.walk(folder, followlinks=False, onerror=_raise):
+        for name in dirnames + filenames:
+            full = os.path.join(current, name)
+            if os.path.islink(full):
+                rel = Path(full).relative_to(folder).as_posix()
+                raise DataAgentError(f"the data agent folder holds a symbolic link: {rel}")
+        for name in filenames:
+            full = os.path.join(current, name)
+            files[Path(full).relative_to(folder).as_posix()] = full
     out = b""
     for rel in sorted(files, key=lambda r: r.encode("utf-8")):
-        out += rel.encode("utf-8") + b"\n" + _lf(files[rel].read_bytes()) + b"\n"
+        with open(files[rel], "rb") as handle:
+            out += rel.encode("utf-8") + b"\n" + _lf(handle.read()) + b"\n"
     return out
 
 
@@ -94,13 +150,13 @@ def build_freeze(
     expected: "str | bytes | Path",
     snapshot_time: str,
     data_agent_dir: Path,
-    analyst_instructions: str,
+    analyst_instructions: "str | bytes",
     models: dict[str, str],
     rules: "str | bytes | Path | None" = None,
 ) -> dict:
     """Hash every input (see the module docstring). `models` carries "direct" and "foundry".
 
-    `questions`, `expected` and `rules` are a Path (read as a file) or the text itself; `rules`
+    `questions`, `expected`, `rules` and `analyst_instructions` are a Path (read as a file), bytes or the text itself; `rules`
     defaults to this package's score.py.
     """
     components = {
@@ -129,8 +185,7 @@ def verify_freeze(freeze: dict, **inputs) -> None:
     for name in COMPONENTS:
         if frozen.get(name) != rebuilt["components"][name]:
             raise FreezeBroken(name)
-    for name in frozen:
-        if name not in COMPONENTS:
-            raise FreezeBroken(name)
+    for name in sorted(n for n in frozen if n not in COMPONENTS):
+        raise FreezeBroken(name)
     if freeze.get("hash") != rebuilt["hash"] or freeze.get("short") != rebuilt["short"]:
         raise FreezeBroken("hash")

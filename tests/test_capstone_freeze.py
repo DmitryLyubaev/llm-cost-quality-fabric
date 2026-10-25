@@ -2,15 +2,17 @@
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
+import unicodedata
 from pathlib import Path
 
 import pytest
 
 import capstone_freeze
 from lakehouse.capstone import freeze as freeze_module
-from lakehouse.capstone.freeze import FreezeBroken, build_freeze, verify_freeze
+from lakehouse.capstone.freeze import DataAgentError, FreezeBroken, build_freeze, verify_freeze
 
 ROOT = Path(__file__).resolve().parent.parent
 VECTOR = ROOT / "capstone" / "freeze-vector.json"
@@ -169,6 +171,83 @@ def test_a_missing_component_is_named(agent):
     assert error.value.component == "model_direct"
 
 
+def test_unknown_extra_components_are_reported_sorted_after_the_known_ones(agent):
+    freeze, inputs = _build(agent)
+    freeze["components"] = {**freeze["components"], "zeta": "0" * 64, "alpha": "0" * 64}
+    with pytest.raises(FreezeBroken) as error:
+        verify_freeze(freeze, **inputs)
+    assert error.value.component == "alpha"
+    del freeze["components"]["model_foundry"]
+    with pytest.raises(FreezeBroken) as error:
+        verify_freeze(freeze, **inputs)
+    assert error.value.component == "model_foundry"  # a known one is reported before the extras
+
+
+def test_a_nonexistent_data_agent_folder_raises(tmp_path):
+    with pytest.raises(DataAgentError):
+        _build(tmp_path / "nope")
+
+
+def test_a_file_in_place_of_the_data_agent_folder_raises(tmp_path):
+    (tmp_path / "file").write_text("x", encoding="utf-8")
+    with pytest.raises(DataAgentError):
+        _build(tmp_path / "file")
+
+
+def test_an_empty_data_agent_folder_hashes_the_empty_byte_string(tmp_path):
+    (tmp_path / "empty" / "nested").mkdir(parents=True)  # directories contribute nothing
+    freeze, _ = _build(tmp_path / "empty")
+    assert freeze["components"]["data_agent"] == hashlib.sha256(b"").hexdigest()
+
+
+def test_hidden_files_and_dot_folders_count(tmp_path, agent):
+    base, _ = _build(agent)
+    (agent / ".hidden").write_text("x", encoding="utf-8")
+    assert _build(agent)[0]["components"]["data_agent"] != base["components"]["data_agent"]
+
+
+def test_a_symlink_in_the_data_agent_folder_is_rejected(tmp_path, agent):
+    try:
+        (agent / "link.json").symlink_to(agent / "agent.json")
+    except (OSError, NotImplementedError):
+        pytest.skip("symbolic links are not available here")
+    with pytest.raises(DataAgentError, match="symbolic link"):
+        _build(agent)
+    (agent / "link.json").unlink()
+    (agent / "linked-dir").symlink_to(agent / "sources", target_is_directory=True)
+    with pytest.raises(DataAgentError, match="symbolic link"):
+        _build(agent)
+
+
+def test_a_bom_is_hashed_and_never_stripped(tmp_path):
+    plain = _write_agent(tmp_path / "plain", {"a.txt": "x\n"})
+    with_bom = _write_agent(tmp_path / "bom", {"a.txt": "\ufeffx\n"})
+    assert _build(plain)[0]["components"]["data_agent"] != _build(with_bom)[0]["components"]["data_agent"]
+    assert (
+        _build(plain, questions="\ufeffq")[0]["components"]["questions"]
+        == hashlib.sha256(b"\xef\xbb\xbfq").hexdigest()
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "normalised"),
+    [
+        (b"a\r\nb", b"a\nb"),
+        (b"a\rb", b"a\nb"),
+        (b"a\r\r\nb", b"a\n\nb"),
+        (b"a\r\n\r\nb", b"a\n\nb"),
+        (b"a\nb", b"a\nb"),
+        (b"a\r", b"a\n"),
+        (b"\r\r\r", b"\n\n\n"),
+    ],
+)
+def test_line_endings_normalise_in_one_pass(tmp_path, raw, normalised):
+    assert freeze_module._lf(raw) == normalised
+    assert build_freeze(raw, "", "t", tmp_path, "", {"direct": "d", "foundry": "f"}, rules="")["components"][
+        "questions"
+    ] == hashlib.sha256(normalised).hexdigest()
+
+
 # --- the shared test vector (Task 8's .NET analyst copies it and must reproduce every hash) ---
 
 
@@ -177,10 +256,18 @@ def _sha(data: bytes) -> str:
 
 
 def _lf(text: str) -> bytes:
-    return text.encode("utf-8").replace(b"\r\n", b"\n")
+    return re.sub(rb"\r\n?", b"\n", text.encode("utf-8"))
+
+
+def _case_sensitive(folder: Path) -> bool:
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "Case").write_text("x", encoding="utf-8")
+    return not (folder / "case").exists()
 
 
 def test_vector_is_reproduced_by_build_freeze(tmp_path):
+    if not _case_sensitive(tmp_path / "probe"):
+        pytest.skip("the vector holds names that differ only by case")
     vector = json.loads(VECTOR.read_text(encoding="utf-8"))
     inputs = vector["inputs"]
     folder = _write_agent(tmp_path / "vec", inputs["data_agent"])
@@ -220,11 +307,69 @@ def test_vector_is_reproduced_independently_of_the_module():
     assert overall[:12] == expected["short"]
 
 
-def test_vector_exercises_crlf_and_non_ascii():
-    inputs = json.loads(VECTOR.read_text(encoding="utf-8"))["inputs"]
-    assert "\r\n" in "".join([inputs["questions"], inputs["rules"], *inputs["data_agent"].values()])
-    assert any(ord(c) > 127 for c in json.dumps(inputs, ensure_ascii=False))
-    assert len(inputs["data_agent"]) == 2
+def _vector_inputs():
+    return json.loads(VECTOR.read_text(encoding="utf-8"))["inputs"]
+
+
+def test_vector_has_a_dotfile_and_a_dot_folder():
+    paths = _vector_inputs()["data_agent"]
+    assert any(p.startswith(".") and "/" not in p for p in paths)
+    assert any(p.startswith(".") and "/" in p for p in paths)
+
+
+def test_vector_has_nfc_non_ascii_paths_with_a_supplementary_character():
+    paths = [p for p in _vector_inputs()["data_agent"] if any(ord(c) > 127 for c in p)]
+    assert paths
+    assert all(unicodedata.is_normalized("NFC", p) for p in paths)
+    assert any(ord(c) > 0xFFFF for p in paths for c in p)
+    assert any("\u00e9" in p for p in paths)  # an NFC accented letter, one code point
+
+
+def test_vector_has_paths_whose_walk_order_differs_from_byte_order():
+    paths = list(_vector_inputs()["data_agent"])
+    assert "a.json" in paths and "a/b.md" in paths
+    by_bytes = sorted(paths, key=lambda p: p.encode("utf-8"))
+    by_walk = sorted(paths, key=lambda p: p.split("/"))  # a tree walk: folder "a" before "a.json"
+    assert by_bytes.index("a.json") < by_bytes.index("a/b.md")
+    assert by_walk.index("a/b.md") < by_walk.index("a.json")
+
+
+def test_vector_has_paths_whose_utf16_order_differs_from_utf8_byte_order():
+    paths = list(_vector_inputs()["data_agent"])
+    by_bytes = sorted(paths, key=lambda p: p.encode("utf-8"))
+    by_utf16 = sorted(paths, key=lambda p: p.encode("utf-16-be"))
+    assert by_bytes != by_utf16
+
+
+def test_vector_has_an_uppercase_and_lowercase_pair():
+    paths = list(_vector_inputs()["data_agent"])
+    assert any(p != q and p.lower() == q.lower() for p in paths for q in paths)
+
+
+def test_vector_has_an_empty_file_and_a_file_without_a_trailing_newline():
+    contents = list(_vector_inputs()["data_agent"].values())
+    assert "" in contents
+    assert any(c and not c.endswith(("\n", "\r")) for c in contents)
+
+
+def test_vector_has_a_bom_a_lone_cr_and_a_cr_cr_lf():
+    contents = list(_vector_inputs()["data_agent"].values())
+    assert any(c.startswith("\ufeff") for c in contents)
+    assert any(re.search(r"\r(?![\r\n])", c) for c in contents)  # a CR followed by neither CR nor LF
+    assert any("\r\r\n" in c for c in contents)
+    assert any("\r\n" in c for c in contents)  # CR LF too
+
+
+def test_vector_instructions_and_questions_have_crlf():
+    inputs = _vector_inputs()
+    assert "\r\n" in inputs["analyst_instructions"]
+    assert "\r\n" in inputs["questions"]
+    assert "\r\n" in inputs["rules"]
+    assert any(ord(c) > 127 for c in inputs["analyst_instructions"])
+
+
+def test_vector_file_is_pure_ascii_so_no_tool_can_alter_its_characters():
+    VECTOR.read_bytes().decode("ascii")
 
 
 def test_module_docstring_documents_the_algorithm():
@@ -306,7 +451,117 @@ def test_cli_verify_fails_naming_the_component(tmp_path, agent, analyst_repo, ca
     assert "data_agent" in capsys.readouterr().err
 
 
-def test_cli_reports_a_bad_commit_without_a_traceback(tmp_path, agent, analyst_repo, capsys):
+def _with(args, flag, value):
+    args = list(args)
+    args[args.index(flag) + 1] = value
+    return args
+
+
+def _stderr(capsys):
+    return capsys.readouterr().err.strip()
+
+
+def test_cli_reports_a_bad_commit_with_a_fixed_message(tmp_path, agent, analyst_repo, capsys):
     repo, _ = analyst_repo
     assert capstone_freeze.main(_cli_args(tmp_path, agent, repo, "0" * 40, "freeze")) == 2
-    assert "instructions" in capsys.readouterr().err
+    assert _stderr(capsys) == capstone_freeze.MSG_NO_COMMIT
+    assert _stderr(capsys) == ""
+
+
+def test_cli_verify_with_a_bad_commit_exits_2(tmp_path, agent, analyst_repo, capsys):
+    repo, first = analyst_repo
+    capstone_freeze.main(_cli_args(tmp_path, agent, repo, first, "freeze"))
+    capsys.readouterr()
+    assert capstone_freeze.main(_cli_args(tmp_path, agent, repo, "no-such-ref", "verify")) == 2
+    assert _stderr(capsys) == "analyst_instructions: --analyst-commit is not a commit in --analyst-repo"
+
+
+def test_cli_a_valid_commit_without_instructions_exits_2(tmp_path, agent, analyst_repo, capsys):
+    repo, _ = analyst_repo
+    (repo / "src" / "Portfolio.Analyst" / "instructions.md").unlink()
+    _git(repo, "commit", "-q", "-am", "remove the instructions")
+    assert capstone_freeze.main(_cli_args(tmp_path, agent, repo, "HEAD", "freeze")) == 2
+    assert (
+        _stderr(capsys)
+        == "analyst_instructions: src/Portfolio.Analyst/instructions.md does not exist at --analyst-commit"
+    )
+
+
+def test_cli_a_path_that_is_not_a_repo_exits_2(tmp_path, agent, capsys):
+    not_a_repo = tmp_path / "plain-folder"
+    not_a_repo.mkdir()
+    assert capstone_freeze.main(_cli_args(tmp_path, agent, not_a_repo, "HEAD", "freeze")) == 2
+    assert _stderr(capsys) == "analyst_instructions: --analyst-commit is not a commit in --analyst-repo"
+    assert capstone_freeze.main(_cli_args(tmp_path, agent, tmp_path / "missing", "HEAD", "freeze")) == 2
+    assert _stderr(capsys) == "analyst_instructions: --analyst-commit is not a commit in --analyst-repo"
+
+
+def test_cli_rejects_a_commit_that_looks_like_an_option(tmp_path, agent, analyst_repo, capsys):
+    repo, _ = analyst_repo
+    args = _cli_args(tmp_path, agent, repo, "x", "freeze")
+    i = args.index("--analyst-commit")
+    args[i : i + 2] = ["--analyst-commit=--output=evil"]
+    assert capstone_freeze.main(args) == 2
+    assert _stderr(capsys) == "analyst_instructions: --analyst-commit must be a commit id, not an option"
+    assert not (tmp_path / "evil").exists()
+
+
+def test_cli_a_missing_git_binary_exits_2(tmp_path, agent, analyst_repo, capsys, monkeypatch):
+    repo, first = analyst_repo
+
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(capstone_freeze.subprocess, "run", no_git)
+    assert capstone_freeze.main(_cli_args(tmp_path, agent, repo, first, "freeze")) == 2
+    assert _stderr(capsys) == "analyst_instructions: git is not installed"
+
+
+def test_cli_hashes_the_blobs_raw_bytes(tmp_path, agent, analyst_repo):
+    repo, _ = analyst_repo
+    raw = b"\xef\xbb\xbf caf\xc3\xa9 \xff\xfe not valid utf-8 \r\n"
+    (repo / "src" / "Portfolio.Analyst" / "instructions.md").write_bytes(raw)
+    _git(repo, "-c", "core.autocrlf=false", "commit", "-q", "-am", "raw bytes")
+    assert capstone_freeze.main(_cli_args(tmp_path, agent, repo, "HEAD", "freeze")) == 0
+    written = json.loads((tmp_path / "freeze.json").read_text(encoding="utf-8"))
+    assert written["components"]["analyst_instructions"] == _sha(raw.replace(b"\r\n", b"\n"))
+
+
+@pytest.mark.parametrize(
+    ("flag", "message"),
+    [
+        ("--questions", "--questions: file not found"),
+        ("--expected", "--expected: file not found"),
+        ("--rules", "--rules: file not found"),
+        ("--data-agent-dir", "--data-agent-dir: folder not found"),
+    ],
+)
+def test_cli_a_missing_input_exits_2_naming_the_argument(tmp_path, agent, analyst_repo, capsys, flag, message):
+    repo, first = analyst_repo
+    args = _with(_cli_args(tmp_path, agent, repo, first, "freeze"), flag, str(tmp_path / "gone"))
+    assert capstone_freeze.main(args) == 2
+    assert _stderr(capsys) == message
+
+
+def test_cli_verify_without_a_freeze_file_exits_2(tmp_path, agent, analyst_repo, capsys):
+    repo, first = analyst_repo
+    assert capstone_freeze.main(_cli_args(tmp_path, agent, repo, first, "verify")) == 2
+    assert _stderr(capsys) == "--freeze: file not found"
+
+
+def test_cli_a_symlink_in_the_data_agent_exits_2(tmp_path, agent, analyst_repo, capsys):
+    repo, first = analyst_repo
+    try:
+        (agent / "link.json").symlink_to(agent / "agent.json")
+    except (OSError, NotImplementedError):
+        pytest.skip("symbolic links are not available here")
+    assert capstone_freeze.main(_cli_args(tmp_path, agent, repo, first, "freeze")) == 2
+    assert _stderr(capsys) == "--data-agent-dir: the data agent folder holds a symbolic link: link.json"
+
+
+def test_cli_default_data_agent_folder_is_the_portfolio_data_agent():
+    args = capstone_freeze._parser().parse_args(
+        ["freeze", "--snapshot-time", "t", "--analyst-repo", "r", "--analyst-commit", "c",
+         "--model-direct", "d", "--model-foundry", "f"]
+    )
+    assert args.data_agent_dir == ROOT / "fabric-capstone" / "da_portfolio.DataAgent"
