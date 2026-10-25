@@ -1,0 +1,30 @@
+{
+  "description": "Shared test vector for the capstone freeze. Inputs are inline; strings keep their CR LF where shown. Recompute each component, the overall hash and the short hash by the algorithm in lakehouse/capstone/freeze.py's docstring. File inputs are UTF-8 with CR LF read as LF; data_agent maps relative POSIX path to file content.",
+  "inputs": {
+    "questions": "[\r\n  {\"id\": \"q01\", \"text\": \"How much did p2 spend in total?\", \"kind\": \"money\"}\r\n]\r\n",
+    "expected": "{\n  \"q01\": {\"kind\": \"money\", \"value\": 1234.5}\n}\n",
+    "rules": "TOLERANCE = 0.01\r\n\r\n\r\ndef score(answer, expected):\r\n    return abs(answer - expected) <= TOLERANCE\r\n",
+    "analyst_instructions": "You are the portfolio analyst.\nAnswer only from the data agent, in AUD; say so when you cannot (café rule).\n",
+    "data_agent": {
+      "agent.json": "{\n  \"name\": \"capstone\",\n  \"source\": \"lh_capstone\"\n}\n",
+      "instructions/system.md": "Answer in at most 25 rows.\r\nUse the gold schema only.\r\n"
+    },
+    "snapshot_time": "2026-10-25T00:00:00Z",
+    "model_direct": "gpt-5.1",
+    "model_foundry": "gpt-5.1-foundry"
+  },
+  "expected": {
+    "components": {
+      "questions": "10fb47a047b445a19c11ec80c965bd497f413caf202b10868e00b5ed980a72f6",
+      "expected": "4fbcc25f381fa65f61d4215a0f6f90d3504f9c32dca00a80ae917db7c9549d4d",
+      "rules": "6215d177b82c139081dc0221e4617e5d8ce278c415e772184b6c99c1fd114f08",
+      "snapshot_time": "c4a3bea8eee37f217779ce3568f21661ae613bdf446c75c670cc824077a5dd48",
+      "data_agent": "b40f3bf0e925f8f344f72aeb578379ddbedead5a81ed63bac9c59c17c109a88d",
+      "analyst_instructions": "99739f597e8c13d0d4c86e15482eaa5cb0d43f5122e1631e8154ff9c672a9a73",
+      "model_direct": "e7ee8b015b531feb8b6b0409f21aca9d5f0fba84db806c9d3ef671e2b36c55bf",
+      "model_foundry": "f1809d173b244dd5bc8b7d4101d64abc113516ae3c75cdcf54220123763bcda6"
+    },
+    "hash": "5f7097bcca9e171e93183eae834cd227083a9bfe3a686b0c8b8572d3e4fe55be",
+    "short": "5f7097bcca9e"
+  }
+}
