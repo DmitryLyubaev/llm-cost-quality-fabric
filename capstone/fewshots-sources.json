@@ -1,0 +1,234 @@
+[
+  {
+    "id": "a152700c-33c7-4bb3-8f6c-e7bc44939749",
+    "source": {
+      "function": "lakehouse.answers.cost_per_project",
+      "args": {},
+      "select": null,
+      "column": null
+    }
+  },
+  {
+    "id": "afa92e06-dbf9-4a87-93f9-eebda67ce6e4",
+    "source": {
+      "function": "lakehouse.answers.cost_per_project",
+      "args": {},
+      "select": {
+        "project": "p4",
+        "billing_currency": "AUD"
+      },
+      "column": "total"
+    }
+  },
+  {
+    "id": "dd030c47-81a1-4aa9-9f6e-db3d6ea4e6f9",
+    "source": {
+      "function": "lakehouse.capstone.answers.spend_for_month",
+      "args": {
+        "month": "2026-10"
+      },
+      "select": null,
+      "column": null
+    }
+  },
+  {
+    "id": "1b86ca1d-bee9-43e6-a186-d99776a803e6",
+    "source": {
+      "function": "lakehouse.capstone.answers.spend_for_month",
+      "args": {
+        "month": "2026-09"
+      },
+      "select": {
+        "project": "untagged",
+        "billing_currency": "AUD"
+      },
+      "column": "total"
+    }
+  },
+  {
+    "id": "f146de93-7e5f-4c3f-b2f6-e2af5aaea780",
+    "source": {
+      "function": "lakehouse.capstone.answers.cost_by_project_between",
+      "args": {
+        "start": "2026-10-01",
+        "end": "2026-10-05"
+      },
+      "select": {
+        "project": "p2",
+        "billing_currency": "AUD"
+      },
+      "column": "total"
+    }
+  },
+  {
+    "id": "447ea934-3216-42e1-aafb-c16f4fd2ab93",
+    "source": {
+      "function": "lakehouse.capstone.answers.cost_by_project_between",
+      "args": {
+        "start": "2026-10-01",
+        "end": "2026-10-03"
+      },
+      "select": null,
+      "column": null
+    }
+  },
+  {
+    "id": "f629425b-ecb2-444e-b330-d82cea8961b8",
+    "source": {
+      "function": "lakehouse.capstone.answers.spend_for_month",
+      "args": {
+        "month": "2026-10"
+      },
+      "select": null,
+      "column": null
+    }
+  },
+  {
+    "id": "0af7d3a3-ebb0-42f3-994d-b7f4784ad1ca",
+    "source": {
+      "function": "lakehouse.answers.quality_across_models",
+      "args": {},
+      "select": {
+        "study": "p1-three-arm"
+      },
+      "column": null
+    }
+  },
+  {
+    "id": "c4dce99a-2323-44ea-a27a-6f0dfcca73f5",
+    "source": {
+      "function": "lakehouse.answers.quality_across_models",
+      "args": {},
+      "select": {
+        "study": "p2-retrieval"
+      },
+      "column": null
+    }
+  },
+  {
+    "id": "fa89e456-8aad-4d37-bd3f-4afd068341fc",
+    "source": {
+      "function": "lakehouse.capstone.answers.eval_count_by_arm",
+      "args": {
+        "study": "p1-three-arm"
+      },
+      "select": null,
+      "column": null
+    }
+  },
+  {
+    "id": "dfccc85c-60b2-4e84-9666-139fae7fedde",
+    "source": {
+      "function": "lakehouse.answers.quality_across_models",
+      "args": {},
+      "select": {
+        "study": "p3-agent"
+      },
+      "column": null
+    }
+  },
+  {
+    "id": "7711f134-1b0e-4d21-9f0f-bcbf69ee8e6c",
+    "source": {
+      "function": "lakehouse.answers.quality_across_models",
+      "args": {},
+      "select": {
+        "study": "p3-agent"
+      },
+      "column": null
+    }
+  },
+  {
+    "id": "cbb89b53-3bc3-4422-a18a-44053fdda041",
+    "source": {
+      "function": "lakehouse.answers.quality_across_models",
+      "args": {},
+      "select": {
+        "study": "p1-three-arm"
+      },
+      "column": null
+    }
+  },
+  {
+    "id": "bcfeaf11-074e-4109-ad54-9ca45e678e42",
+    "source": {
+      "function": "lakehouse.answers.quality_across_models",
+      "args": {},
+      "select": {
+        "study": "p3-agent"
+      },
+      "column": null
+    }
+  },
+  {
+    "id": "7de22637-a73e-4fc0-bab4-689213bcd9ca",
+    "source": {
+      "function": "lakehouse.answers.quality_across_models",
+      "args": {},
+      "select": {
+        "study": "p1-three-arm"
+      },
+      "column": null
+    }
+  },
+  {
+    "id": "137fe15a-c914-40d1-bc0e-5762a08f8627",
+    "source": {
+      "function": "lakehouse.answers.quality_across_models",
+      "args": {},
+      "select": {
+        "study": "p2-retrieval"
+      },
+      "column": null
+    }
+  },
+  {
+    "id": "761ec228-348e-4474-949f-9bb2e758dd9e",
+    "source": {
+      "function": "lakehouse.answers.cost_per_result",
+      "args": {},
+      "select": null,
+      "column": null
+    }
+  },
+  {
+    "id": "f5f182ad-2bad-4b62-87d6-c5e1c4ac66b0",
+    "source": {
+      "function": "lakehouse.answers.cost_per_result",
+      "args": {},
+      "select": null,
+      "column": null
+    }
+  },
+  {
+    "id": "e956a142-f53c-48d5-9c58-ea40bb899d7e",
+    "source": {
+      "function": "lakehouse.capstone.answers.live_check_counts",
+      "args": {},
+      "select": {
+        "project": "p4"
+      },
+      "column": null
+    }
+  },
+  {
+    "id": "144b4937-49a6-40d6-8f4b-1d37dc6406be",
+    "source": {
+      "function": "lakehouse.capstone.answers.live_check_counts",
+      "args": {},
+      "select": null,
+      "column": null
+    }
+  },
+  {
+    "id": "cd57221b-ff4d-46ba-a02e-7a5fc61427fb",
+    "source": {
+      "function": "lakehouse.gateway.answers.cost_per_gateway_call",
+      "args": {
+        "session": "gateway-demo"
+      },
+      "select": null,
+      "column": null
+    }
+  }
+]

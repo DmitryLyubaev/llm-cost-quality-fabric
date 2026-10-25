@@ -15,6 +15,8 @@ from pyspark.sql import SparkSession
 
 from lakehouse import security
 from lakehouse.bronze.fetch_public import fetch_manifest
+from lakehouse.capstone.expected import compute_expected
+from lakehouse.capstone.snapshot import SNAPSHOT_TABLES, copy_gold
 from lakehouse.checks import QualityCheckFailed, check_gateway_counts
 from lakehouse.gateway.answers import cost_per_gateway_call
 from lakehouse.gateway.build import (
@@ -38,6 +40,12 @@ FILES_MOUNT = "/lakehouse/default/Files"
 HTTP_TIMEOUT_SECONDS = 60
 
 
+def onelake_paths(workspace_id: str, lakehouse_id: str, files_mount: str | None = None) -> LakePaths:
+    """A lakehouse's paths in OneLake, from its workspace ID and item ID."""
+    root = f"abfss://{workspace_id}@{ONELAKE_HOST}/{lakehouse_id}"
+    return LakePaths(tables_root=f"{root}/Tables", files_root=f"{root}/Files", files_mount=files_mount)
+
+
 def fabric_paths(context: dict) -> LakePaths:
     """The lake's paths from a runtime context (`currentWorkspaceId`, `defaultLakehouseId`)."""
     # verify in plan 3: the context keys are those of notebookutils.runtime.context
@@ -46,12 +54,7 @@ def fabric_paths(context: dict) -> LakePaths:
         if not context.get(key):
             raise ValueError(f"runtime context has no {key!r}")
         ids[key] = context[key]
-    root = f"abfss://{ids['currentWorkspaceId']}@{ONELAKE_HOST}/{ids['defaultLakehouseId']}"
-    return LakePaths(
-        tables_root=f"{root}/Tables",
-        files_root=f"{root}/Files",
-        files_mount=FILES_MOUNT,
-    )
+    return onelake_paths(ids["currentWorkspaceId"], ids["defaultLakehouseId"], files_mount=FILES_MOUNT)
 
 
 def get_active_spark() -> SparkSession:
@@ -281,3 +284,63 @@ def check_model(context: dict, sessions: str = "") -> dict:
     if not result.passed:
         raise QualityCheckFailed([result])
     return {"sessions": names, "checks": [asdict(result)]}
+
+
+# --- the capstone (spec 4.1): the gold snapshot and the expected answers -------------------------
+
+_GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+CAPSTONE_FILES = "capstone"  # under the default lakehouse's Files: questions.json in, expected.json out
+
+
+def _guid(name: str, value: str) -> str:
+    text = (value or "").strip()
+    if not _GUID.fullmatch(text):
+        raise ValueError(f"{name} must be a GUID (the Fabric item ID), got {value!r}")
+    return text
+
+
+def snapshot_gold(source_workspace_id: str, source_lakehouse_id: str, context: dict, tables: str = "") -> dict:
+    """Copy prod gold into the notebook's default lakehouse (`lh_capstone`), once, by hand.
+
+    The source is the lakehouse `source_lakehouse_id` (prod `lh_portfolio`) in the workspace
+    `source_workspace_id`, read through OneLake as `fabric_paths` builds a path; both IDs are set
+    when the notebook is run and never committed. `tables` is a comma-separated list of gold
+    tables, empty for all of `SNAPSHOT_TABLES`. Returns `copy_gold`'s record (snapshot time and
+    row counts), which it also writes to `Files/capstone/snapshot.json` in the target.
+
+    ValueError, before anything is copied, when either ID is not a GUID or the source is the
+    default lakehouse itself.
+    """
+    workspace = _guid("source_workspace_id", source_workspace_id)
+    lakehouse = _guid("source_lakehouse_id", source_lakehouse_id)
+    target = fabric_paths(context)
+    if lakehouse.lower() == str(context.get("defaultLakehouseId", "")).strip().lower():
+        raise ValueError("the source lakehouse is this notebook's default lakehouse, the snapshot's target")
+    names = [name.strip() for name in (tables or "").split(",") if name.strip()] or list(SNAPSHOT_TABLES)
+    return copy_gold(get_active_spark(), onelake_paths(workspace, lakehouse), target, names)
+
+
+def capstone_expected(context: dict) -> dict:
+    """The expected answers from the snapshot, run by hand after the snapshot.
+
+    Reads `Files/capstone/questions.json` (uploaded) through the default lakehouse's mount, runs
+    `compute_expected` on that lakehouse's gold, and writes the result beside it as
+    `expected.json` (indented, sorted keys, LF, a final newline): the bytes the freeze hashes.
+    Returns the same dict. FileNotFoundError, before any query, when questions.json is missing.
+    """
+    paths = fabric_paths(context)
+    if not paths.files_mount:
+        raise ValueError("capstone_expected reads questions.json through the files mount, and none is set")
+    folder = Path(paths.files_mount) / CAPSTONE_FILES
+    questions_file = folder / "questions.json"
+    if not questions_file.is_file():
+        raise FileNotFoundError(f"upload Files/{CAPSTONE_FILES}/questions.json first")
+    questions = json.loads(questions_file.read_text(encoding="utf-8"))
+    spark = get_active_spark()
+    # As run_load does: cost_per_result cuts its month in UTC and refuses another zone.
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    spark.conf.set("spark.sql.session.timeZone", "UTC")
+    expected = compute_expected(spark, paths, questions)
+    text = json.dumps(expected, indent=2, sort_keys=True) + "\n"
+    (folder / "expected.json").write_text(text, encoding="utf-8", newline="\n")
+    return expected
