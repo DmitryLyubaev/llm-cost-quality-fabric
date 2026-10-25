@@ -124,6 +124,23 @@ def test_prod_publishes_then_uploads_then_shortcuts(deploy):
     ]
 
 
+def test_deploy_never_touches_the_capstone():
+    """The capstone's data agent is deployed by hand as fabric@ (publish-capstone), never by the
+    deploy service principal from Actions."""
+    text = (WORKFLOWS / "deploy.yml").read_text(encoding="utf-8")
+    for value in ("publish-capstone", "fabric-capstone", "capstone", "CAPSTONE"):
+        assert value not in text
+
+
+def test_deploy_runs_no_command_outside_the_projects_9_to_11_set(deploy):
+    allowed = {
+        "publish", "upload-wheel", "ensure-shortcut", "onelake-availability", "ensure-gateway-shortcut",
+        "refresh-model",
+    }
+    for job in deploy["jobs"].values():
+        assert set(deploy_commands(job)) <= allowed
+
+
 GATE = "P10_EVENTHUB_CONNECTION_ID"
 GATE_SECRET = "${{ secrets.P10_EVENTHUB_CONNECTION_ID }}"
 

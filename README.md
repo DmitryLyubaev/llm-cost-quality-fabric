@@ -183,6 +183,7 @@ pytest -q
 | `src/lakehouse/` | The package: extract, bronze, silver, gold, checks, answers, run, Fabric entry points |
 | `src/lakehouse/seeds/` | Hand-curated, evidence-cited seed data (deployments, attribution rules, live checks, figures) |
 | `fabric/` | Fabric item definitions (lakehouse, notebooks, pipeline) and `parameter.yml` |
+| `fabric-capstone/` | The capstone data agent, deployed by hand (`publish-capstone`) |
 | `.deploy/deploy.py` | Wheel upload, `fabric-cicd` publish, shortcut |
 | `infra/` | Terraform: Fabric workspaces, cost-export storage |
 | `docs/superpowers/` | Design spec and implementation plans |
