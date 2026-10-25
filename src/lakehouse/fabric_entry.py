@@ -299,14 +299,15 @@ def _guid(name: str, value: str) -> str:
     return text
 
 
-def snapshot_gold(source_workspace_id: str, source_lakehouse_id: str, context: dict, tables: str = "") -> dict:
+def snapshot_gold(source_workspace_id: str, source_lakehouse_id: str, context: dict) -> dict:
     """Copy prod gold into the notebook's default lakehouse (`lh_capstone`), once, by hand.
 
     The source is the lakehouse `source_lakehouse_id` (prod `lh_portfolio`) in the workspace
     `source_workspace_id`, read through OneLake as `fabric_paths` builds a path; both IDs are set
-    when the notebook is run and never committed. `tables` is a comma-separated list of gold
-    tables, empty for all of `SNAPSHOT_TABLES`. Returns `copy_gold`'s record (snapshot time and
-    row counts), which it also writes to `Files/capstone/snapshot.json` in the target.
+    when the notebook is run and never committed. Every snapshot copies all of `SNAPSHOT_TABLES`,
+    never a subset, so `lh_capstone` never mixes two days of gold. Returns `copy_gold`'s record
+    (snapshot time, source versions and row counts), which it also writes to
+    `Files/capstone/snapshot.json` in the target.
 
     ValueError, before anything is copied, when either ID is not a GUID or the source is the
     default lakehouse itself.
@@ -316,8 +317,7 @@ def snapshot_gold(source_workspace_id: str, source_lakehouse_id: str, context: d
     target = fabric_paths(context)
     if lakehouse.lower() == str(context.get("defaultLakehouseId", "")).strip().lower():
         raise ValueError("the source lakehouse is this notebook's default lakehouse, the snapshot's target")
-    names = [name.strip() for name in (tables or "").split(",") if name.strip()] or list(SNAPSHOT_TABLES)
-    return copy_gold(get_active_spark(), onelake_paths(workspace, lakehouse), target, names)
+    return copy_gold(get_active_spark(), onelake_paths(workspace, lakehouse), target, list(SNAPSHOT_TABLES))
 
 
 def capstone_expected(context: dict) -> dict:

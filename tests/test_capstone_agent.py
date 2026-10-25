@@ -13,6 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pyspark.sql import functions as F
 
 from check_hygiene import check_hygiene
 from lake_helpers import copy_lake
@@ -20,6 +21,7 @@ from lakehouse.capstone.expected import MAX_ROWS, Source, _select_rows, resolve_
 from lakehouse.capstone.snapshot import SNAPSHOT_TABLES
 from lakehouse.gateway.build import FACT_GATEWAY_CALL_SCHEMA
 from lakehouse.gateway.build import GOLD_TABLE as GATEWAY_GOLD_TABLE
+from lakehouse.gold.build import GRAINS
 
 ROOT = Path(__file__).resolve().parents[1]
 CAPSTONE = ROOT / "fabric-capstone"
@@ -79,6 +81,16 @@ _SHOTS = _fewshots() if (SOURCE_DIR / "fewshots.json").is_file() else []
 
 def _sources() -> dict[str, Source]:
     return {entry["id"]: Source.from_dict(entry["source"]) for entry in _json(FEWSHOT_SOURCES)}
+
+
+def _columns() -> dict[str, list[str]]:
+    """Each example's output columns, in order, as fewshots-sources.json lists them."""
+    return {entry["id"]: entry["columns"] for entry in _json(FEWSHOT_SOURCES)}
+
+
+def _frozen() -> list[dict]:
+    """The frozen questions that have an expected answer (the scored ones)."""
+    return [q for q in _json(ROOT / "capstone" / "questions.json") if q["source"] is not None]
 
 
 def _ai_instructions() -> str:
@@ -192,7 +204,10 @@ def test_every_example_has_exactly_one_paired_source():
     entries = _json(FEWSHOT_SOURCES)
     assert [e["id"] for e in entries] == [shot["id"] for shot in _fewshots()]
     for entry in entries:
-        assert set(entry) == {"id", "source"}
+        assert set(entry) == {"id", "columns", "source"}
+        columns = entry["columns"]
+        assert columns and all(isinstance(c, str) and c == c.lower() for c in columns)
+        assert len(columns) == len(set(columns))
         source = Source.from_dict(entry["source"])
         resolve_function(source.function)
 
@@ -243,9 +258,14 @@ def test_no_example_question_is_a_frozen_or_practice_question_or_a_near_copy(nam
 
 
 def _add_gateway_session(spark, paths):
-    """Gateway calls for the example's session on two days the fixture has gateway cost lines."""
+    """Gateway calls for the example's session: two days with gateway cost lines and one without.
+
+    2026-10-15 has no `rg-releaselens-gateway` line, so an inner join would drop that day where the
+    answer function's left join keeps it with a null cost.
+    """
     rows = []
-    for i, (day, refused) in enumerate([("2026-09-29", False), ("2026-09-29", True), ("2026-10-08", False)]):
+    days = [("2026-09-29", False), ("2026-09-29", True), ("2026-10-08", False), ("2026-10-15", False)]
+    for i, (day, refused) in enumerate(days):
         call_day = date.fromisoformat(day)
         rows.append(
             {
@@ -335,6 +355,7 @@ def _query_rows(spark, query: str) -> tuple[list[str], list[tuple]]:
 
 
 def _source_rows(spark, paths, shot_id: str, source: Source, columns: list[str]) -> list[tuple]:
+    """The Source's selected rows, projected onto the example's listed output columns (all of them)."""
     frame = resolve_function(source.function)(spark, paths, **source.args)
     missing = [c for c in columns if c not in frame.columns]
     assert not missing, f"the query's columns {missing} are not in {source.function}'s {frame.columns}"
@@ -352,7 +373,7 @@ def test_example_query_returns_what_its_answer_function_returns(spark, gold_db, 
 
     assert len(got) <= MAX_ROWS, "the data agent caps an answer at 25 rows"
     assert got, "the query returns no row on the fixture, so it proves nothing"
-    assert len(columns) == len(set(columns))
+    assert columns == _columns()[shot["id"]], "the query's columns are not the listed ones"
     want = _source_rows(spark, gold_db, shot["id"], source, columns)
     assert len(_as_set(got)) == len(got), "the query returns a row twice"
     got_set, want_set = _as_set(got), _as_set(want)
@@ -364,7 +385,72 @@ def test_the_gateway_example_reads_the_added_session(spark, gold_db):
     gateway = [s for s in _fewshots() if "gold.fact_gateway_call" in s["query"]]
     assert len(gateway) == 1
     assert f"'{GATEWAY_SESSION}'" in gateway[0]["query"]
-    assert _sources()[gateway[0]["id"]].args == {"session": GATEWAY_SESSION}
+    source = _sources()[gateway[0]["id"]]
+    assert source.args == {"session": GATEWAY_SESSION}
+    rows = _source_rows(spark, gold_db, "gateway", source, ["call_date", "billing_currency", "apim_cost"])
+    # a day with calls but no gateway cost keeps its row, so an inner join in the query would fail
+    assert (date(2026, 10, 15), None, None) in rows
+    assert len(rows) == 3
+
+
+# --- leakage: no example's result holds a frozen answer -------------------------------------------------
+
+
+def _selected(spark, paths, source: Source) -> list[tuple]:
+    """Every column of the rows the Source's selector picks, possibly none."""
+    frame = resolve_function(source.function)(spark, paths, **source.args)
+    for column, wanted in (source.select or {}).items():
+        frame = frame.where(frame[column].cast("string") == F.lit(wanted))
+    return [tuple(_cell(v) for v in row) for row in frame.collect()]
+
+
+def _leaks(spark, paths, example: Source, frozen: Source) -> bool:
+    """True when the example's result would hold the frozen question's answer.
+
+    Only a Source on the same function can: with the same arguments and a selector no narrower
+    than the frozen one (decided structurally, so a question whose rows the fixture lacks is
+    covered too), or when every row the frozen Source selects, all columns, is among the
+    example's selected rows (arguments that differ but do not narrow, such as a wider range that
+    adds nothing).
+    """
+    if example.function != frozen.function:
+        return False
+    if example.args == frozen.args and set((example.select or {}).items()) <= set((frozen.select or {}).items()):
+        return True
+    wanted = _selected(spark, paths, frozen)
+    if not wanted:
+        return False
+    shown = _selected(spark, paths, example)
+    return all(any(_same(row, other) for other in shown) for row in wanted)
+
+
+def test_leak_check_flags_a_result_that_holds_a_frozen_row(spark, gold_db):
+    def source(function, args=None, select=None):
+        return Source(function, args or {}, select)
+
+    q01 = source("lakehouse.answers.cost_per_project", select={"project": "p2", "billing_currency": "AUD"})
+    q03 = source("lakehouse.capstone.answers.spend_for_month", {"month": "2026-10"}, {"project": "p3"})
+    q14 = source(
+        "lakehouse.capstone.answers.cost_by_project_between", {"start": "2026-10-06", "end": "2026-10-09"}, {"project": "p4"}
+    )
+    q12 = source("lakehouse.gateway.answers.cost_per_gateway_call", {"session": "p10-session"})
+    assert _leaks(spark, gold_db, source(q01.function), q01)  # same call, no selector
+    assert not _leaks(spark, gold_db, source(q01.function, select={"project": "p4"}), q01)
+    assert _leaks(spark, gold_db, source(q03.function, {"month": "2026-10"}), q03)
+    assert not _leaks(spark, gold_db, source(q03.function, {"month": "2026-09"}), q03)
+    # a wider range that adds no p4 cost line shows the same p4 row
+    assert _leaks(spark, gold_db, source(q14.function, {"start": "2026-10-05", "end": "2026-10-11"}), q14)
+    assert not _leaks(spark, gold_db, source(q14.function, {"start": "2026-09-01", "end": "2026-10-11"}), q14)
+    assert _leaks(spark, gold_db, source(q12.function, {"session": "p10-session"}), q12)  # no rows: structural
+    assert not _leaks(spark, gold_db, source(q12.function, {"session": GATEWAY_SESSION}), q12)
+    assert not _leaks(spark, gold_db, source("lakehouse.capstone.answers.eval_count_by_arm", {"study": "p3-agent"}), q01)
+
+
+@pytest.mark.parametrize("question", _frozen(), ids=lambda q: q["id"])
+def test_no_example_result_holds_a_frozen_answer(spark, gold_db, question):
+    frozen = Source.from_dict(question["source"])
+    leaking = [shot_id for shot_id, example in _sources().items() if _leaks(spark, gold_db, example, frozen)]
+    assert leaking == [], f"{question['id']}'s answer is in the result of {leaking}"
 
 
 # --- the instructions ----------------------------------------------------------------------------------
@@ -439,6 +525,28 @@ def test_data_source_instructions_describe_every_table():
     for table in SNAPSHOT_TABLES:
         assert f"`gold.{table}`" in text, table
     assert len(text) <= INSTRUCTIONS_LIMIT
+
+
+@pytest.mark.parametrize("field", ["aiInstructions", "dataSourceInstructions"])
+def test_each_table_description_carries_its_grain_from_the_gold_build(field):
+    lines = _instruction_texts()[field].splitlines()
+    for table in SNAPSHOT_TABLES:
+        described = [line for line in lines if line.startswith(f"- `gold.{table}`: ")]
+        assert len(described) == 1, table
+        assert f"one row per {GRAINS[table]}" in described[0], table
+
+
+@pytest.mark.parametrize("field", ["aiInstructions", "dataSourceInstructions", "userDescription"])
+def test_instructions_do_not_hard_code_the_project_list(field):
+    flat = " ".join(_instruction_texts()[field].lower().split())
+    for grain in GRAINS.values():  # a grain is quoted as the gold build words it, and tested above
+        flat = flat.replace(" ".join(grain.lower().split()), "")
+    assert not re.search(r"\bp1\b.{0,12}\bp10\b|1 to 10|1-10", flat)
+
+
+def test_ai_instructions_point_to_dim_project_for_the_projects():
+    flat = " ".join(_ai_instructions().split())
+    assert "listed in `dim_project`" in flat
 
 
 def test_ai_instructions_follow_the_template_and_state_the_portfolio_rules():

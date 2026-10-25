@@ -40,22 +40,21 @@
 #
 # The capstone's gold snapshot (spec 4.1). It runs by hand, once, on the day of the freeze, in the
 # capstone workspace as its admin, who also needs read access to prod; never from a pipeline. It
-# copies prod `lh_portfolio`'s gold tables into this notebook's default lakehouse, `lh_capstone`, as
-# a plain Delta copy, and writes the snapshot time and row counts to `Files/capstone/snapshot.json`.
-# The data agent reads only `lh_capstone`, and the expected answers are computed from the same
-# snapshot.
+# copies all nine gold tables the data agent selects from prod `lh_portfolio` into this notebook's
+# default lakehouse, `lh_capstone`, as a plain Delta copy, each read at the Delta version recorded
+# before the copy starts. It writes the snapshot time, those versions and the row counts to
+# `Files/capstone/snapshot.json`. The data agent reads only `lh_capstone`, and the expected answers
+# are computed from the same snapshot.
 #
 # Set `source_workspace_id` to the prod workspace's ID and `source_lakehouse_id` to prod
-# `lh_portfolio`'s item ID when the notebook is run; they are never committed. Leave `tables` empty
-# for the nine gold tables the data agent selects, or give a comma-separated subset. All logic lives
-# in the `lakehouse` wheel; this notebook only installs it and calls
+# `lh_portfolio`'s item ID when the notebook is run; they are never committed. All logic lives in
+# the `lakehouse` wheel; this notebook only installs it and calls
 # `lakehouse.fabric_entry.snapshot_gold`.
 
 # PARAMETERS CELL ********************
 
 source_workspace_id = ""
 source_lakehouse_id = ""
-tables = ""
 
 # METADATA ********************
 
@@ -72,7 +71,7 @@ import notebookutils
 
 import lakehouse.fabric_entry
 
-summary = lakehouse.fabric_entry.snapshot_gold(source_workspace_id, source_lakehouse_id, notebookutils.runtime.context, tables)
+summary = lakehouse.fabric_entry.snapshot_gold(source_workspace_id, source_lakehouse_id, notebookutils.runtime.context)
 print(json.dumps(summary, indent=2, sort_keys=True, default=str))
 
 # METADATA ********************

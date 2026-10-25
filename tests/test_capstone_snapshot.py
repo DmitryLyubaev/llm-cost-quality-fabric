@@ -1,11 +1,13 @@
 """The gold snapshot into lh_capstone, its lakehouse item and the capstone's two notebooks."""
 
+import inspect
 import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from delta.tables import DeltaTable
 
 from lake_helpers import copy_lake
 from lakehouse import fabric_entry
@@ -53,6 +55,10 @@ def _gold(spark, paths, name):
     return spark.read.format("delta").load(paths.table("gold", name))
 
 
+def _latest_version(spark, paths, name) -> int:
+    return DeltaTable.forPath(spark, paths.table("gold", name)).history(1).collect()[0]["version"]
+
+
 def _gold_dirs(paths: LakePaths) -> set[str]:
     folder = Path(paths.tables_root) / "gold"
     return {p.name for p in folder.iterdir() if p.is_dir()} if folder.is_dir() else set()
@@ -76,7 +82,8 @@ def test_copy_gold_copies_exactly_the_named_tables_and_counts_them(spark, loaded
     result = copy_gold(spark, source, target, named)
 
     after = datetime.now(timezone.utc)
-    assert set(result) == {"snapshot_time", "rows"}
+    assert set(result) == {"snapshot_time", "versions", "rows"}
+    assert result["versions"] == {name: _latest_version(spark, source, name) for name in named}
     assert _gold_dirs(target) == set(named)
     assert result["rows"] == {name: _gold(spark, source, name).count() for name in named}
     assert result["rows"]["fact_daily_cost"] > 0
@@ -111,6 +118,36 @@ def test_copy_gold_writes_through_the_files_mount_when_there_is_one(spark, loade
     result = copy_gold(spark, loaded_lake[0], target, ["dim_date"])
 
     assert json.loads((mount / SNAPSHOT_FILE).read_text(encoding="utf-8")) == result
+
+
+@pytest.mark.parametrize("mount", [None, ""])
+def test_copy_gold_refuses_a_remote_files_root_without_a_mount_before_writing(spark, loaded_lake, tmp_path, mount):
+    local = LakePaths.local(str(tmp_path / "capstone"))
+    target = LakePaths(local.tables_root, "abfss://ws@host/lh/Files", files_mount=mount)
+
+    with pytest.raises(ValueError, match="files mount"):
+        copy_gold(spark, loaded_lake[0], target, ["dim_date"])
+
+    assert not Path(local.tables_root).exists()
+
+
+def test_copy_gold_reads_each_table_at_the_version_it_recorded(spark, tmp_path, monkeypatch):
+    # A load that lands between recording the versions and reading must not reach the snapshot.
+    source = LakePaths.local(str(tmp_path / "source"))
+    path = source.table("gold", "dim_project")
+    spark.createDataFrame([("p1", "one")], "project string, name string").write.format("delta").save(path)
+    spark.createDataFrame([("p1", "one"), ("p2", "two")], "project string, name string").write.format(
+        "delta"
+    ).mode("overwrite").save(path)
+    assert _latest_version(spark, source, "dim_project") == 1
+    monkeypatch.setattr(snapshot, "_latest_version", lambda spark, path: 0)  # as if v1 landed just after
+    target = LakePaths.local(str(tmp_path / "capstone"))
+
+    result = copy_gold(spark, source, target, ["dim_project"])
+
+    assert result["versions"] == {"dim_project": 0}
+    assert result["rows"] == {"dim_project": 1}
+    assert [r["project"] for r in _gold(spark, target, "dim_project").collect()] == ["p1"]
 
 
 def test_copy_gold_overwrites_an_existing_target_table(spark, loaded_lake, tmp_path):
@@ -205,12 +242,21 @@ def test_snapshot_gold_reads_the_source_lakehouse_and_writes_the_default_one(mon
     json.dumps(result)
 
 
-def test_snapshot_gold_takes_a_comma_separated_table_list(monkeypatch):
+def test_snapshot_gold_always_copies_all_nine_tables():
+    # a partial snapshot would leave lh_capstone mixing two days of gold
+    assert list(inspect.signature(fabric_entry.snapshot_gold).parameters) == [
+        "source_workspace_id",
+        "source_lakehouse_id",
+        "context",
+    ]
+
+
+def test_snapshot_gold_trims_the_ids(monkeypatch):
     seen, _ = _capture_copy(monkeypatch)
 
-    fabric_entry.snapshot_gold(SOURCE_WS.upper(), f" {SOURCE_LH} ", CONTEXT, tables=" dim_date, ,fact_daily_cost ")
+    fabric_entry.snapshot_gold(SOURCE_WS.upper(), f" {SOURCE_LH} ", CONTEXT)
 
-    assert seen["tables"] == ["dim_date", "fact_daily_cost"]
+    assert seen["tables"] == list(SNAPSHOT_TABLES)
     assert SOURCE_WS.upper() in seen["source"].tables_root
     assert f"/{SOURCE_LH}/Tables" in seen["source"].tables_root
 
@@ -343,9 +389,9 @@ def test_notebook_platform_names_the_folder(name):
     [
         (
             SNAPSHOT_NOTEBOOK,
-            ['source_workspace_id = ""', 'source_lakehouse_id = ""', 'tables = ""'],
+            ['source_workspace_id = ""', 'source_lakehouse_id = ""'],
             "summary = lakehouse.fabric_entry.snapshot_gold("
-            "source_workspace_id, source_lakehouse_id, notebookutils.runtime.context, tables)",
+            "source_workspace_id, source_lakehouse_id, notebookutils.runtime.context)",
         ),
         (
             EXPECTED_NOTEBOOK,
@@ -394,6 +440,12 @@ def test_notebook_has_no_forbidden_patterns_or_foreign_ids(name):
     assert "@" not in text  # no address: the source's OneLake path is built in the package
 
 
+def test_snapshot_notebook_has_no_tables_parameter():
+    parameters = _notebook(SNAPSHOT_NOTEBOOK).split(PARAMETERS_MARKER, 1)[1].split("# METADATA", 1)[0]
+    assert "tables" not in parameters
+    assert "tables" not in _notebook(SNAPSHOT_NOTEBOOK).rsplit(CELL_MARKER, 1)[1]
+
+
 def test_snapshot_notebook_says_how_and_when_it_runs():
     text = _notebook(SNAPSHOT_NOTEBOOK)
     markdown = " ".join(text.split(MARKDOWN_MARKER, 1)[1].split(PARAMETERS_MARKER, 1)[0].lower().split())
@@ -401,6 +453,7 @@ def test_snapshot_notebook_says_how_and_when_it_runs():
     assert "lh_portfolio" in markdown and "lh_capstone" in markdown
     assert "never committed" in markdown
     assert "snapshot.json" in markdown
+    assert "all nine gold tables" in markdown
 
 
 def test_expected_notebook_says_where_it_reads_and_writes():
