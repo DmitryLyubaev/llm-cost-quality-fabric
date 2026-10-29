@@ -71,7 +71,7 @@ Cost Management export ──► storage ─┘   via OneLake shortcut, read thr
 | `fact_daily_cost` | cost-export line: resource × meter × day |
 | `fact_live_check` | check × session |
 | `dim_model_deployment` | deployment version (Type 2, from Terraform's git history) |
-| `dim_project` | project 1–10, plus `releaselens-shared` and `untagged` |
+| `dim_project` | project 1–10, plus `capstone`, `releaselens-shared` and `untagged` |
 | `dim_study` | study run |
 | `dim_arm` | arm within a study |
 | `dim_date` | day |
@@ -185,6 +185,6 @@ pytest -q
 | `fabric/` | Fabric item definitions (lakehouse, notebooks, pipeline) and `parameter.yml` |
 | `fabric-capstone/` | The capstone data agent, deployed by hand (`publish-capstone`) |
 | `.deploy/deploy.py` | Wheel upload, `fabric-cicd` publish, shortcut |
-| `infra/` | Terraform: Fabric workspaces, cost-export storage |
+| `infra/` | Terraform: Fabric workspaces, cost-export storage, Event Hubs, the capstone F2 and workspace (`infra/capstone/`) |
 | `docs/superpowers/` | Design spec and implementation plans |
 | `docs/research/` | Dated Fabric research the design relies on |

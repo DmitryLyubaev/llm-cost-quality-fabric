@@ -5,7 +5,8 @@ import re
 from pathlib import Path
 
 INFRA = Path(__file__).resolve().parent.parent / "infra"
-STACKS = ("fabric", "cost-export", "event-hubs")
+STACKS = ("fabric", "cost-export", "event-hubs", "capstone/capacity", "capstone/workspace")
+CAPSTONE_CAPACITY_NAME = '"capstonef2"'
 GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 URL = re.compile(r"https?://", re.IGNORECASE)
 BLOCK_END = "\n}\n"
@@ -78,6 +79,12 @@ def test_stacks_pin_their_provider_versions():
     hubs = (INFRA / "event-hubs" / "versions.tf").read_text(encoding="utf-8")
     assert 'source  = "hashicorp/azurerm"' in hubs
     assert 'version = "~> 4.0"' in hubs
+    capacity = (INFRA / "capstone" / "capacity" / "versions.tf").read_text(encoding="utf-8")
+    assert 'source  = "hashicorp/azurerm"' in capacity
+    assert 'version = "~> 4.0"' in capacity
+    workspace = (INFRA / "capstone" / "workspace" / "versions.tf").read_text(encoding="utf-8")
+    assert 'source  = "microsoft/fabric"' in workspace
+    assert 'version = "~> 1.14"' in workspace
 
 
 def test_fabric_stack_shape():
@@ -254,3 +261,114 @@ def test_readme_describes_the_event_hubs_stack():
     readme = (INFRA / "README.md").read_text(encoding="utf-8")
     assert "`event-hubs/`" in readme
     assert "rg-p10-event-hubs" in readme
+
+
+# The capstone (Task 6): the F2 is Azure (the personal subscription owner), the workspace is Fabric
+# (fabric@). One apply cannot sign in as both (the Azure CLI config directory is process-wide), so
+# there are two stacks under infra/capstone/.
+
+
+def test_capstone_capacity_stack_shape():
+    text = stack_text("capstone/capacity")
+    expected = {
+        ("azurerm_resource_group", "capstone"): (
+            'name = "rg-p12-capstone"',
+            "location = var.location",
+            'project = "capstone"',
+        ),
+        ("azurerm_fabric_capacity", "capstone"): (
+            "name = " + CAPSTONE_CAPACITY_NAME,
+            "resource_group_name = azurerm_resource_group.capstone.name",
+            "location = azurerm_resource_group.capstone.location",
+            "administration_members = [var.capacity_admin_upn]",
+            'sku { name = "F2" tier = "Fabric" }',
+            'project = "capstone"',
+        ),
+    }
+    for (rtype, name), needles in expected.items():
+        block = squash(resource_block(text, rtype, name))
+        for needle in needles:
+            assert needle in block, (rtype, name, needle)
+    assert text.count('resource "azurerm_resource_group" ') == 1
+    assert text.count('resource "azurerm_fabric_capacity" ') == 1
+    assert text.count("\nresource ") + text.startswith("resource ") == 2
+
+
+def test_capstone_capacity_is_an_f2_and_no_other_sku():
+    block = squash(resource_block(stack_text("capstone/capacity"), "azurerm_fabric_capacity", "capstone"))
+    assert re.findall(r'name = "F\d+"', block) == ['name = "F2"']
+
+
+def test_capstone_workspace_stack_shape():
+    text = stack_text("capstone/workspace")
+    block = squash(resource_block(text, "fabric_workspace", "capstone"))
+    assert 'display_name = "capstone"' in block
+    assert "capacity_id = data.fabric_capacity.capstone.id" in block
+    lookup = squash(text.split('data "fabric_capacity" "capstone" {', 1)[1].split(BLOCK_END, 1)[0]).strip()
+    assert lookup.startswith("display_name = " + CAPSTONE_CAPACITY_NAME)
+    assert text.count('resource "fabric_workspace" ') == 1
+    assert text.count("\nresource ") + text.startswith("resource ") == 1
+
+
+def test_capstone_workspace_looks_up_the_capacity_the_other_stack_creates():
+    capacity = squash(resource_block(stack_text("capstone/capacity"), "azurerm_fabric_capacity", "capstone"))
+    workspace = squash(stack_text("capstone/workspace"))
+    assert "name = " + CAPSTONE_CAPACITY_NAME in capacity
+    assert "display_name = " + CAPSTONE_CAPACITY_NAME in workspace
+
+
+def test_capstone_stacks_use_one_provider_each():
+    capacity = stack_text("capstone/capacity")
+    workspace = stack_text("capstone/workspace")
+    assert "microsoft/fabric" not in capacity and 'provider "fabric"' not in capacity
+    assert "hashicorp/azurerm" not in workspace and 'provider "azurerm"' not in workspace
+    assert "subscription_id = var.subscription_id" in capacity
+    assert 'provider "fabric" {}' in workspace
+
+
+def test_capstone_stacks_have_no_outputs():
+    for stack in ("capstone/capacity", "capstone/workspace"):
+        outputs = "\n".join(code_lines(INFRA / stack / "outputs.tf"))
+        assert "output " not in outputs, stack
+
+
+def test_capstone_capacity_variables_are_sensitive_without_defaults():
+    variables = (INFRA / "capstone" / "capacity" / "variables.tf").read_text(encoding="utf-8")
+    for name in ("subscription_id", "capacity_admin_upn"):
+        block = variables.split(f'variable "{name}"', 1)[1].split(BLOCK_END, 1)[0]
+        assert not sets_default(block), name
+        assert squash("sensitive = true") in squash(block), name
+    location = variables.split('variable "location"', 1)[1].split(BLOCK_END, 1)[0]
+    assert 'default     = "australiaeast"' in location
+
+
+def test_capstone_commits_no_upn_and_the_example_holds_placeholders():
+    for path in (INFRA / "capstone").rglob("*"):
+        if path.suffix in (".tf", ".example", ".md"):
+            text = path.read_text(encoding="utf-8")
+            assert "onmicrosoft" not in text, path
+            assert not GUID.search(text), path
+    example = (INFRA / "capstone" / "capacity" / "terraform.tfvars.example").read_text(encoding="utf-8")
+    for name in ("subscription_id", "capacity_admin_upn"):
+        assert re.search(rf'^{name}\s*=\s*"<[^>]+>"', example, re.MULTILINE), name
+
+
+def test_capstone_readme_documents_the_two_sign_ins():
+    readme = (INFRA / "capstone" / "README.md").read_text(encoding="utf-8")
+    assert "AZURE_CONFIG_DIR" in readme
+    assert "capacity/" in readme and "workspace/" in readme
+    assert "rg-p12-capstone" in readme and "F2" in readme
+    assert "terraform destroy" in readme
+
+
+def test_ci_validates_the_capstone_stacks():
+    ci = (INFRA.parent / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    for stack in ("infra/capstone/capacity", "infra/capstone/workspace"):
+        assert f"terraform -chdir={stack} init -backend=false" in ci
+        assert f"terraform -chdir={stack} validate" in ci
+
+
+def test_infra_readme_describes_the_capstone_stacks():
+    readme = (INFRA / "README.md").read_text(encoding="utf-8")
+    assert "`capstone/`" in readme
+    assert "rg-p12-capstone" in readme

@@ -41,7 +41,7 @@ come from `docs/research/2026-10-25-data-agent-facts.md`, sections 2 and 3. This
 
 | File | Key | What to check |
 |---|---|---|
-| `stage_config.json`, `datasource.json` | table descriptions | Each carries `lakehouse.gold.build.GRAINS[table]` word for word (a test enforces it). Task 6 adds a `capstone` project, which changes `dim_project`'s grain line; update both descriptions to the new line before the freeze. The instructions name no fixed list of projects: they point to `dim_project`. |
+| `stage_config.json`, `datasource.json` | table descriptions | Each carries `lakehouse.gold.build.GRAINS[table]` word for word (a test enforces it). Task 6 added a `capstone` project, which changed `dim_project`'s grain line; both descriptions already carry the new line. The instructions name no fixed list of projects: they point to `dim_project`. |
 
 ## The deploy `publish-capstone` and `parameter.yml`
 

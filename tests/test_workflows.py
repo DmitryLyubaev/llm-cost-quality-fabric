@@ -129,6 +129,11 @@ def test_no_workflow_touches_the_capstone(name):
     """The capstone's data agent is deployed by hand as fabric@ (publish-capstone), never from
     Actions, whether by the deploy service principal or by CI."""
     text = (WORKFLOWS / name).read_text(encoding="utf-8")
+    # The one exception: CI checks the capstone's Terraform stacks (infra/capstone/*), format and
+    # validate only, as for every stack. That is infrastructure, not the data agent.
+    text = "\n".join(
+        line for line in text.splitlines() if not line.strip().startswith("terraform -chdir=infra/capstone/")
+    )
     for value in ("publish-capstone", "fabric-capstone", "CAPSTONE_WORKSPACE_ID", "capstone", "CAPSTONE"):
         assert value not in text
 
@@ -349,7 +354,13 @@ def test_ci_hygiene_runs_always_and_fails_on_push_without_the_secret(ci):
 def test_ci_validates_all_terraform_stacks(ci):
     runs = "\n".join(str(s.get("run", "")) for s in steps(ci["jobs"]["test"]))
     assert "terraform fmt -check -recursive infra" in runs
-    for stack in ("infra/fabric", "infra/cost-export", "infra/event-hubs"):
+    for stack in (
+        "infra/fabric",
+        "infra/cost-export",
+        "infra/event-hubs",
+        "infra/capstone/capacity",
+        "infra/capstone/workspace",
+    ):
         assert f"terraform -chdir={stack} init -backend=false" in runs
         assert f"terraform -chdir={stack} validate" in runs
     for forbidden in ("terraform plan", "terraform apply"):

@@ -1,0 +1,4 @@
+# Copy to terraform.tfvars (git-ignored) and fill in. Never commit real values.
+subscription_id    = "<subscription id>"
+capacity_admin_upn = "<UPN of the fabric@ user>"
+# location defaults to australiaeast (the trial capacity's region).

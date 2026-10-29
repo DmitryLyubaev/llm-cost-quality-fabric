@@ -52,6 +52,10 @@ jobs:
           terraform -chdir=infra/cost-export init -backend=false && terraform -chdir=infra/cost-export validate
       - run: |
           terraform -chdir=infra/event-hubs init -backend=false && terraform -chdir=infra/event-hubs validate
+      - run: |
+          terraform -chdir=infra/capstone/capacity init -backend=false && terraform -chdir=infra/capstone/capacity validate
+      - run: |
+          terraform -chdir=infra/capstone/workspace init -backend=false && terraform -chdir=infra/capstone/workspace validate
       # The forbidden values live in a secret. A push must have it; a pull request from a fork has
       # no secrets, so only the forbidden-value part is skipped there (the structural checks run).
       - name: Hygiene

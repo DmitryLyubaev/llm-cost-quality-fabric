@@ -160,7 +160,7 @@ def test_copy_gold_overwrites_an_existing_target_table(spark, loaded_lake, tmp_p
 
     copied = _gold(spark, target, "dim_project")
     assert copied.columns == _gold(spark, source, "dim_project").columns
-    assert copied.count() == result["rows"]["dim_project"] == 12
+    assert copied.count() == result["rows"]["dim_project"] == 13
 
 
 def test_copy_gold_copies_all_nine_tables(spark, loaded_lake, tmp_path):
