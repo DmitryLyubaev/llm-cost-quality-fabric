@@ -303,11 +303,28 @@ def test_capstone_workspace_stack_shape():
     text = stack_text("capstone/workspace")
     block = squash(resource_block(text, "fabric_workspace", "capstone"))
     assert 'display_name = "capstone"' in block
-    assert "capacity_id = data.fabric_capacity.capstone.id" in block
+    assert "capacity_id = coalesce(var.capacity_id, one(data.fabric_capacity.capstone[*].id))" in block
     lookup = squash(text.split('data "fabric_capacity" "capstone" {', 1)[1].split(BLOCK_END, 1)[0]).strip()
-    assert lookup.startswith("display_name = " + CAPSTONE_CAPACITY_NAME)
+    assert "count = var.capacity_id == null ? 1 : 0" in lookup
+    assert "display_name = " + CAPSTONE_CAPACITY_NAME in lookup
     assert text.count('resource "fabric_workspace" ') == 1
     assert text.count("\nresource ") + text.startswith("resource ") == 1
+
+
+def test_capstone_workspace_requires_an_active_f2():
+    text = stack_text("capstone/workspace")
+    lookup = squash(text.split('data "fabric_capacity" "capstone" {', 1)[1].split(BLOCK_END, 1)[0])
+    assert "lifecycle { postcondition {" in lookup
+    assert 'condition = self.sku == "F2" && self.state == "Active"' in lookup
+    assert "error_message" in lookup
+
+
+def test_capstone_workspace_capacity_id_override_is_optional_and_not_a_secret_default():
+    variables = (INFRA / "capstone" / "workspace" / "variables.tf").read_text(encoding="utf-8")
+    block = squash(variables.split('variable "capacity_id"', 1)[1].split(BLOCK_END, 1)[0])
+    assert "type = string" in block
+    assert "default = null" in block
+    assert "var.capacity_id == null" in block and "trimspace(var.capacity_id)" in block  # validation
 
 
 def test_capstone_workspace_looks_up_the_capacity_the_other_stack_creates():
@@ -342,6 +359,15 @@ def test_capstone_capacity_variables_are_sensitive_without_defaults():
     assert 'default     = "australiaeast"' in location
 
 
+def test_capstone_location_is_the_f2s_own_region_and_not_empty():
+    variables = (INFRA / "capstone" / "capacity" / "variables.tf").read_text(encoding="utf-8")
+    location = squash(variables.split('variable "location"', 1)[1].split(BLOCK_END, 1)[0])
+    assert "the F2's own region" in location
+    assert "may differ from the trial capacity's" in location
+    assert "assumption" in location and "start of the live run" in location
+    assert "length(trimspace(var.location)) > 0" in location
+
+
 def test_capstone_commits_no_upn_and_the_example_holds_placeholders():
     for path in (INFRA / "capstone").rglob("*"):
         if path.suffix in (".tf", ".example", ".md"):
@@ -372,3 +398,14 @@ def test_infra_readme_describes_the_capstone_stacks():
     readme = (INFRA / "README.md").read_text(encoding="utf-8")
     assert "`capstone/`" in readme
     assert "rg-p12-capstone" in readme
+
+
+def test_capstone_readme_covers_destroy_order_provider_registration_and_the_lookup_checks():
+    readme = (INFRA / "capstone" / "README.md").read_text(encoding="utf-8")
+    flat = squash(readme)
+    assert "az provider register --namespace Microsoft.Fabric" in readme
+    assert "az provider show --namespace Microsoft.Fabric" in readme
+    assert "destroy `workspace/` before `capacity/`" in flat
+    assert "-refresh=false" in readme
+    assert "capacity_id" in readme and "postcondition" in readme
+    assert "assumption" in flat
