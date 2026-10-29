@@ -43,33 +43,46 @@ class ReportError(Exception):
 # 1. URLs with a scheme (`abfss://container@account...` too, whole), so a GUID, address or SAS
 #    signature inside one goes with it. A URL runs to the first space, quote, angle bracket, backtick
 #    or backslash; punctuation that ends a sentence or closes a bracket is given back.
-# 2. Credentials: `Bearer <anything>`, a JWT (`eyJ...`), and SAS parameter values (`sig=...`) become
-#    `<token>`; the word `Bearer` and the parameter name stay.
+# 2. Credentials become `<token>`, shaped tightly so scored prose is never touched:
+#    - `Bearer` followed by a token of at least 20 characters from [\w.~+/-] (and `=` padding); the
+#      word stays, so "the bearer of 3 checks" is left alone;
+#    - a JWT (`eyJ...`);
+#    - SAS parameter values (`sig`, `skoid`, `sktid`, `se`, `sv`, `st`, `sp`, `spr`, `srt`, `ss`),
+#      only in a run of `&`-joined parameters that holds a `sig=`; the names stay, so "sp=12 failed"
+#      is left alone.
 # 3. Email addresses.
-# 4. Hosts without a scheme (`api.example.com/v1/...`). The first label starts with a letter, so
-#    `3.ms` and `1.5.us` are not hosts. A common top-level domain is required, so `gpt-5.6-luna` and
-#    `0.75` are not either; and a risky TLD that is also a word or a namespace (ms, ai, azure,
-#    microsoft, windows, app, dev) needs two labels before it, so `Microsoft.Azure` and `p2.dev` stay.
+# 4. Hosts without a scheme (`api.example.com/v1/...`). Every label holds a letter, so `3.ms` and
+#    `1.5.us` are not hosts but `9lake.dfs.core.windows.net` is. A common top-level domain is
+#    required, so `gpt-5.6-luna` and `0.75` are not hosts either; and a risky TLD that is also a word
+#    or a namespace (ms, ai, azure, microsoft, windows, app, dev) needs two labels before it, so
+#    `Microsoft.Azure` and `p2.dev` stay.
 # 5. GUIDs: any 8-4-4-4-12 hex run, even inside a longer token (over-redacting an ID is safe and no
-#    figure or label has that shape), and a dashless 32-hex word.
+#    figure or label has that shape), and a run of exactly 32 hex digits, wherever it stands.
 _REST = r"[^\s\"'<>\\`]"
 _URL = re.compile(rf"\b(?:https?|wss?|ftp|abfss?)://{_REST}+", re.IGNORECASE)
 _URL_TAIL = re.compile(r"[.,;:!?)\]}]+$")
-_BEARER = re.compile(r"\b(bearer)\s+\S+", re.IGNORECASE)
+_BEARER = re.compile(r"\b(bearer)\s+[\w.~+/-]{20,}=*", re.IGNORECASE)
 _JWT = re.compile(r"\beyJ[\w-]+\.[\w-]+\.[\w-]*")
-_SAS = re.compile(r"\b(sig|skoid|sktid|se|sv|st|sp|spr|srt|ss)=[^&\s\"]+")
+_PARAMS = re.compile(r"[\w.-]+=[^&\s\"]*(?:&[\w.-]+=[^&\s\"]*)*")
+_SIGNED = re.compile(r"(?:^|&)sig=")
+_SAS = re.compile(r"(^|&)(sig|skoid|sktid|se|sv|st|sp|spr|srt|ss)=[^&\s\"]*")
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b")
 _SAFE_TLDS = "com|net|org|io|cloud|invalid|local|internal|au|uk|us|eu"
 _RISKY_TLDS = "ms|ai|azure|microsoft|windows|app|dev"
-_FIRST = r"[A-Za-z][A-Za-z0-9-]*\."
-_LABEL = r"[A-Za-z0-9-]+\."
+_LABEL = r"(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]+\."  # a label that holds a letter
 _HOST = re.compile(
-    rf"(?<![\w@.-])(?:{_FIRST}(?:{_LABEL})*(?:{_SAFE_TLDS})|{_FIRST}(?:{_LABEL})+(?:{_RISKY_TLDS}))"
+    rf"(?<![\w@.-])(?:(?:{_LABEL})+(?:{_SAFE_TLDS})|{_LABEL}(?:{_LABEL})+(?:{_RISKY_TLDS}))"
     rf"\b(?![.-]\w)(?:[/:?#]{_REST}*)?",
     re.IGNORECASE,
 )
 _GUID = re.compile(r"[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}")
-_HEX32 = re.compile(r"\b[0-9a-fA-F]{32}\b")
+_HEX32 = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{32}(?![0-9a-fA-F])")
+
+
+def _sas(match: re.Match) -> str:
+    """The SAS values in a run of `&`-joined parameters, if the run is signed (holds `sig=`)."""
+    run = match.group(0)
+    return _SAS.sub(r"\1\2=<token>", run) if _SIGNED.search(run) else run
 
 
 def _url(match: re.Match) -> str:
@@ -83,7 +96,7 @@ def redact(text: str) -> str:
     text = _URL.sub(_url, text)
     text = _BEARER.sub(r"\1 <token>", text)
     text = _JWT.sub("<token>", text)
-    text = _SAS.sub(r"\1=<token>", text)
+    text = _PARAMS.sub(_sas, text)
     text = _EMAIL.sub("<email>", text)
     text = _HOST.sub(_url, text)
     text = _GUID.sub("<id>", text)

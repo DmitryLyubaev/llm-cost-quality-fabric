@@ -26,6 +26,7 @@ QUESTIONS = [
 ]
 EXPECTED = {"q01": {"currency": "AUD", "rows": 1, "value": 1234.56}}
 GUID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+HEX32 = "0f8fad5bd9cb469fa16570867728950e"
 EMAIL = "someone.else@example.org"
 LINK = "https://app.fabric.microsoft.com/groups/abc/reports?x=1"
 
@@ -209,6 +210,9 @@ def test_redacts_a_url_a_guid_and_an_email_before_writing(inputs):
         "Projects p1, p4 & p7 had failures; -A$3.40 refund; 10/25/2026 14:05; 5-7 days; 1.5x.",
         "fabric@ ran it; version 2 vs v1.2.3.",
         "A$1,234.56 and 98.3% for p4 with gpt-5.6-luna and gpt-4.1-2025-04-14.",
+        "the bearer of 3 checks; Bearer short-token-123 failed",
+        "sp=12 failed and st=3 passed; sv=1&sp=r&se=2 without a signature",
+        f"a 33-hex run {HEX32}a or 31 {HEX32[:31]} is not an ID",
         "e.g. the p7 checks: i.e. 3 failed. Rate 0.995 vs .75; ratio 3.2.1-beta; file report.md.",
     ],
 )
@@ -218,7 +222,6 @@ def test_redaction_leaves_numbers_and_project_labels_alone(text):
 
 # Built at run time so this file holds no token-shaped literal.
 JWT = "eyJ" + "hbGciOiJSUzI1NiJ9" + ".eyJ" + "zdWIiOiJ4In0" + ".c2lnbmF0dXJl-_x"
-HEX32 = "0f8fad5bd9cb469fa16570867728950e"
 
 
 @pytest.mark.parametrize(
@@ -226,11 +229,16 @@ HEX32 = "0f8fad5bd9cb469fa16570867728950e"
     [
         (f"token {JWT} used", "token <token> used"),
         (f"header Authorization: Bearer {JWT}", "header Authorization: Bearer <token>"),
-        ("auth bearer abc.def-123 failed", "auth bearer <token> failed"),
+        ("auth bearer abc.def-123_456~789+0/xyz= failed", "auth bearer <token> failed"),
         ("query ?sv=2024-01-01&se=2026-11-10&sp=r&sig=AbC%2Bx%3D done",
          "query ?sv=<token>&se=<token>&sp=<token>&sig=<token> done"),
-        ("skoid=x1 sktid=y2 st=2026 spr=https srt=sco ss=b", "skoid=<token> sktid=<token> st=<token> spr=<token> srt=<token> ss=<token>"),
+        ("skoid=x1&sktid=y2&st=2026&spr=https&srt=sco&ss=b&sig=abc",
+         "skoid=<token>&sktid=<token>&st=<token>&spr=<token>&srt=<token>&ss=<token>&sig=<token>"),
         (f"item {HEX32}.", "item <id>."),
+        (f"item {HEX32}: 12 checks, A$3.40", "item <id>: 12 checks, A$3.40"),
+        (f"ws_{HEX32}_x", "ws_<id>_x"),
+        (f"id={HEX32}", "id=<id>"),
+        ("read 9lake.dfs.core.windows.net/x/y now", "read <url> now"),
         (f"read abfss://gold@acct.dfs.core.windows.net/Tables/{GUID} ok", "read <url> ok"),
         ("abfs://c@a.dfs.core.windows.net/x", "<url>"),
     ],
