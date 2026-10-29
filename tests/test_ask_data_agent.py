@@ -1,5 +1,6 @@
 """The direct-route runner: canned MCP responses through a fake transport, no live call."""
 
+import http.client
 import io
 import json
 import urllib.error
@@ -32,7 +33,10 @@ LINK = "https://app.fabric.microsoft.com/groups/abc/reports?x=1"
 class FakeTransport:
     """Canned MCP over streamable HTTP. `answers` maps question text to the tool's text content."""
 
-    def __init__(self, answers=None, sse=False, status=None, tools=None, rpc_error=None, fail_after=None):
+    def __init__(
+        self, answers=None, sse=False, status=None, tools=None, rpc_error=None, fail_after=None, is_error=False
+    ):
+        self.is_error = is_error
         self.answers = answers or {}
         self.sse = sse
         self.status = status
@@ -80,7 +84,9 @@ class FakeTransport:
                 return 503, {}, b""
             question = message["params"]["arguments"]["userQuestion"]
             text = self.answers.get(question, "not in the data")
-            return self._reply(message["id"], {"content": [{"type": "text", "text": text}], "isError": False})
+            if self.is_error:
+                text = f"capacity paused at {ENDPOINT}"
+            return self._reply(message["id"], {"content": [{"type": "text", "text": text}], "isError": self.is_error})
         raise AssertionError(f"unexpected method {method}")
 
     def _tool_calls(self):
@@ -202,11 +208,45 @@ def test_redacts_a_url_a_guid_and_an_email_before_writing(inputs):
         "From 2026-10-06 to 2026-10-09 project p4 cost 0.0047 USD; untagged and releaselens-shared too.",
         "Projects p1, p4 & p7 had failures; -A$3.40 refund; 10/25/2026 14:05; 5-7 days; 1.5x.",
         "fabric@ ran it; version 2 vs v1.2.3.",
+        "A$1,234.56 and 98.3% for p4 with gpt-5.6-luna and gpt-4.1-2025-04-14.",
         "e.g. the p7 checks: i.e. 3 failed. Rate 0.995 vs .75; ratio 3.2.1-beta; file report.md.",
     ],
 )
 def test_redaction_leaves_numbers_and_project_labels_alone(text):
     assert redact(text) == text
+
+
+# Built at run time so this file holds no token-shaped literal.
+JWT = "eyJ" + "hbGciOiJSUzI1NiJ9" + ".eyJ" + "zdWIiOiJ4In0" + ".c2lnbmF0dXJl-_x"
+HEX32 = "0f8fad5bd9cb469fa16570867728950e"
+
+
+@pytest.mark.parametrize(
+    "text, redacted",
+    [
+        (f"token {JWT} used", "token <token> used"),
+        (f"header Authorization: Bearer {JWT}", "header Authorization: Bearer <token>"),
+        ("auth bearer abc.def-123 failed", "auth bearer <token> failed"),
+        ("query ?sv=2024-01-01&se=2026-11-10&sp=r&sig=AbC%2Bx%3D done",
+         "query ?sv=<token>&se=<token>&sp=<token>&sig=<token> done"),
+        ("skoid=x1 sktid=y2 st=2026 spr=https srt=sco ss=b", "skoid=<token> sktid=<token> st=<token> spr=<token> srt=<token> ss=<token>"),
+        (f"item {HEX32}.", "item <id>."),
+        (f"read abfss://gold@acct.dfs.core.windows.net/Tables/{GUID} ok", "read <url> ok"),
+        ("abfs://c@a.dfs.core.windows.net/x", "<url>"),
+    ],
+)
+def test_redaction_of_tokens_and_other_id_shapes(text, redacted):
+    assert redact(text) == redacted
+
+
+@pytest.mark.parametrize("text", ["Microsoft.Azure", "p2.dev", "3.ms", "1.5.us", "use Microsoft.ai", "Fabric.AI and p3.app", "gpt-4.1-2025-04-14"])
+def test_the_host_pattern_leaves_dotted_words_alone(text):
+    assert redact(text) == text
+
+
+@pytest.mark.parametrize("text", ["api.fabric.contoso.dev/v1", "x.y.ms", "model.studio.ai", "my.service.azure"])
+def test_a_risky_tld_after_two_labels_is_a_host(text):
+    assert redact(text) == "<url>"
 
 
 def test_redaction_patterns():
@@ -271,6 +311,38 @@ def test_a_json_rpc_error_gives_its_code_only(inputs, capsys):
     assert "-32603" in err
 
 
+def test_a_tool_result_flagged_as_an_error_stops_the_run(inputs, capsys):
+    assert ask_data_agent.main(inputs["args"], transport=FakeTransport(is_error=True)) == 3
+    err = _assert_no_endpoint(capsys, inputs["out"]).err
+    assert "tool-error" in err
+    assert list(inputs["out"].glob("*.jsonl")) == []
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "sentinelhost.example/sentinelpath/mcp",
+        "https://sentinelhost.example/sentinel path/mcp",
+        "https://sentinel host.example/sentinelpath",
+        "http://sentinelhost.example/sentinelpath",
+        "https:///sentinelpath",
+        "https://[sentinelhost/sentinelpath",
+        "https://sentinelhost.example/sentinelpath\x01",
+    ],
+)
+def test_a_bad_endpoint_is_refused_without_naming_it(inputs, capsys, monkeypatch, value):
+    monkeypatch.setenv(ask_data_agent.ENV_URL, value)
+    fake = FakeTransport()
+
+    assert ask_data_agent.main(inputs["args"], transport=fake) == 2
+
+    assert fake.calls == []
+    captured = capsys.readouterr()
+    assert captured.err.strip() == ask_data_agent.MSG_BAD_URL
+    for text in (captured.out, captured.err):
+        assert "sentinel" not in text and "example" not in text
+
+
 def test_a_failure_mid_run_leaves_no_complete_record_file(inputs, capsys):
     assert ask_data_agent.main(inputs["args"], transport=FakeTransport(fail_after=2)) == 3
     assert list(inputs["out"].glob("*.jsonl")) == []
@@ -317,6 +389,7 @@ def test_http_transport_posts_with_a_bearer_token(monkeypatch):
 
     def urlopen(request, timeout):
         seen["url"], seen["headers"], seen["body"] = request.full_url, dict(request.header_items()), request.data
+        seen["timeout"] = timeout
         return _Response(b"{}")
 
     monkeypatch.setattr(ask_data_agent.urllib.request, "urlopen", urlopen)
@@ -328,6 +401,7 @@ def test_http_transport_posts_with_a_bearer_token(monkeypatch):
     assert headers["Mcp-Session-Id"] == "s"
     assert seen["url"] == ENDPOINT and seen["body"] == b'{"x": 1}'
     assert seen["headers"]["Authorization"] == "Bearer tok-123"
+    assert seen["timeout"] == 5
 
 
 @pytest.mark.parametrize(
@@ -387,3 +461,45 @@ def test_the_schema_requires_every_record_field():
         "tool_calls", "input_tokens", "output_tokens", "wall_ms", "started_utc",
     ]  # fmt: skip
     assert schema["additionalProperties"] is False
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        http.client.InvalidURL(f"URL can't contain control characters. {ENDPOINT!r}"),
+        http.client.RemoteDisconnected(f"closed by {ENDPOINT}"),
+        ValueError(f"bad {ENDPOINT}"),
+    ],
+)
+def test_http_client_errors_become_a_network_code(monkeypatch, error):
+    def urlopen(request, timeout):
+        raise error
+
+    monkeypatch.setattr(ask_data_agent.urllib.request, "urlopen", urlopen)
+    transport = ask_data_agent.HttpTransport(ENDPOINT, lambda: "tok", timeout=5)
+
+    with pytest.raises(ask_data_agent.McpError) as raised:
+        transport.post(b"{}", {})
+    assert raised.value.code == "network" and "sentinel" not in str(raised.value)
+
+
+def test_a_url_the_request_cannot_take_becomes_a_network_code():
+    transport = ask_data_agent.HttpTransport("sentinel-no-scheme/path", lambda: "tok", timeout=5)
+
+    with pytest.raises(ask_data_agent.McpError) as raised:
+        transport.post(b"{}", {})
+    assert raised.value.code == "network" and "sentinel" not in str(raised.value)
+
+
+def test_an_http_error_whose_body_cannot_be_read_keeps_its_status(monkeypatch):
+    class Unreadable(io.BytesIO):
+        def read(self, *args):
+            raise http.client.IncompleteRead(b"")
+
+    def urlopen(request, timeout):
+        raise urllib.error.HTTPError(ENDPOINT, 502, "Bad Gateway", {}, Unreadable())
+
+    monkeypatch.setattr(ask_data_agent.urllib.request, "urlopen", urlopen)
+    transport = ask_data_agent.HttpTransport(ENDPOINT, lambda: "tok", timeout=5)
+
+    assert transport.post(b"{}", {}) == (502, {}, b"")

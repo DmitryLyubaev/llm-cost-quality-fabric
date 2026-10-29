@@ -6,7 +6,8 @@
 
 It takes the same freeze options as tools/capstone_freeze.py and refuses to start (exit 1, naming
 the component) unless verify_freeze passes on them. The endpoint is read from the environment
-variable CAPSTONE_MCP_URL and is never printed: error messages give the HTTP status and a code only.
+variable CAPSTONE_MCP_URL, which must be an https URL with a host, and is never printed: error
+messages give the HTTP status and a code only.
 Sign in first with `az login` as fabric@: the token for https://api.fabric.microsoft.com/.default
 comes from AzureCliCredential (`pip install azure-identity`; the deploy extra has it).
 
@@ -29,8 +30,10 @@ import argparse
 import json
 import os
 import sys
+import http.client
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -88,16 +91,36 @@ class HttpTransport:
         self._url, self._token, self._timeout = url, token, timeout
 
     def post(self, body: bytes, headers: dict) -> tuple[int, dict, bytes]:
-        request = urllib.request.Request(
-            self._url, data=body, method="POST", headers={**headers, "Authorization": f"Bearer {self._token()}"}
-        )
+        # Everything that touches the URL is inside the try: urllib's and http.client's messages
+        # (ValueError, InvalidURL and other HTTPExceptions) may quote the URL or its path.
         try:
+            request = urllib.request.Request(
+                self._url, data=body, method="POST", headers={**headers, "Authorization": f"Bearer {self._token()}"}
+            )
             with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 return response.status, dict(response.headers.items()), response.read()
         except urllib.error.HTTPError as error:
-            return error.code, dict(error.headers.items()) if error.headers else {}, error.read() or b""
-        except (urllib.error.URLError, OSError):
+            try:
+                payload = error.read() or b""
+            except Exception:  # a failed read of an error body is still that HTTP status
+                payload = b""
+            return error.code, dict(error.headers.items()) if error.headers else {}, payload
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
             raise McpError(None, "network") from None
+
+
+MSG_BAD_URL = f"{ENV_URL} is not an https URL with a host"
+
+
+def check_endpoint(url: str) -> None:
+    """InputError (fixed text, never the URL) unless `url` is https, has a host and no whitespace."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname
+    except ValueError:
+        raise InputError(MSG_BAD_URL) from None
+    if parts.scheme.lower() != "https" or not host or any(c.isspace() or ord(c) < 0x20 or c == "\x7f" for c in url):
+        raise InputError(MSG_BAD_URL)
 
 
 def _lower(headers: dict) -> dict:
@@ -260,6 +283,7 @@ def main(argv: list[str] | None = None, transport=None) -> int:
         url = os.environ.get(ENV_URL, "").strip()
         if not url:
             raise InputError(f"{ENV_URL} is not set")
+        check_endpoint(url)
         questions = json.loads(args.questions.read_text(encoding="utf-8"))
         expected = json.loads(args.expected.read_text(encoding="utf-8"))
         asked, dropped = scored_questions(questions, expected)

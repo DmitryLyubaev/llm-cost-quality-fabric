@@ -11,7 +11,8 @@ component) unless verify_freeze passes on them, so the report scores against the
 and expected answers, and states the verified snapshot time. `--runs` takes `.jsonl` files or
 folders (a folder's `*.jsonl`; an interrupted run's `.jsonl.partial` is not read). The capacity
 units are read by hand from the Capacity Metrics app; `--cu-unit` names their unit and is required
-with either figure. `--freezes` is how many freezes there were in all.
+with either figure. `--freezes` is how many freezes there were in all. Both routes need records:
+`--allow-missing-route <route>` lets one have none, and the report then says it was not run.
 
 Exit codes: 0 written; 1 the freeze is broken; 2 a usage or input error, or records that cannot be
 reported (another freeze, a duplicate, a missing pass, a broken record).
@@ -50,6 +51,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--cu-direct", type=_cu, default=None)
     parser.add_argument("--cu-foundry", type=_cu, default=None)
     parser.add_argument("--cu-unit", default=None, help='the CU figures\' unit, for example "CU-seconds"')
+    parser.add_argument(
+        "--allow-missing-route",
+        action="append",
+        choices=("direct", "foundry"),
+        default=[],
+        help="a route that may have no records; the report says it was not run (repeatable)",
+    )
     add_freeze_arguments(parser)
     return parser
 
@@ -71,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
             freezes=args.freezes,
             cu={"direct": args.cu_direct, "foundry": args.cu_foundry},
             cu_unit=args.cu_unit,
+            allow_missing=tuple(args.allow_missing_route),
         )
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(text, encoding="utf-8", newline="\n")

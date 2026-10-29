@@ -13,8 +13,10 @@ applies). The questions scored are the frozen set less any `optional` question w
 answer, which is dropped: left out, never counted wrong, and named in the report. The unanswerable
 question has no expected answer and is scored. For each route that has records, every scored
 question needs exactly one record for each of the `PASSES` passes: a missing one is an error, not a
-wrong answer. A record from another freeze, a duplicate (route, question, pass), a record for an
-unknown question or one that breaks the schema is an error too (`ReportError`).
+wrong answer. A route with no records is an error unless it is explicitly allowed to be missing
+(`allow_missing`), and is then reported as not run. A record from another freeze, a duplicate
+(route, question, pass), a record for an unknown question or one that breaks the schema is an
+error too (`ReportError`).
 
 The headline, per route: the mean number correct per pass, out of the number scored; the questions
 correct in all passes; and those correct in none.
@@ -37,20 +39,37 @@ class ReportError(Exception):
 
 # --- redaction ---
 
-# A URL runs to the first space, quote, angle bracket, backtick or backslash; punctuation that ends a
-# sentence or closes a bracket is given back. URLs go first (one may hold a GUID or an address), then
-# addresses, then a host without a scheme (`api.example.com/v1/...`, a common top-level domain
-# required, so `gpt-5.6-luna` and `0.75` are not hosts), then GUIDs: any 8-4-4-4-12 hex run, even
-# inside a longer token, since over-redacting an ID is safe and no figure or label has that shape.
+# In this order:
+# 1. URLs with a scheme (`abfss://container@account...` too, whole), so a GUID, address or SAS
+#    signature inside one goes with it. A URL runs to the first space, quote, angle bracket, backtick
+#    or backslash; punctuation that ends a sentence or closes a bracket is given back.
+# 2. Credentials: `Bearer <anything>`, a JWT (`eyJ...`), and SAS parameter values (`sig=...`) become
+#    `<token>`; the word `Bearer` and the parameter name stay.
+# 3. Email addresses.
+# 4. Hosts without a scheme (`api.example.com/v1/...`). The first label starts with a letter, so
+#    `3.ms` and `1.5.us` are not hosts. A common top-level domain is required, so `gpt-5.6-luna` and
+#    `0.75` are not either; and a risky TLD that is also a word or a namespace (ms, ai, azure,
+#    microsoft, windows, app, dev) needs two labels before it, so `Microsoft.Azure` and `p2.dev` stay.
+# 5. GUIDs: any 8-4-4-4-12 hex run, even inside a longer token (over-redacting an ID is safe and no
+#    figure or label has that shape), and a dashless 32-hex word.
 _REST = r"[^\s\"'<>\\`]"
-_URL = re.compile(rf"\b(?:https?|wss?|ftp)://{_REST}+", re.IGNORECASE)
+_URL = re.compile(rf"\b(?:https?|wss?|ftp|abfss?)://{_REST}+", re.IGNORECASE)
 _URL_TAIL = re.compile(r"[.,;:!?)\]}]+$")
+_BEARER = re.compile(r"\b(bearer)\s+\S+", re.IGNORECASE)
+_JWT = re.compile(r"\beyJ[\w-]+\.[\w-]+\.[\w-]*")
+_SAS = re.compile(r"\b(sig|skoid|sktid|se|sv|st|sp|spr|srt|ss)=[^&\s\"]+")
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b")
-_TLDS = "com|net|org|io|dev|app|ms|cloud|azure|microsoft|windows|invalid|local|internal|au|uk|us|eu"
+_SAFE_TLDS = "com|net|org|io|cloud|invalid|local|internal|au|uk|us|eu"
+_RISKY_TLDS = "ms|ai|azure|microsoft|windows|app|dev"
+_FIRST = r"[A-Za-z][A-Za-z0-9-]*\."
+_LABEL = r"[A-Za-z0-9-]+\."
 _HOST = re.compile(
-    rf"(?<![\w@.-])(?:[A-Za-z0-9-]+\.)+(?:{_TLDS})\b(?![.-]\w)(?:[/:?#]{_REST}*)?", re.IGNORECASE
+    rf"(?<![\w@.-])(?:{_FIRST}(?:{_LABEL})*(?:{_SAFE_TLDS})|{_FIRST}(?:{_LABEL})+(?:{_RISKY_TLDS}))"
+    rf"\b(?![.-]\w)(?:[/:?#]{_REST}*)?",
+    re.IGNORECASE,
 )
 _GUID = re.compile(r"[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}")
+_HEX32 = re.compile(r"\b[0-9a-fA-F]{32}\b")
 
 
 def _url(match: re.Match) -> str:
@@ -59,11 +78,16 @@ def _url(match: re.Match) -> str:
 
 
 def redact(text: str) -> str:
-    """`text` with every URL or host as `<url>`, email address as `<email>` and GUID as `<id>`."""
+    """`text` with every URL or host as `<url>`, credential as `<token>`, email address as `<email>`
+    and GUID as `<id>` (see the comment above for the order and the shapes)."""
     text = _URL.sub(_url, text)
+    text = _BEARER.sub(r"\1 <token>", text)
+    text = _JWT.sub("<token>", text)
+    text = _SAS.sub(r"\1=<token>", text)
     text = _EMAIL.sub("<email>", text)
     text = _HOST.sub(_url, text)
-    return _GUID.sub("<id>", text)
+    text = _GUID.sub("<id>", text)
+    return _HEX32.sub("<id>", text)
 
 
 def redact_json(value):
@@ -119,7 +143,7 @@ def validate_record(record, schema: dict) -> None:
             continue
         if "enum" in rule and value not in rule["enum"]:
             raise ValueError(f"{name} must be one of {rule['enum']}, got {value!r}")
-        if "pattern" in rule and not re.search(rule["pattern"], value):
+        if "pattern" in rule and not re.fullmatch(rule["pattern"], value):
             raise ValueError(f"{name} does not match {rule['pattern']}")
         if "minimum" in rule and value < rule["minimum"]:
             raise ValueError(f"{name} must be at least {rule['minimum']}, got {value}")
@@ -188,23 +212,35 @@ def _check(records: list[dict], questions: list[dict], freeze: dict) -> None:
         seen.add(key)
 
 
-def summarise(records: list[dict], questions: list[dict], expected: dict, freeze: dict) -> dict:
+def summarise(
+    records: list[dict], questions: list[dict], expected: dict, freeze: dict, allow_missing=()
+) -> dict:
     """Every record checked and scored, and the headline per route (see the module docstring).
 
-    Returns {"scored": [ids], "dropped": [ids], "ignored": n (records for dropped questions),
-    "routes": {route: {"records", "verdicts": {(id, pass): Verdict}, "per_pass", "mean", "all",
-    "none"}}}, with only the routes that have records.
+    Every route needs records, except a route named in `allow_missing`, which may have none (it is
+    then reported as not run). Returns {"scored": [ids], "dropped": [ids], "ignored": n (records
+    for dropped questions), "not_run": [routes], "routes": {route: {"records", "verdicts":
+    {(id, pass): Verdict}, "per_pass", "mean", "all", "none"}}}, with only the routes that have
+    records.
     """
+    unknown = sorted(set(allow_missing) - set(ROUTES))
+    if unknown:
+        raise ReportError(f"unknown routes {unknown}; expected some of {list(ROUTES)}")
     _check(records, questions, freeze)
     scored, dropped = scored_questions(questions, expected)
     for question in scored:
         if question["kind"] != "unanswerable" and question["id"] not in expected:
             raise ReportError(f"{question['id']} is scored but has no expected answer")
     kept = [r for r in records if r["question_id"] not in dropped]
-    routes = {}
+    routes, not_run = {}, []
     for route in ROUTES:
         mine = {(r["question_id"], r["pass"]): r for r in kept if r["route"] == route}
         if not mine:
+            if route not in allow_missing:
+                raise ReportError(
+                    f"no records for the {route} route (allow it with --allow-missing-route {route})"
+                )
+            not_run.append(route)
             continue
         missing = [(q["id"], n) for n in range(1, PASSES + 1) for q in scored if (q["id"], n) not in mine]
         if missing:
@@ -229,6 +265,7 @@ def summarise(records: list[dict], questions: list[dict], expected: dict, freeze
         "scored": [q["id"] for q in scored],
         "dropped": dropped,
         "ignored": len(records) - len(kept),
+        "not_run": not_run,
         "routes": routes,
     }
 
@@ -302,13 +339,15 @@ def render(
     freezes: int,
     cu: dict | None = None,
     cu_unit: str | None = None,
+    allow_missing=(),
 ) -> str:
     """The report as Markdown (see the module docstring). ReportError if the records are unfit.
 
     `cu` maps a route to its capacity units read by hand from the Capacity Metrics app (or None),
     in `cu_unit`. `freezes` is how many freezes there were in all.
+    `allow_missing` names routes that may have no records; each one is reported as not run.
     """
-    summary = summarise(records, questions, expected, freeze)
+    summary = summarise(records, questions, expected, freeze, allow_missing)
     scored, dropped, routes = summary["scored"], summary["dropped"], summary["routes"]
     total = len(scored)
     cu = cu or {}
@@ -327,6 +366,8 @@ def render(
     if summary["ignored"]:
         n = summary["ignored"]
         out.append(f"- {n} record{'s' if n != 1 else ''} for dropped questions {'are' if n != 1 else 'is'} left out.")
+    for route in summary["not_run"]:
+        out.append(f"- Not run: {ROUTES[route]} has no records (allowed with --allow-missing-route {route}).")
     out.append(f"- Passes: {PASSES} per route. Scoring is by rule (`lakehouse.capstone.score`), with no AI judge.")
     out += [
         "",

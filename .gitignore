@@ -24,3 +24,6 @@ derby.log
 .terraform/
 *.tfvars
 *.tfplan
+
+# Capstone: an interrupted run's records (complete runs under capstone/runs/ are committed)
+capstone/runs/**/*.partial

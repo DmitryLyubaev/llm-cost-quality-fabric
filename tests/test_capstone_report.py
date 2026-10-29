@@ -208,11 +208,28 @@ def test_records_for_a_dropped_question_are_left_out_and_said_so():
     assert "> 12 calls" not in text
 
 
-def test_a_route_without_records_is_reported_as_not_run():
-    text = _render(_records(routes=("direct",)))
+def test_a_route_without_records_fails_by_default():
+    with pytest.raises(ReportError, match=r"no records for the foundry route.*--allow-missing-route foundry"):
+        _render(_records(routes=("direct",)))
+
+
+def test_a_route_allowed_to_be_missing_is_reported_as_not_run():
+    text = _render(_records(routes=("direct",)), allow_missing=("foundry",))
 
     assert "| Direct | 2.00 of 3 |" in text
     assert "| Through Foundry | not run |" in text
+    assert "Not run: Through Foundry has no records (allowed with --allow-missing-route foundry)." in text
+
+
+def test_allowing_a_route_to_be_missing_does_not_hide_its_records():
+    text = _render(_records(), allow_missing=("foundry",))
+
+    assert "| Through Foundry | 1.33 of 3 |" in text and "Not run" not in text
+
+
+def test_an_unknown_route_cannot_be_allowed_missing():
+    with pytest.raises(ReportError, match="unknown routes"):
+        _render(_records(), allow_missing=("claude",))
 
 
 def test_the_scored_count_is_15_or_14_with_the_real_questions():
@@ -220,13 +237,14 @@ def test_the_scored_count_is_15_or_14_with_the_real_questions():
     expected = {q["id"]: {"value": 1, "currency": "AUD", "rows": 1} for q in questions if q["source"]}
     labels = {"value": ["p1"], "currency": None, "rows": 1}
     expected.update({q["id"]: labels for q in questions if q["kind"] == "labels"})
-    with_q12 = summarise([], questions, expected, FREEZE)
+    both = ("direct", "foundry")
+    with_q12 = summarise([], questions, expected, FREEZE, allow_missing=both)
     del expected["q12"]
-    without = summarise([], questions, expected, FREEZE)
+    without = summarise([], questions, expected, FREEZE, allow_missing=both)
 
     assert len(with_q12["scored"]) == 15 and with_q12["dropped"] == []
     assert len(without["scored"]) == 14 and without["dropped"] == ["q12"]
-    text = render([], questions, expected, FREEZE, snapshot_time=SNAPSHOT, freezes=1)
+    text = render([], questions, expected, FREEZE, snapshot_time=SNAPSHOT, freezes=1, allow_missing=both)
     assert "14 questions are scored" in text and "q12 is dropped" in text
 
 
@@ -324,3 +342,21 @@ def test_cli_needs_a_unit_with_a_cu_figure(cli, capsys):
 
     assert capstone_report.main(args) == 2
     assert "--cu-unit" in capsys.readouterr().err
+
+
+def test_cli_needs_both_routes_unless_one_is_allowed_missing(cli, capsys):
+    (cli["runs"] / "foundry.jsonl").unlink()
+
+    assert capstone_report.main(cli["args"]) == 2
+    assert "--allow-missing-route foundry" in capsys.readouterr().err
+    assert not (cli["tmp"] / "report.md").exists()
+
+    assert capstone_report.main(cli["args"] + ["--allow-missing-route", "foundry"]) == 0
+    assert "| Through Foundry | not run |" in (cli["tmp"] / "report.md").read_text(encoding="utf-8")
+
+
+def test_a_pattern_must_match_the_whole_value():
+    record = _record("direct", "q01", 1, "A$100.00", started_utc="2026-11-10T09:01:00.000Z\n")
+
+    with pytest.raises(ReportError, match="started_utc"):
+        _render([record if i == 0 else r for i, r in enumerate(_records())])

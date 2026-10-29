@@ -565,3 +565,21 @@ def test_cli_default_data_agent_folder_is_the_portfolio_data_agent():
          "--model-direct", "d", "--model-foundry", "f"]
     )
     assert args.data_agent_dir == ROOT / "fabric-capstone" / "da_portfolio.DataAgent"
+
+
+@pytest.mark.parametrize(
+    "content, message",
+    [
+        (b'{"components": ', capstone_freeze.MSG_FREEZE_NOT_JSON),
+        (b'["not", "an", "object"]\n', capstone_freeze.MSG_FREEZE_NOT_OBJECT),
+        (b'{"short": "\xff\xfe"}\n', capstone_freeze.MSG_FREEZE_NOT_UTF8),
+    ],
+)
+def test_cli_verify_rejects_an_unreadable_freeze_file_with_a_fixed_message(
+    tmp_path, agent, analyst_repo, capsys, content, message
+):
+    repo, first = analyst_repo
+    (tmp_path / "freeze.json").write_bytes(content)
+
+    assert capstone_freeze.main(_cli_args(tmp_path, agent, repo, first, "verify")) == 2
+    assert _stderr(capsys) == message

@@ -26,6 +26,9 @@ MSG_OPTION = f"{COMPONENT}: --analyst-commit must be a commit id, not an option"
 MSG_NO_GIT = f"{COMPONENT}: git is not installed"
 MSG_NO_COMMIT = f"{COMPONENT}: --analyst-commit is not a commit in --analyst-repo"
 MSG_NO_FILE = f"{COMPONENT}: {INSTRUCTIONS_PATH} does not exist at --analyst-commit"
+MSG_FREEZE_NOT_UTF8 = "--freeze: not UTF-8 text"
+MSG_FREEZE_NOT_JSON = "--freeze: not valid JSON"
+MSG_FREEZE_NOT_OBJECT = "--freeze: not a freeze object (a JSON object)"
 
 
 class InputError(Exception):
@@ -112,11 +115,15 @@ def load_verified_freeze(args: argparse.Namespace) -> dict:
     """
     inputs = gather_inputs(args, need_freeze=True)
     try:
-        freeze = json.loads(args.freeze.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        raise InputError("--freeze: not a JSON file") from None
+        text = args.freeze.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        raise InputError(MSG_FREEZE_NOT_UTF8) from None
+    try:
+        freeze = json.loads(text)
+    except json.JSONDecodeError:
+        raise InputError(MSG_FREEZE_NOT_JSON) from None
     if not isinstance(freeze, dict):
-        raise InputError("--freeze: not a freeze object")
+        raise InputError(MSG_FREEZE_NOT_OBJECT)
     verify_freeze(freeze, **inputs)
     return freeze
 
