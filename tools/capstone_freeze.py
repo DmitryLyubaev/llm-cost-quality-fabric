@@ -53,9 +53,8 @@ def read_instructions(repo: str, commit: str) -> bytes:
     return shown.stdout
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=("freeze", "verify"))
+def add_freeze_arguments(parser: argparse.ArgumentParser) -> None:
+    """The freeze's inputs as options; the runner and the report take the same ones."""
     parser.add_argument("--questions", type=Path, default=ROOT / "capstone" / "questions.json")
     parser.add_argument("--expected", type=Path, default=ROOT / "capstone" / "expected.json")
     parser.add_argument("--rules", type=Path, default=None, help="default: src/lakehouse/capstone/score.py")
@@ -68,6 +67,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-direct", required=True)
     parser.add_argument("--model-foundry", required=True)
     parser.add_argument("--freeze", type=Path, default=ROOT / "capstone" / "freeze.json")
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("command", choices=("freeze", "verify"))
+    add_freeze_arguments(parser)
     return parser
 
 
@@ -76,31 +81,55 @@ def _require_file(argument: str, path: Path | None) -> None:
         raise InputError(f"{argument}: file not found")
 
 
+def gather_inputs(args: argparse.Namespace, need_freeze: bool) -> dict:
+    """The keyword arguments of build_freeze / verify_freeze, from `add_freeze_arguments` options.
+
+    InputError (fixed text) when a file or folder is missing or the instructions cannot be read;
+    `need_freeze` also requires the --freeze file.
+    """
+    _require_file("--questions", args.questions)
+    _require_file("--expected", args.expected)
+    _require_file("--rules", args.rules)
+    if not args.data_agent_dir.is_dir():
+        raise InputError("--data-agent-dir: folder not found")
+    if need_freeze:
+        _require_file("--freeze", args.freeze)
+    return {
+        "questions": args.questions,
+        "expected": args.expected,
+        "rules": args.rules,
+        "snapshot_time": args.snapshot_time,
+        "data_agent_dir": args.data_agent_dir,
+        "analyst_instructions": read_instructions(args.analyst_repo, args.analyst_commit),
+        "models": {"direct": args.model_direct, "foundry": args.model_foundry},
+    }
+
+
+def load_verified_freeze(args: argparse.Namespace) -> dict:
+    """The --freeze file, after verify_freeze passed on the inputs it names.
+
+    FreezeBroken names the component that drifted; DataAgentError and InputError as for `verify`.
+    """
+    inputs = gather_inputs(args, need_freeze=True)
+    try:
+        freeze = json.loads(args.freeze.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise InputError("--freeze: not a JSON file") from None
+    if not isinstance(freeze, dict):
+        raise InputError("--freeze: not a freeze object")
+    verify_freeze(freeze, **inputs)
+    return freeze
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        _require_file("--questions", args.questions)
-        _require_file("--expected", args.expected)
-        _require_file("--rules", args.rules)
-        if not args.data_agent_dir.is_dir():
-            raise InputError("--data-agent-dir: folder not found")
-        if args.command == "verify":
-            _require_file("--freeze", args.freeze)
-        inputs = {
-            "questions": args.questions,
-            "expected": args.expected,
-            "rules": args.rules,
-            "snapshot_time": args.snapshot_time,
-            "data_agent_dir": args.data_agent_dir,
-            "analyst_instructions": read_instructions(args.analyst_repo, args.analyst_commit),
-            "models": {"direct": args.model_direct, "foundry": args.model_foundry},
-        }
         if args.command == "freeze":
-            freeze = build_freeze(**inputs)
+            freeze = build_freeze(**gather_inputs(args, need_freeze=False))
             args.freeze.write_text(json.dumps(freeze, indent=2) + "\n", encoding="utf-8", newline="\n")
             print(f"froze {freeze['short']} into {args.freeze}")
             return 0
-        verify_freeze(json.loads(args.freeze.read_text(encoding="utf-8")), **inputs)
+        load_verified_freeze(args)
         print("freeze intact")
         return 0
     except FreezeBroken as broken:
