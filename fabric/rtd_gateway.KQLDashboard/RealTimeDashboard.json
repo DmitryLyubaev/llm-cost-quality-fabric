@@ -314,7 +314,7 @@
         "kind": "inline",
         "dataSourceId": "6c37d6bb-6d6f-48e1-a132-88cb509b456f"
       },
-      "text": "let threshold = 5000;\n// Caller-minutes whose summed tokens exceed the threshold (the Activator rule's condition).\nGatewayCalls()\n| where isnotnull(tokens)\n| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller\n| where tokens > threshold\n| order by minute asc, caller asc\n| where minute >= _startTime and minute < bin(_endTime, 1m)\n",
+      "text": "let threshold = 8000;\n// Caller-minutes whose summed tokens exceed the threshold (the Activator rule's condition).\nGatewayCalls()\n| where isnotnull(tokens)\n| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller\n| where tokens > threshold\n| order by minute asc, caller asc\n| where minute >= _startTime and minute < bin(_endTime, 1m)\n",
       "id": "9f30d17f-2cac-44a8-8ea6-e703c315a10f",
       "usedVariables": [
         "_endTime",

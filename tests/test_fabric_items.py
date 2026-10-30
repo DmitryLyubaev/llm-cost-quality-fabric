@@ -588,9 +588,15 @@ def test_reflex_has_exactly_two_rules_on_the_alert_tiles():
     assert set(watched) == ALERT_FIGURES
 
     threshold = int(re.match(r"let threshold = (\d+);", _query_text("token_spike_minutes")).group(1))
-    assert threshold == 5000
+    assert threshold == 8000
     assert _rule_threshold(watched["token_spike_minutes"]) == threshold
     assert _rule_threshold(watched["failover_minutes"]) == 0
+
+
+def test_the_spike_threshold_sits_between_the_failover_rate_and_the_minute_limit():
+    threshold = int(re.match(r"let threshold = (\d+);", _query_text("token_spike_minutes")).group(1))
+    failover_tokens_per_minute = 15 * 350  # test 1: one call every 4 s, ~350 tokens a call (9 Oct 2026)
+    assert failover_tokens_per_minute * 1.5 <= threshold < 10_000
 
 
 def test_eventstream_reads_event_hubs_into_the_gateway_table():

@@ -99,7 +99,7 @@
         "executionIntervalInSeconds": 300
       },
       "query": {
-        "queryString": "let _startTime = ago(1h);\nlet _endTime = now();\nlet threshold = 5000;\n// Caller-minutes whose summed tokens exceed the threshold (the Activator rule's condition).\ndatabase(\"kql_gateway\").GatewayCalls()\n| where isnotnull(tokens)\n| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller\n| where tokens > threshold\n| order by minute asc, caller asc\n| where minute >= _startTime and minute < bin(_endTime, 1m)\n"
+        "queryString": "let _startTime = ago(1h);\nlet _endTime = now();\nlet threshold = 8000;\n// Caller-minutes whose summed tokens exceed the threshold (the Activator rule's condition).\ndatabase(\"kql_gateway\").GatewayCalls()\n| where isnotnull(tokens)\n| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller\n| where tokens > threshold\n| order by minute asc, caller asc\n| where minute >= _startTime and minute < bin(_endTime, 1m)\n"
       },
       "eventhouseItem": {
         "targetUniqueIdentifier": "84a9c8b1-b26d-47ce-9b29-4cf9e1244570"
@@ -166,7 +166,7 @@
       },
       "definition": {
         "type": "Rule",
-        "instance": "{\"templateId\":\"AttributeTrigger\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"ScalarSelectStep\",\"id\":\"7177146d-44ba-4c12-932e-a0d98245c96c\",\"rows\":[{\"name\":\"AttributeSelector\",\"kind\":\"Attribute\",\"arguments\":[{\"kind\":\"AttributeReference\",\"type\":\"complex\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"2de2839e-35ab-4674-a624-b973a3f4cf91\"}],\"name\":\"attribute\"}]}]},{\"name\":\"ScalarDetectStep\",\"id\":\"e2e464a6-88ef-41bb-9c1a-944ddbd16e94\",\"rows\":[{\"name\":\"NumberBecomes\",\"kind\":\"NumberBecomes\",\"arguments\":[{\"name\":\"op\",\"type\":\"string\",\"value\":\"BecomesGreaterThan\"},{\"name\":\"value\",\"type\":\"number\",\"value\":5000.0}]},{\"name\":\"OccurrenceOption\",\"kind\":\"EachTime\",\"arguments\":[]}]}]}",
+        "instance": "{\"templateId\":\"AttributeTrigger\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"ScalarSelectStep\",\"id\":\"7177146d-44ba-4c12-932e-a0d98245c96c\",\"rows\":[{\"name\":\"AttributeSelector\",\"kind\":\"Attribute\",\"arguments\":[{\"kind\":\"AttributeReference\",\"type\":\"complex\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"2de2839e-35ab-4674-a624-b973a3f4cf91\"}],\"name\":\"attribute\"}]}]},{\"name\":\"ScalarDetectStep\",\"id\":\"e2e464a6-88ef-41bb-9c1a-944ddbd16e94\",\"rows\":[{\"name\":\"NumberBecomes\",\"kind\":\"NumberBecomes\",\"arguments\":[{\"name\":\"op\",\"type\":\"string\",\"value\":\"BecomesGreaterThan\"},{\"name\":\"value\",\"type\":\"number\",\"value\":8000.0}]},{\"name\":\"OccurrenceOption\",\"kind\":\"EachTime\",\"arguments\":[]}]}]}",
         "settings": {
           "shouldRun": false,
           "shouldApplyRuleOnUpdate": false
