@@ -1,0 +1,72 @@
+{
+  "$schema": "1.0.0",
+  "artifactId": "00000000-0000-0000-0000-000000000000",
+  "workspaceId": "00000000-0000-0000-0000-000000000000",
+  "displayName": "lh_capstone",
+  "type": "lakehouse_tables",
+  "userDescription": "A frozen snapshot of the portfolio's gold tables: Azure spend per project, evaluation study results, live checks and API gateway calls.",
+  "dataSourceInstructions": "## General knowledge\n- A frozen snapshot of the portfolio's gold star schema, copied once from prod. Every table is in the `gold` schema; qualify each one, as in `gold.dim_project`.\n- Costs stay in their billing currency and are never converted or added across currencies. Estimated cost (USD) and actual cost (billing currency) are never summed.\n- `success`, `top1`, `must_contain`, `refused_by_gateway` and `is_current` are bit columns: test them as CAST(column AS INT) = 1, and take a rate as AVG(CAST(column AS FLOAT)).\n- Quality metrics are averages over scored results and are only comparable within a study.\n\n## Table descriptions\n- `gold.fact_daily_cost`: one row per cost-export line: resource x meter x day. `cost_date`, `billing_month`, `project`, `cost` in `billing_currency`, `resource_group`, `meter_name`, and `attribution_rule`, the rule that gave the line to its project.\n- `gold.fact_eval_attempt`: one row per study x item x arm x pass x repeat. `study`, `arm`, `item_id`, `attempt_kind`, `success`, `latency_ms`, `cost_usd`, `cost_basis`, `model_version` (as the study recorded it), `groundedness`, `citation_recall`, `citation_precision`, `must_contain`, `top1`, `reciprocal_rank`, `tool_call_accuracy`, `task_adherence`, `intent_resolution`, `deployment_sk` and `project`.\n- `gold.fact_live_check`: one row per check x session. `project`, `session`, `session_date`, `check_id`, `verdict`, and `measured_value` in `unit`.\n- `gold.fact_gateway_call`: one row per gateway call. `session`, `call_date`, `event_time`, `status`, `refused_by_gateway`, `tokens`, `latency_ms`, `answered_by` and `project`.\n- `gold.dim_project`: one row per project 1-10, plus capstone, releaselens-shared and untagged. `project` and its `name`; \"untagged\" and \"releaselens-shared\" are projects too.\n- `gold.dim_study`: one row per study run. `study`, `run_id`, `started_at` and `project`.\n- `gold.dim_arm`: one row per arm within a study. `study`, `arm`, `label`, `deployment_name` and `project`.\n- `gold.dim_model_deployment`: one row per deployment version (Type 2). `deployment_sk`, `deployment_name`, `model_name`, `model_version`, `valid_from`, `valid_to` and `is_current`.\n- `gold.dim_date`: one row per day. `date` and `year_month`.\n\n## When asked about\n- A project's spend: sum `fact_daily_cost.cost` for the project, grouped by `billing_currency`.\n- Spend in a month: filter on `fact_daily_cost.billing_month`. Spend over a range of days: `fact_daily_cost.cost_date` between the two days, both included.\n- Cost per scored result: the project's actual spend over its count of scored results, in the billing currency. The studies' USD estimate is a separate figure.\n- A success rate, top-1 rate or other quality metric: average it over scored results, per study, arm, model and model version.\n- How many scored results: count the rows of `fact_eval_attempt` whose `attempt_kind` is 'scored'.\n- Live checks: count the rows of `fact_live_check` per `project` and `verdict`, over every session.\n- Gateway calls in a session: count the rows of `fact_gateway_call` with that `session`; `refused_by_gateway` marks the ones the gateway refused.\n- A change between model versions: the model version did not change between measured runs, so there is none to report.\n",
+  "elements": [
+    {
+      "display_name": "gold",
+      "type": "lakehouse_tables.schema",
+      "is_selected": true,
+      "children": [
+        {
+          "display_name": "fact_daily_cost",
+          "type": "lakehouse_tables.table",
+          "is_selected": true,
+          "children": []
+        },
+        {
+          "display_name": "fact_eval_attempt",
+          "type": "lakehouse_tables.table",
+          "is_selected": true,
+          "children": []
+        },
+        {
+          "display_name": "fact_live_check",
+          "type": "lakehouse_tables.table",
+          "is_selected": true,
+          "children": []
+        },
+        {
+          "display_name": "fact_gateway_call",
+          "type": "lakehouse_tables.table",
+          "is_selected": true,
+          "children": []
+        },
+        {
+          "display_name": "dim_project",
+          "type": "lakehouse_tables.table",
+          "is_selected": true,
+          "children": []
+        },
+        {
+          "display_name": "dim_study",
+          "type": "lakehouse_tables.table",
+          "is_selected": true,
+          "children": []
+        },
+        {
+          "display_name": "dim_arm",
+          "type": "lakehouse_tables.table",
+          "is_selected": true,
+          "children": []
+        },
+        {
+          "display_name": "dim_model_deployment",
+          "type": "lakehouse_tables.table",
+          "is_selected": true,
+          "children": []
+        },
+        {
+          "display_name": "dim_date",
+          "type": "lakehouse_tables.table",
+          "is_selected": true,
+          "children": []
+        }
+      ]
+    }
+  ]
+}

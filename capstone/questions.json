@@ -1,0 +1,163 @@
+[
+  {
+    "id": "q01",
+    "text": "How much has project p2 spent in total, in its billing currency?",
+    "kind": "money",
+    "source": {
+      "function": "lakehouse.answers.cost_per_project",
+      "args": {},
+      "select": {"project": "p2", "billing_currency": "AUD"},
+      "column": "total"
+    }
+  },
+  {
+    "id": "q02",
+    "text": "How much spend is untagged, that is, not attributed to any project?",
+    "kind": "money",
+    "source": {
+      "function": "lakehouse.answers.cost_per_project",
+      "args": {},
+      "select": {"project": "untagged", "billing_currency": "AUD"},
+      "column": "total"
+    }
+  },
+  {
+    "id": "q03",
+    "text": "How much did project p3 spend in the billing month of October 2026?",
+    "kind": "money",
+    "source": {
+      "function": "lakehouse.capstone.answers.spend_for_month",
+      "args": {"month": "2026-10"},
+      "select": {"project": "p3", "billing_currency": "AUD"},
+      "column": "total"
+    }
+  },
+  {
+    "id": "q04",
+    "text": "Which projects, counting untagged and releaselens-shared as projects, had any spend in the billing month of September 2026?",
+    "kind": "labels",
+    "source": {
+      "function": "lakehouse.capstone.answers.spend_for_month",
+      "args": {"month": "2026-09"},
+      "select": null,
+      "column": null
+    }
+  },
+  {
+    "id": "q05",
+    "text": "What was the success rate of the gpt-5.6-luna model in the p3-agent study?",
+    "kind": "rate",
+    "source": {
+      "function": "lakehouse.answers.quality_across_models",
+      "args": {},
+      "select": {"study": "p3-agent", "model": "gpt-5.6-luna"},
+      "column": "success_rate"
+    }
+  },
+  {
+    "id": "q06",
+    "text": "In project p2's p2-retrieval study, what was the top-1 rate of arm E3?",
+    "kind": "rate",
+    "source": {
+      "function": "lakehouse.answers.quality_across_models",
+      "args": {},
+      "select": {"study": "p2-retrieval", "arm": "E3"},
+      "column": "top1_rate"
+    }
+  },
+  {
+    "id": "q07",
+    "text": "How many scored results does the claude arm of the p3-agent study have?",
+    "kind": "count",
+    "source": {
+      "function": "lakehouse.capstone.answers.eval_count_by_arm",
+      "args": {"study": "p3-agent"},
+      "select": {"arm": "claude"},
+      "column": "n"
+    }
+  },
+  {
+    "id": "q08",
+    "text": "What was project p1's actual billed cost per scored result, in its billing currency?",
+    "kind": "money",
+    "source": {
+      "function": "lakehouse.answers.cost_per_result",
+      "args": {},
+      "select": {"project": "p1", "actual_currency": "AUD"},
+      "column": "actual_per_result"
+    }
+  },
+  {
+    "id": "q09",
+    "text": "How many live checks failed for project p7?",
+    "kind": "count",
+    "source": {
+      "function": "lakehouse.capstone.answers.live_check_counts",
+      "args": {},
+      "select": {"project": "p7", "verdict": "fail"},
+      "column": "n"
+    }
+  },
+  {
+    "id": "q10",
+    "text": "How many live checks passed for project p5?",
+    "kind": "count",
+    "source": {
+      "function": "lakehouse.capstone.answers.live_check_counts",
+      "args": {},
+      "select": {"project": "p5", "verdict": "pass"},
+      "column": "n"
+    }
+  },
+  {
+    "id": "q11",
+    "text": "Which projects had at least one failed live check?",
+    "kind": "labels",
+    "source": {
+      "function": "lakehouse.capstone.answers.live_check_counts",
+      "args": {},
+      "select": {"verdict": "fail"},
+      "column": null
+    }
+  },
+  {
+    "id": "q12",
+    "text": "How many calls went through the API Management gateway in the session p10-session?",
+    "kind": "count",
+    "source": {
+      "function": "lakehouse.gateway.answers.cost_per_gateway_call",
+      "args": {"session": "p10-session"},
+      "select": null,
+      "column": "calls"
+    },
+    "optional": true
+  },
+  {
+    "id": "q13",
+    "text": "How many scored results used the text-embedding-3-large model in the p2-retrieval study?",
+    "kind": "count",
+    "source": {
+      "function": "lakehouse.answers.quality_across_models",
+      "args": {},
+      "select": {"study": "p2-retrieval", "model": "text-embedding-3-large"},
+      "column": "n"
+    }
+  },
+  {
+    "id": "q14",
+    "text": "What did project p4 cost from 2026-10-06 to 2026-10-09, both days included?",
+    "kind": "money",
+    "source": {
+      "function": "lakehouse.capstone.answers.cost_by_project_between",
+      "args": {"start": "2026-10-06", "end": "2026-10-09"},
+      "select": {"project": "p4", "billing_currency": "AUD"},
+      "column": "total"
+    }
+  },
+  {
+    "id": "q15",
+    "text": "How did the success rate of gpt-5.6-luna change from one model version to the next?",
+    "kind": "unanswerable",
+    "source": null
+  }
+]

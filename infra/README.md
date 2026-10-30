@@ -1,6 +1,6 @@
 # Infrastructure
 
-Three independent Terraform stacks. Each uses local state (`terraform.tfstate`), which is
+Five independent Terraform stacks (the capstone has two, under `capstone/`). Each uses local state (`terraform.tfstate`), which is
 git-ignored along with `*.tfvars`, `.terraform/` and plan files. The provider lock files
 (`.terraform.lock.hcl`) are committed so provider hashes stay pinned. CI runs `terraform fmt
 -check`, `init -backend=false` and `validate` only; nothing runs `plan` or `apply` in CI.
@@ -38,3 +38,13 @@ use `principal_type = "ServicePrincipal"`. Values from `terraform.tfvars`: `subs
 `namespace_name`, `sender_principal_id` and `receiver_principal_ids`; `location` defaults to
 `australiaeast`. It has no outputs, so the namespace name never prints. Apply it for the session
 week and destroy it after.
+
+## `capstone/`
+
+The phase 4 capstone's paid F2 and its workspace, applied at the start of a capstone session and
+destroyed at the end. It is two stacks, because one apply cannot sign in as both identities (the
+Azure CLI config directory, `AZURE_CONFIG_DIR`, is process-wide): `capstone/capacity/` creates
+resource group `rg-p12-capstone` and an F2 Fabric capacity with the azurerm provider, and
+`capstone/workspace/` creates the workspace `capstone` on it with the Fabric provider. Both have no
+outputs. `rg-p12-*` is attributed to the `capstone` project in project 9's cost model. See
+`capstone/README.md` for the order, the sign-ins and the values.

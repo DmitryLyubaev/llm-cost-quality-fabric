@@ -1,0 +1,25 @@
+# fabric-cicd 1.4.0 parameter file for the capstone (https://microsoft.github.io/fabric-cicd/latest/how_to/parameterization/).
+# `.deploy/deploy.py publish-capstone` deploys this folder by hand as fabric@, with the environment
+# CAPSTONE; deploy.yml never does. fabric-cicd reads <repository_directory>/parameter.yml, so this file is
+# separate from fabric/parameter.yml. It reads no environment variable, so it needs no feature flag.
+#
+# The data agent's lakehouse source names its workspace and lakehouse by GUID; git holds the empty GUID
+# for both (fabric-capstone/VERIFY.md). One rule per field, each anchored on the field name, since a
+# capture group swaps one value. fabric-cicd applies find_replace before its own swap of an empty
+# `workspaceId` (fabric_workspace.py, _publish_item), so the workspace rule decides it, not that fallback.
+
+find_replace:
+    # The source's workspace: the empty GUID in git -> the capstone workspace.
+    - find_value: '"workspaceId"\s*:\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"'
+      replace_value:
+        CAPSTONE: "$workspace.$id"
+      is_regex: "true"
+      item_type: "DataAgent"
+      file_path: "**/datasource.json"
+    # The source's lakehouse: the empty GUID in git -> lh_capstone's deployed ID.
+    - find_value: '"artifactId"\s*:\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"'
+      replace_value:
+        CAPSTONE: "$items.Lakehouse.lh_capstone.$id"
+      is_regex: "true"
+      item_type: "DataAgent"
+      file_path: "**/datasource.json"

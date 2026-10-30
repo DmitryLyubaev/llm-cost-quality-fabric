@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Capstone answer record",
+  "description": "One question asked once on one route: one JSON object per line of a .jsonl file. Both routes (tools/ask_data_agent.py and project 3's Portfolio.Analyst) write it, and tools/capstone_report.py scores it. answer_text and raw_output are redacted before writing: URLs become <url>, GUIDs <id>, emails <email>.",
+  "type": "object",
+  "required": [
+    "route",
+    "freeze",
+    "question_id",
+    "pass",
+    "answer_text",
+    "raw_output",
+    "tool_calls",
+    "input_tokens",
+    "output_tokens",
+    "wall_ms",
+    "started_utc"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "route": {"type": "string", "enum": ["direct", "foundry"]},
+    "freeze": {"type": "string", "pattern": "^[0-9a-f]{12}$"},
+    "question_id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+    "pass": {"type": "integer", "minimum": 1, "maximum": 3},
+    "answer_text": {"type": "string"},
+    "raw_output": {"type": "string"},
+    "tool_calls": {"type": ["integer", "null"], "minimum": 0},
+    "input_tokens": {"type": ["integer", "null"], "minimum": 0},
+    "output_tokens": {"type": ["integer", "null"], "minimum": 0},
+    "wall_ms": {"type": "integer", "minimum": 0},
+    "started_utc": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$"}
+  }
+}

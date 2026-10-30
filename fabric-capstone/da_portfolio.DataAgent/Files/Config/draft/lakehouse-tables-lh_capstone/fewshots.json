@@ -1,0 +1,105 @@
+{
+  "$schema": "1.0.0",
+  "fewShots": [
+    {
+      "id": "afa92e06-dbf9-4a87-93f9-eebda67ce6e4",
+      "question": "What is the total cost attributed to project p4, in its billing currency?",
+      "query": "-- One project's attributed spend (replace 'p4'), in its billing currency.\nSELECT project, billing_currency, SUM(cost) AS total\nFROM gold.fact_daily_cost\nWHERE project = 'p4'\nGROUP BY project, billing_currency"
+    },
+    {
+      "id": "1b86ca1d-bee9-43e6-a186-d99776a803e6",
+      "question": "How much untagged spend was recorded in billing month 2026-09?",
+      "query": "-- 'untagged' is a project: the spend no rule gave to a named project.\nSELECT project, billing_currency, SUM(cost) AS total\nFROM gold.fact_daily_cost\nWHERE project = 'untagged' AND billing_month = '2026-09'\nGROUP BY project, billing_currency"
+    },
+    {
+      "id": "f146de93-7e5f-4c3f-b2f6-e2af5aaea780",
+      "question": "What was project p2's cost over the days 2026-10-01 through 2026-10-05?",
+      "query": "-- A closed range of days: the first and the last day are both included.\nSELECT project, billing_currency, SUM(cost) AS total\nFROM gold.fact_daily_cost\nWHERE project = 'p2'\n  AND cost_date BETWEEN CAST('2026-10-01' AS DATE) AND CAST('2026-10-05' AS DATE)\nGROUP BY project, billing_currency"
+    },
+    {
+      "id": "aab44117-2eab-4cd4-a584-c9475e5b391c",
+      "question": "What did the releaselens-shared project cost from 2026-10-15 to 2026-10-20?",
+      "query": "-- 'releaselens-shared' is a project: the shared ReleaseLens resources. Both days are included.\nSELECT project, billing_currency, SUM(cost) AS total\nFROM gold.fact_daily_cost\nWHERE project = 'releaselens-shared'\n  AND cost_date BETWEEN CAST('2026-10-15' AS DATE) AND CAST('2026-10-20' AS DATE)\nGROUP BY project, billing_currency"
+    },
+    {
+      "id": "447ea934-3216-42e1-aafb-c16f4fd2ab93",
+      "question": "Which projects had any cost between 2026-10-01 and 2026-10-03, and how much did each spend?",
+      "query": "-- Spend per project over a closed range of days, one row per billing currency.\nSELECT project, billing_currency, SUM(cost) AS total\nFROM gold.fact_daily_cost\nWHERE cost_date BETWEEN CAST('2026-10-01' AS DATE) AND CAST('2026-10-03' AS DATE)\nGROUP BY project, billing_currency\nORDER BY project, billing_currency"
+    },
+    {
+      "id": "f629425b-ecb2-444e-b330-d82cea8961b8",
+      "question": "Which projects had any cost between 2026-10-10 and 2026-10-20?",
+      "query": "-- A list of projects: 'untagged' and 'releaselens-shared' count as projects.\nSELECT DISTINCT project\nFROM gold.fact_daily_cost\nWHERE cost_date BETWEEN CAST('2026-10-10' AS DATE) AND CAST('2026-10-20' AS DATE)"
+    },
+    {
+      "id": "0af7d3a3-ebb0-42f3-994d-b7f4784ad1ca",
+      "question": "What success rate did each arm of the p1-three-arm study reach, by model and model version?",
+      "query": "-- Rates are averages over scored results, per study, arm, model and model version.\n-- The model and its version come from gold.dim_model_deployment; a deployment with no version keeps the version the study recorded.\nSELECT f.arm, d.model_name AS model,\n       COALESCE(d.model_version, f.model_version) AS model_version,\n       COUNT(*) AS n,\n       AVG(CAST(f.success AS FLOAT)) AS success_rate\nFROM gold.fact_eval_attempt AS f\nJOIN gold.dim_model_deployment AS d ON d.deployment_sk = f.deployment_sk\nWHERE f.study = 'p1-three-arm' AND f.attempt_kind = 'scored'\nGROUP BY f.study, f.arm, d.model_name, COALESCE(d.model_version, f.model_version)\nORDER BY f.arm"
+    },
+    {
+      "id": "c4dce99a-2323-44ea-a27a-6f0dfcca73f5",
+      "question": "What were the top-1 rate and mean reciprocal rank of arm S2 in the p2-retrieval study?",
+      "query": "-- Retrieval quality of one arm: the top-1 rate and the mean reciprocal rank (mrr), over scored results.\n-- The model and its version come from gold.dim_model_deployment; a deployment with no version keeps the version the study recorded.\nSELECT f.arm, d.model_name AS model,\n       COALESCE(d.model_version, f.model_version) AS model_version,\n       AVG(CAST(f.top1 AS FLOAT)) AS top1_rate,\n       AVG(f.reciprocal_rank) AS mrr\nFROM gold.fact_eval_attempt AS f\nJOIN gold.dim_model_deployment AS d ON d.deployment_sk = f.deployment_sk\nWHERE f.study = 'p2-retrieval' AND f.arm = 'S2' AND f.attempt_kind = 'scored'\nGROUP BY f.study, f.arm, d.model_name, COALESCE(d.model_version, f.model_version)\nORDER BY f.arm"
+    },
+    {
+      "id": "fa89e456-8aad-4d37-bd3f-4afd068341fc",
+      "question": "How many scored attempts were made per arm in study p1-three-arm?",
+      "query": "-- Only scored attempts are results: determinism repeats and superseded attempts are not counted.\nSELECT arm, COUNT(*) AS n\nFROM gold.fact_eval_attempt\nWHERE study = 'p1-three-arm' AND attempt_kind = 'scored'\nGROUP BY arm\nORDER BY arm"
+    },
+    {
+      "id": "4238c475-274d-4fbf-9cad-3bc2d9ba6f8e",
+      "question": "Leaving out superseded attempts, what is the scored-attempt count for the gpt arm in p3-agent?",
+      "query": "-- A superseded attempt was replaced by a later one; only the scored attempt counts.\nSELECT arm, COUNT(*) AS n\nFROM gold.fact_eval_attempt\nWHERE study = 'p3-agent' AND arm = 'gpt' AND attempt_kind = 'scored'\nGROUP BY arm"
+    },
+    {
+      "id": "dfccc85c-60b2-4e84-9666-139fae7fedde",
+      "question": "Which model and model version did the claude arm of the p3-agent study use for its scored results?",
+      "query": "-- The version each scored result ran on, from its deployment. It did not change between measured runs.\n-- The model and its version come from gold.dim_model_deployment; a deployment with no version keeps the version the study recorded.\nSELECT DISTINCT f.arm, d.model_name AS model,\n       COALESCE(d.model_version, f.model_version) AS model_version\nFROM gold.fact_eval_attempt AS f\nJOIN gold.dim_model_deployment AS d ON d.deployment_sk = f.deployment_sk\nWHERE f.study = 'p3-agent' AND f.arm = 'claude' AND f.attempt_kind = 'scored'"
+    },
+    {
+      "id": "7711f134-1b0e-4d21-9f0f-bcbf69ee8e6c",
+      "question": "What was the mean latency in milliseconds of each arm in the p1-three-arm study?",
+      "query": "-- Mean latency in milliseconds per arm, over scored results.\n-- The model and its version come from gold.dim_model_deployment; a deployment with no version keeps the version the study recorded.\nSELECT f.arm, d.model_name AS model,\n       COALESCE(d.model_version, f.model_version) AS model_version,\n       AVG(f.latency_ms) AS latency_ms\nFROM gold.fact_eval_attempt AS f\nJOIN gold.dim_model_deployment AS d ON d.deployment_sk = f.deployment_sk\nWHERE f.study = 'p1-three-arm' AND f.attempt_kind = 'scored'\nGROUP BY f.study, f.arm, d.model_name, COALESCE(d.model_version, f.model_version)\nORDER BY f.arm"
+    },
+    {
+      "id": "cbb89b53-3bc3-4422-a18a-44053fdda041",
+      "question": "How grounded were the p1-three-arm answers per arm, and what were their citation recall and precision?",
+      "query": "-- Answer quality per arm: groundedness and citation recall and precision, averaged over scored results.\n-- The model and its version come from gold.dim_model_deployment; a deployment with no version keeps the version the study recorded.\nSELECT f.arm, d.model_name AS model,\n       COALESCE(d.model_version, f.model_version) AS model_version,\n       AVG(f.groundedness) AS groundedness,\n       AVG(f.citation_recall) AS citation_recall,\n       AVG(f.citation_precision) AS citation_precision\nFROM gold.fact_eval_attempt AS f\nJOIN gold.dim_model_deployment AS d ON d.deployment_sk = f.deployment_sk\nWHERE f.study = 'p1-three-arm' AND f.attempt_kind = 'scored'\nGROUP BY f.study, f.arm, d.model_name, COALESCE(d.model_version, f.model_version)\nORDER BY f.arm"
+    },
+    {
+      "id": "bcfeaf11-074e-4109-ad54-9ca45e678e42",
+      "question": "What tool call accuracy, task adherence and intent resolution did the claude arm of the p3-agent study get?",
+      "query": "-- Agent quality of one arm, averaged over scored results.\n-- The model and its version come from gold.dim_model_deployment; a deployment with no version keeps the version the study recorded.\nSELECT f.arm, d.model_name AS model,\n       COALESCE(d.model_version, f.model_version) AS model_version,\n       AVG(f.tool_call_accuracy) AS tool_call_accuracy,\n       AVG(f.task_adherence) AS task_adherence,\n       AVG(f.intent_resolution) AS intent_resolution\nFROM gold.fact_eval_attempt AS f\nJOIN gold.dim_model_deployment AS d ON d.deployment_sk = f.deployment_sk\nWHERE f.study = 'p3-agent' AND f.arm = 'claude' AND f.attempt_kind = 'scored'\nGROUP BY f.study, f.arm, d.model_name, COALESCE(d.model_version, f.model_version)\nORDER BY f.arm"
+    },
+    {
+      "id": "7de22637-a73e-4fc0-bab4-689213bcd9ca",
+      "question": "What share of p1-three-arm answers contained every required phrase, per arm?",
+      "query": "-- The share of scored answers that held every required phrase, per arm.\n-- The model and its version come from gold.dim_model_deployment; a deployment with no version keeps the version the study recorded.\nSELECT f.arm, d.model_name AS model,\n       COALESCE(d.model_version, f.model_version) AS model_version,\n       AVG(CAST(f.must_contain AS FLOAT)) AS must_contain_rate\nFROM gold.fact_eval_attempt AS f\nJOIN gold.dim_model_deployment AS d ON d.deployment_sk = f.deployment_sk\nWHERE f.study = 'p1-three-arm' AND f.attempt_kind = 'scored'\nGROUP BY f.study, f.arm, d.model_name, COALESCE(d.model_version, f.model_version)\nORDER BY f.arm"
+    },
+    {
+      "id": "137fe15a-c914-40d1-bc0e-5762a08f8627",
+      "question": "How many scored results did text-embedding-3-small get in each arm of p2-retrieval?",
+      "query": "-- Scored results of one model, per arm and model version.\n-- The model and its version come from gold.dim_model_deployment; a deployment with no version keeps the version the study recorded.\nSELECT f.arm, d.model_name AS model,\n       COALESCE(d.model_version, f.model_version) AS model_version,\n       COUNT(*) AS n\nFROM gold.fact_eval_attempt AS f\nJOIN gold.dim_model_deployment AS d ON d.deployment_sk = f.deployment_sk\nWHERE f.study = 'p2-retrieval' AND d.model_name = 'text-embedding-3-small' AND f.attempt_kind = 'scored'\nGROUP BY f.study, f.arm, d.model_name, COALESCE(d.model_version, f.model_version)\nORDER BY f.arm"
+    },
+    {
+      "id": "f5f182ad-2bad-4b62-87d6-c5e1c4ac66b0",
+      "question": "What is the studies' own estimated USD cost per scored result for project p2?",
+      "query": "-- The studies' own estimate, always in USD. Never add it to the actual cost in gold.fact_daily_cost.\n-- A scored result with no cost outside a no-model arm makes the estimate unknown (null), not a partial sum.\nSELECT project,\n       COUNT(*) AS results,\n       COUNT(CASE WHEN cost_usd IS NULL AND cost_basis <> 'no_model' THEN 1 END) AS unpriced_results,\n       CASE WHEN COUNT(CASE WHEN cost_usd IS NULL AND cost_basis <> 'no_model' THEN 1 END) = 0\n            THEN SUM(cost_usd) END AS estimated_usd_total,\n       CASE WHEN COUNT(CASE WHEN cost_usd IS NULL AND cost_basis <> 'no_model' THEN 1 END) = 0\n            THEN SUM(cost_usd) / COUNT(*) END AS estimated_usd_per_result,\n       'USD' AS estimated_currency\nFROM gold.fact_eval_attempt\nWHERE attempt_kind = 'scored' AND project = 'p2'\nGROUP BY project"
+    },
+    {
+      "id": "e956a142-f53c-48d5-9c58-ea40bb899d7e",
+      "question": "How are project p4's live checks split across verdicts?",
+      "query": "-- A verdict is 'pass', 'fail' or 'not-run'; each row of gold.fact_live_check is one check in one session.\nSELECT project, verdict, COUNT(*) AS n\nFROM gold.fact_live_check\nWHERE project = 'p4'\nGROUP BY project, verdict\nORDER BY verdict"
+    },
+    {
+      "id": "021f5fd9-4c2f-44eb-81d2-c524f1435e51",
+      "question": "How many of project p6's live checks were not run?",
+      "query": "-- One project and one verdict, counted over every session.\nSELECT project, verdict, COUNT(*) AS n\nFROM gold.fact_live_check\nWHERE project = 'p6' AND verdict = 'not-run'\nGROUP BY project, verdict"
+    },
+    {
+      "id": "cd57221b-ff4d-46ba-a02e-7a5fc61427fb",
+      "question": "For gateway session gateway-demo, how many calls were made each day, how many did the gateway refuse, and what did each call cost?",
+      "query": "-- Calls per day of one gateway session (replace the session name), refused calls included,\n-- and the gateway's own cost that day (resource group rg-releaselens-gateway) over those calls.\n-- A day with calls but no cost line yet keeps its row, with a null cost.\nWITH calls AS (\n  SELECT call_date, COUNT(*) AS calls,\n         COUNT(CASE WHEN CAST(refused_by_gateway AS INT) = 1 THEN 1 END) AS refused\n  FROM gold.fact_gateway_call\n  WHERE session = 'gateway-demo'\n  GROUP BY call_date\n), costs AS (\n  SELECT cost_date AS call_date, billing_currency, SUM(cost) AS apim_cost\n  FROM gold.fact_daily_cost\n  WHERE LOWER(resource_group) = 'rg-releaselens-gateway'\n  GROUP BY cost_date, billing_currency\n)\nSELECT c.call_date, c.calls, c.refused, k.billing_currency, k.apim_cost,\n       k.apim_cost / c.calls AS cost_per_call\nFROM calls AS c\nLEFT JOIN costs AS k ON k.call_date = c.call_date\nORDER BY c.call_date"
+    }
+  ]
+}

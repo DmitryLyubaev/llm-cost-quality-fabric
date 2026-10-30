@@ -67,7 +67,7 @@ GRAINS: dict[str, str] = {
     "fact_live_check": "check x session",
     "fact_gateway_call": "gateway call",
     "dim_model_deployment": "deployment version (Type 2)",
-    "dim_project": "project 1-10, plus releaselens-shared and untagged",
+    "dim_project": "project 1-10, plus capstone, releaselens-shared and untagged",
     "dim_study": "study run",
     "dim_arm": "arm within a study",
     "dim_date": "day",
@@ -75,8 +75,8 @@ GRAINS: dict[str, str] = {
     USER_PROJECT_NAME: "user (UPN) x project the user may see",
 }
 
-# Project names from the portfolio tracker's project table; the two pseudo-projects are
-# the attribution fall-backs (lakehouse.attribution).
+# Project names from the portfolio tracker's project table; `capstone` is the phase 4 capstone
+# (infra/capstone); the last two are the attribution fall-backs (lakehouse.attribution).
 PROJECTS = [
     ("p1", "Azure OpenAI, keyless"),
     ("p2", "Measured RAG benchmark on Azure AI Search"),
@@ -88,6 +88,7 @@ PROJECTS = [
     ("p8", "Azure Pipelines delivery for project 2"),
     ("p9", "Fabric lakehouse and batch pipelines"),
     ("p10", "Fabric Real-Time Intelligence"),
+    ("capstone", "Phase 4 capstone: data agent"),
     ("releaselens-shared", "ReleaseLens shared resources"),
     ("untagged", "Untagged spend"),
 ]

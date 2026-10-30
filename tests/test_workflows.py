@@ -124,6 +124,74 @@ def test_prod_publishes_then_uploads_then_shortcuts(deploy):
     ]
 
 
+CAPSTONE_WORDS = ("publish-capstone", "fabric-capstone", "CAPSTONE_WORKSPACE_ID", "capstone", "CAPSTONE")
+# The one exception, in ci.yml only: the exact validate line for each capstone Terraform stack
+# (infra/capstone/*), as for every stack. That is infrastructure, not the data agent. Nothing may
+# be chained onto it.
+CI_CAPSTONE_LINE = re.compile(
+    r"terraform -chdir=infra/capstone/(capacity|workspace) init -backend=false"
+    r" && terraform -chdir=infra/capstone/\1 validate"
+)
+
+
+def capstone_text(name, text):
+    """The workflow text left to scan for capstone words (ci.yml loses only its exact exempt lines)."""
+    if name != "ci.yml":
+        return text
+    return "\n".join(line for line in text.splitlines() if not CI_CAPSTONE_LINE.fullmatch(line.strip()))
+
+
+@pytest.mark.parametrize("name", ["deploy.yml", "ci.yml"])
+def test_no_workflow_touches_the_capstone(name):
+    """The capstone's data agent is deployed by hand as fabric@ (publish-capstone), never from
+    Actions, whether by the deploy service principal or by CI."""
+    text = capstone_text(name, (WORKFLOWS / name).read_text(encoding="utf-8"))
+    for value in CAPSTONE_WORDS:
+        assert value not in text
+
+
+def test_the_ci_exemption_covers_exactly_the_two_real_validate_lines():
+    ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    exempt = [line.strip() for line in ci.splitlines() if CI_CAPSTONE_LINE.fullmatch(line.strip())]
+    assert len(exempt) == 2
+    assert {line.split("-chdir=")[1].split(" ")[0] for line in exempt} == {
+        "infra/capstone/capacity",
+        "infra/capstone/workspace",
+    }
+
+
+@pytest.mark.parametrize(
+    "smuggled",
+    [
+        "terraform -chdir=infra/capstone/workspace init && python .deploy/deploy.py publish-capstone",
+        "terraform -chdir=infra/capstone/workspace init -backend=false && terraform -chdir=infra/capstone/workspace validate && python .deploy/deploy.py publish-capstone",
+        "terraform -chdir=infra/capstone/workspace init -backend=false && terraform -chdir=infra/capstone/capacity validate",
+        "terraform -chdir=infra/capstone/capacity apply",
+        "terraform -chdir=infra/capstone/capacity init -backend=false; echo CAPSTONE_WORKSPACE_ID",
+    ],
+)
+def test_a_smuggled_capstone_line_in_ci_is_caught(smuggled):
+    text = capstone_text("ci.yml", f"      - run: |\n          {smuggled}\n")
+    assert any(value in text for value in CAPSTONE_WORDS)
+
+
+def test_any_capstone_mention_in_deploy_fails_even_the_validate_line():
+    line = (
+        "terraform -chdir=infra/capstone/workspace init -backend=false"
+        " && terraform -chdir=infra/capstone/workspace validate"
+    )
+    assert any(value in capstone_text("deploy.yml", line) for value in CAPSTONE_WORDS)
+
+
+def test_deploy_runs_no_command_outside_the_projects_9_to_11_set(deploy):
+    allowed = {
+        "publish", "upload-wheel", "ensure-shortcut", "onelake-availability", "ensure-gateway-shortcut",
+        "refresh-model",
+    }
+    for job in deploy["jobs"].values():
+        assert set(deploy_commands(job)) <= allowed
+
+
 GATE = "P10_EVENTHUB_CONNECTION_ID"
 GATE_SECRET = "${{ secrets.P10_EVENTHUB_CONNECTION_ID }}"
 
@@ -294,7 +362,7 @@ def test_deploy_permissions_default_to_read_only(deploy):
 
 def test_ci_is_hardened(ci):
     job = ci["jobs"]["test"]
-    assert job["timeout-minutes"] == 90
+    assert job["timeout-minutes"] == 120
     assert ci["permissions"] == {"contents": "read"}
     on = triggers(ci)
     assert set(on) == {"push", "pull_request"}
@@ -331,7 +399,13 @@ def test_ci_hygiene_runs_always_and_fails_on_push_without_the_secret(ci):
 def test_ci_validates_all_terraform_stacks(ci):
     runs = "\n".join(str(s.get("run", "")) for s in steps(ci["jobs"]["test"]))
     assert "terraform fmt -check -recursive infra" in runs
-    for stack in ("infra/fabric", "infra/cost-export", "infra/event-hubs"):
+    for stack in (
+        "infra/fabric",
+        "infra/cost-export",
+        "infra/event-hubs",
+        "infra/capstone/capacity",
+        "infra/capstone/workspace",
+    ):
         assert f"terraform -chdir={stack} init -backend=false" in runs
         assert f"terraform -chdir={stack} validate" in runs
     for forbidden in ("terraform plan", "terraform apply"):

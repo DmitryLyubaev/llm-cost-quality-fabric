@@ -358,3 +358,16 @@ def test_semantic_link_is_imported_only_when_called():
     assert "sempy" not in sys.modules
     with pytest.raises(ModuleNotFoundError, match="sempy"):
         fabric_entry._sempy_evaluate_dax(dataset="sm_portfolio", dax_string="EVALUATE {1}")
+
+
+def test_importing_the_entry_module_imports_no_capstone_code():
+    """Prod's nb_load imports fabric_entry; the capstone's modules load only when its entry points run."""
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys, lakehouse.fabric_entry; "
+        "print(sorted(m for m in sys.modules if m.startswith('lakehouse.capstone.')))"
+    )
+    done = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
+    assert done.stdout.strip() == "[]"

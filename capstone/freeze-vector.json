@@ -1,0 +1,44 @@
+{
+  "description": "Shared test vector for the capstone freeze. Inputs are inline JSON strings (decode them, then encode as UTF-8 to get the bytes; CR and LF are the escapes \\r and \\n). data_agent maps each relative POSIX path to its file content. Recompute every component, the overall hash and the short hash by the algorithm in the docstring of src/lakehouse/capstone/freeze.py.",
+  "inputs": {
+    "questions": "[\r\n  {\"id\": \"q01\", \"text\": \"How much did p2 spend in total?\", \"kind\": \"money\"}\r\n]\r\n",
+    "expected": "{\n  \"q01\": {\"kind\": \"money\", \"value\": 1234.5}\n}\n",
+    "rules": "TOLERANCE = 0.01\r\n\r\n\r\ndef score(answer, expected):\r\n    return abs(answer - expected) <= TOLERANCE\r\n",
+    "analyst_instructions": "You are the portfolio analyst.\r\nAnswer only from the data agent, in AUD;\r\nsay so when you cannot (caf\u00e9 rule).\r\n",
+    "data_agent": {
+      "agent.json": "{\n  \"name\": \"capstone\",\n  \"source\": \"lh_capstone\"\n}\n",
+      "instructions/system.md": "Answer in at most 25 rows.\r\nUse the gold schema only.\r\n",
+      ".gitignore": "*.tmp\n",
+      ".config/settings.json": "{\"hidden\": true}\n",
+      "a.json": "{\"k\": 1}\n",
+      "a/b.md": "# b\n",
+      "Readme.md": "Upper case name\n",
+      "readme.md": "Lower case name\n",
+      "empty.txt": "",
+      "no-newline.txt": "last line without a newline",
+      "bom.txt": "\ufeffa byte order mark first\n",
+      "lone-cr.txt": "one\rtwo\rthree\n",
+      "crcrlf.txt": "x\r\r\ny\r\n",
+      "caf\u00e9.md": "NFC e-acute\n",
+      "unicode/\uff5e.md": "fullwidth tilde, a BMP character above the surrogates\n",
+      "unicode/\ud835\udd18.md": "a supplementary-plane character\n"
+    },
+    "snapshot_time": "2026-10-25T00:00:00Z",
+    "model_direct": "gpt-5.1",
+    "model_foundry": "gpt-5.1-foundry"
+  },
+  "expected": {
+    "components": {
+      "questions": "10fb47a047b445a19c11ec80c965bd497f413caf202b10868e00b5ed980a72f6",
+      "expected": "4fbcc25f381fa65f61d4215a0f6f90d3504f9c32dca00a80ae917db7c9549d4d",
+      "rules": "6215d177b82c139081dc0221e4617e5d8ce278c415e772184b6c99c1fd114f08",
+      "snapshot_time": "c4a3bea8eee37f217779ce3568f21661ae613bdf446c75c670cc824077a5dd48",
+      "data_agent": "482e78701b6a4af8a68d4f7ffc6d39ff3a4db7d8aea97700f580732a153abc61",
+      "analyst_instructions": "db7bfb5e3544021adfeb45995bf68c6570923bfeb373e9ea71255443289aba27",
+      "model_direct": "e7ee8b015b531feb8b6b0409f21aca9d5f0fba84db806c9d3ef671e2b36c55bf",
+      "model_foundry": "f1809d173b244dd5bc8b7d4101d64abc113516ae3c75cdcf54220123763bcda6"
+    },
+    "hash": "1b18407a23108c17779fed9704f786a8246ab1c276d24bd499b9efbce8345149",
+    "short": "1b18407a2310"
+  }
+}

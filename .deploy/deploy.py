@@ -1,7 +1,10 @@
 """Deploy script run by GitHub Actions after azure/login (OIDC).
 
 Subcommands: upload-wheel, publish, ensure-shortcut, onelake-availability,
-ensure-gateway-shortcut, refresh-model. Every input comes from environment variables so
+ensure-gateway-shortcut, refresh-model, and publish-capstone, which is never run from Actions:
+the owner runs it by hand as fabric@, signed in through the Azure CLI, against the capstone
+workspace named by its own variable, CAPSTONE_WORKSPACE_ID (never FABRIC_WORKSPACE_ID).
+Every input comes from environment variables so
 nothing sensitive lands in argv or logs. Nothing here prints an environment value, a
 token, a request body or a URL carrying the shortcut location or a query URI.
 
@@ -55,6 +58,24 @@ SHORTCUT_NAME = "cost_export"
 LAKEHOUSE_NAME = "lh_portfolio"
 # Found by name too: it exists only after a publish with the model gate open.
 SEMANTIC_MODEL_NAME = "sm_portfolio"
+
+# The capstone (spec 4.2): its data agent, the snapshot lakehouse and the two notebooks, in their own
+# folder with their own parameter.yml, deployed by publish-capstone to the capstone workspace and never
+# by publish. No gate and no $ENV: token, so neither the feature flag nor a stand-in.
+CAPSTONE_REPOSITORY_DIRECTORY = str(Path(__file__).resolve().parent.parent / "fabric-capstone")
+CAPSTONE_ITEM_TYPES = ["Lakehouse", "Notebook", "DataAgent"]
+CAPSTONE_ENVIRONMENT = "CAPSTONE"
+# Found by name after fabric-cicd has created or updated it. List Data Agents (paged by continuationToken):
+# https://learn.microsoft.com/en-us/rest/api/fabric/dataagent/items/list-data-agents
+DATA_AGENT_NAME = "da_portfolio"
+# Publish Data Agent promotes the staging (draft) configuration to the published one, which is the only
+# one MCP and Foundry can reach. POST .../dataAgents/{id}/staging/publish with {publishedDescription};
+# Learn documents 200 OK only (no long-running operation), and service principals and users alike:
+# https://learn.microsoft.com/en-us/rest/api/fabric/dataagent/items/publish-data-agent
+DATA_AGENT_DESCRIPTION = (
+    "Answers questions about the portfolio's Azure spend, evaluation studies, live checks and API "
+    "gateway calls, from a frozen snapshot of the gold tables in lh_capstone."
+)
 
 # R13: the real-time path runs only when the Eventstream's Fabric connection exists.
 REALTIME_GATE = "P10_EVENTHUB_CONNECTION_ID"
@@ -370,6 +391,12 @@ def _enable_feature_flag(name):
     append_feature_flag(name)
 
 
+def _load_fabric_cicd():
+    """Import fabric_cicd, which sets up its loggers and their console handler on import, so the
+    redaction filter has those handlers to sit on (see _redacted_fabric_cicd_logs)."""
+    import fabric_cicd  # noqa: F401
+
+
 def _fabric_workspace(**kwargs):
     from fabric_cicd import FabricWorkspace
 
@@ -618,6 +645,44 @@ def refresh_model():
     return 0
 
 
+def _data_agent_id(workspace_id, token):
+    """The ID of the data agent named DATA_AGENT_NAME (see _find_item)."""
+    return str(_find_item(workspace_id, token, "dataAgents", DATA_AGENT_NAME, "data agent")["id"])
+
+
+def publish_capstone():
+    """Deploy fabric-capstone/ (lh_capstone, its notebooks, da_portfolio) to the capstone workspace,
+    then publish da_portfolio: fabric-cicd deploys the definition, whose draft stage is all it writes,
+    and an unpublished data agent cannot be reached over MCP or from Foundry. Run by hand as fabric@
+    (the AzureCliCredential of _credential); a re-run deploys and publishes again.
+
+    The workspace comes from CAPSTONE_WORKSPACE_ID only, never FABRIC_WORKSPACE_ID: a shell with prod's
+    ID exported must not deploy the capstone's items into prod. Missing, the step exits 2 naming it."""
+    workspace_id = _env("CAPSTONE_WORKSPACE_ID")
+    credential = _credential()
+    _load_fabric_cicd()  # its loggers and handlers exist before the redaction goes on them
+    # The same redaction as publish: fabric-cicd logs item IDs and request URLs at INFO.
+    with _redacted_fabric_cicd_logs():
+        workspace = _fabric_workspace(
+            workspace_id=workspace_id,
+            environment=CAPSTONE_ENVIRONMENT,
+            repository_directory=CAPSTONE_REPOSITORY_DIRECTORY,  # reads fabric-capstone/parameter.yml
+            item_type_in_scope=list(CAPSTONE_ITEM_TYPES),
+            token_credential=credential,
+        )
+        _publish(workspace)  # no unpublish: orphans are left alone
+    token = credential.get_token(FABRIC_SCOPE).token
+    agent_id = _data_agent_id(workspace_id, token)
+    url = f"{FABRIC_API_BASE}/workspaces/{workspace_id}/dataAgents/{agent_id}/staging/publish"
+    status, body = _http_post(url, {"publishedDescription": DATA_AGENT_DESCRIPTION}, token)
+    # Status before body. Only 200 is documented: anything else, a 202 included, is a publish this
+    # step did not see finish.
+    if status != 200:
+        raise StepFailed(f"HTTP {status} {_error_code(body)}")
+    print("publish-capstone: ok")
+    return 0
+
+
 COMMANDS = {
     "upload-wheel": upload_wheel,
     "publish": publish,
@@ -625,6 +690,7 @@ COMMANDS = {
     "onelake-availability": onelake_availability,
     "ensure-gateway-shortcut": ensure_gateway_shortcut,
     "refresh-model": refresh_model,
+    "publish-capstone": publish_capstone,
 }
 
 
