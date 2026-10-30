@@ -11,6 +11,7 @@ from delta.tables import DeltaTable
 
 from lake_helpers import copy_lake
 from lakehouse import fabric_entry
+from lakehouse.capstone import expected as expected_module
 from lakehouse.capstone import snapshot
 from lakehouse.capstone.expected import compute_expected
 from lakehouse.capstone.snapshot import SNAPSHOT_FILE, SNAPSHOT_TABLES, copy_gold
@@ -222,7 +223,7 @@ def _capture_copy(monkeypatch):
 
     spark_stub = object()
     monkeypatch.setattr(fabric_entry, "get_active_spark", lambda: spark_stub)
-    monkeypatch.setattr(fabric_entry, "copy_gold", fake_copy_gold)
+    monkeypatch.setattr(snapshot, "copy_gold", fake_copy_gold)
     return seen, spark_stub
 
 
@@ -267,7 +268,7 @@ def test_snapshot_gold_trims_the_ids(monkeypatch):
 )
 def test_snapshot_gold_needs_two_guids(monkeypatch, workspace, lakehouse):
     _capture_copy(monkeypatch)
-    monkeypatch.setattr(fabric_entry, "copy_gold", lambda *a: pytest.fail("must not copy"))
+    monkeypatch.setattr(snapshot, "copy_gold", lambda *a: pytest.fail("must not copy"))
 
     with pytest.raises(ValueError, match="GUID"):
         fabric_entry.snapshot_gold(workspace, lakehouse, CONTEXT)
@@ -275,7 +276,7 @@ def test_snapshot_gold_needs_two_guids(monkeypatch, workspace, lakehouse):
 
 def test_snapshot_gold_refuses_its_own_default_lakehouse_as_the_source(monkeypatch):
     _capture_copy(monkeypatch)
-    monkeypatch.setattr(fabric_entry, "copy_gold", lambda *a: pytest.fail("must not copy"))
+    monkeypatch.setattr(snapshot, "copy_gold", lambda *a: pytest.fail("must not copy"))
     context = {"currentWorkspaceId": SOURCE_WS, "defaultLakehouseId": SOURCE_LH.upper()}
 
     with pytest.raises(ValueError, match="default lakehouse"):
@@ -318,7 +319,7 @@ def test_capstone_expected_reads_questions_and_writes_expected_beside_them(spark
 def test_capstone_expected_needs_the_uploaded_questions(tmp_path, monkeypatch):
     monkeypatch.setattr(fabric_entry, "FILES_MOUNT", str(tmp_path))
     monkeypatch.setattr(fabric_entry, "get_active_spark", lambda: object())
-    monkeypatch.setattr(fabric_entry, "compute_expected", lambda *a: pytest.fail("must not compute"))
+    monkeypatch.setattr(expected_module, "compute_expected", lambda *a: pytest.fail("must not compute"))
 
     with pytest.raises(FileNotFoundError, match="questions.json"):
         fabric_entry.capstone_expected(CONTEXT)

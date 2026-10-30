@@ -1,14 +1,16 @@
 """The capstone report: records scored by rule, headline numbers computed by hand here."""
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 import capstone_freeze
 import capstone_report
-from lakehouse.capstone.freeze import build_freeze
-from lakehouse.capstone.report import ReportError, load_records, render, summarise
+from lakehouse.capstone.freeze import RULES_PATH, build_freeze
+from lakehouse.capstone.report import ReportError, load_records, redact, render, summarise
 
 ROOT = Path(__file__).resolve().parent.parent
 FREEZE = {"components": {}, "hash": "a" * 64, "short": "a" * 12}
@@ -273,6 +275,7 @@ def test_load_records_reads_jsonl_and_names_a_bad_line(tmp_path):
 
 INSTRUCTIONS = b"You are the analyst.\n"
 MODELS = {"direct": "gpt-5.5", "foundry": "gpt-5.5"}
+COMMIT = "1a2b3c4"
 
 
 @pytest.fixture
@@ -280,12 +283,12 @@ def cli(tmp_path, monkeypatch):
     agent = tmp_path / "agent"
     agent.mkdir()
     (agent / "data_agent.json").write_text("{}\n", encoding="utf-8")
-    questions, expected, rules = tmp_path / "questions.json", tmp_path / "expected.json", tmp_path / "score.py"
+    questions, expected = tmp_path / "questions.json", tmp_path / "expected.json"
     questions.write_text(json.dumps(QUESTIONS) + "\n", encoding="utf-8")
     expected.write_text(json.dumps(EXPECTED) + "\n", encoding="utf-8")
-    rules.write_text("# rules\n", encoding="utf-8")
     monkeypatch.setattr(capstone_freeze, "read_instructions", lambda repo, commit: INSTRUCTIONS)
-    freeze = build_freeze(questions, expected, SNAPSHOT, agent, INSTRUCTIONS, MODELS, rules=rules)
+    monkeypatch.setattr(capstone_report, "source_state", lambda: (COMMIT, False))
+    freeze = build_freeze(questions, expected, SNAPSHOT, agent, INSTRUCTIONS, MODELS)  # rules: score.py itself
     (tmp_path / "freeze.json").write_text(json.dumps(freeze) + "\n", encoding="utf-8")
     runs = tmp_path / "runs"
     runs.mkdir()
@@ -298,7 +301,7 @@ def cli(tmp_path, monkeypatch):
         "--out", str(tmp_path / "report.md"),
         "--freezes", "1",
         "--cu-direct", "1520.5", "--cu-unit", "CU-seconds",
-        "--questions", str(questions), "--expected", str(expected), "--rules", str(rules),
+        "--questions", str(questions), "--expected", str(expected),
         "--data-agent-dir", str(agent), "--snapshot-time", SNAPSHOT,
         "--analyst-repo", str(tmp_path), "--analyst-commit", "abc123",
         "--model-direct", MODELS["direct"], "--model-foundry", MODELS["foundry"],
@@ -360,3 +363,201 @@ def test_a_pattern_must_match_the_whole_value():
 
     with pytest.raises(ReportError, match="started_utc"):
         _render([record if i == 0 else r for i, r in enumerate(_records())])
+
+
+# --- records survive any line separator (U+2028 and the like) ---
+
+
+@pytest.mark.parametrize("odd", [" ", " ", "\u0085", "\x1c", "\x1d", "\x1e", "\x0b", "\x0c"])
+def test_a_record_holding_a_unicode_line_separator_is_one_line(tmp_path, odd):
+    # The runner writes ASCII-escaped JSON now, but a record written unescaped (by an older runner, or
+    # by project 3) must still read back as one record: lines split on LF only.
+    text = f"It went up{odd}by 12%"
+    records = _records()
+    records[0] = _record("direct", "q01", 1, text)
+    (tmp_path / "raw.jsonl").write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n", encoding="utf-8"
+    )
+    (tmp_path / "escaped.jsonl").write_text(json.dumps(records[0]) + "\r\n", encoding="utf-8", newline="")
+
+    raw = load_records([tmp_path / "raw.jsonl"])
+    escaped = load_records([tmp_path / "escaped.jsonl"])
+
+    assert len(raw) == len(records) and raw[0]["answer_text"] == text
+    assert escaped == [records[0]]
+
+
+def test_a_trailing_newline_is_not_a_record_and_a_missing_one_is_fine(tmp_path):
+    lines = [json.dumps(r) for r in _records()[:2]]
+    (tmp_path / "a.jsonl").write_text("\n".join(lines), encoding="utf-8")  # no final newline
+    (tmp_path / "b.jsonl").write_text("\n".join(lines) + "\n\n", encoding="utf-8")  # a blank line too
+
+    assert len(load_records([tmp_path / "a.jsonl"])) == 2
+    assert len(load_records([tmp_path / "b.jsonl"])) == 2
+
+
+# --- the shared redaction vector (copied byte for byte into project 3) ---
+
+VECTOR = ROOT / "capstone" / "redaction-vector.json"
+
+
+def test_the_shared_redaction_vector_holds_for_every_case():
+    cases = json.loads(VECTOR.read_bytes().decode("ascii"))
+    assert len(cases) >= 40
+    for case in cases:
+        assert set(case) == {"input", "output"}
+        assert redact(case["input"]) == case["output"], case["input"]
+    inputs = [case["input"] for case in cases]
+    assert any(not text.isascii() for text in inputs)  # a Unicode letter next to a token pins \w
+    assert "the bearer of 3 checks; Bearer short-token-123 failed" in inputs
+    raw = VECTOR.read_bytes()
+    assert raw.endswith(b"\n") and b"\r" not in raw
+
+
+# --- unanswerable answers and answers with no tool call ---
+
+
+def _q04_records(calls):
+    """The usual records with each route's q04 answers given `calls[route]` tool calls per pass."""
+    return [
+        dict(r, tool_calls=calls[r["route"]][r["pass"] - 1]) if r["question_id"] == "q04" else r
+        for r in _records()
+    ]
+
+
+def test_every_unanswerable_answer_is_quoted_right_or_wrong_with_its_tool_calls():
+    text = _render(_q04_records({"direct": [1, 1, 1], "foundry": [0, 2, None]}))
+    section = text.split("## Unanswerable answers", 1)[1].split("## Wrong answers", 1)[0]
+
+    assert "#### Direct: q04, pass 1: wrong, 1 tool call\n" in section
+    assert "#### Direct: q04, pass 3: right, 1 tool call\n" in section
+    assert "#### Through Foundry: q04, pass 1: right, no tool call\n" in section
+    assert "#### Through Foundry: q04, pass 2: wrong, 2 tool calls\n" in section
+    assert "#### Through Foundry: q04, pass 3: wrong, tool calls not recorded\n" in section
+    assert section.count("\n> ") == 6  # every pass of both routes, right ones included
+    assert f"> {REFUSAL}" in section
+    assert "q01" not in section and "q02" not in section
+
+
+def test_an_answer_with_no_tool_call_is_marked_in_the_per_question_table():
+    text = _render(_q04_records({"direct": [1, 1, 1], "foundry": [0, 2, 0]}))
+    direct = text.split("### Direct", 1)[1].split("### Through Foundry", 1)[0]
+    foundry = text.split("### Through Foundry", 1)[1].split("## Unanswerable answers", 1)[0]
+
+    assert "no tool call" not in direct
+    assert "- Answered with no tool call: 2 records (q04 pass 1, q04 pass 3);" in foundry
+    rows = [line for line in foundry.splitlines() if line.startswith("| q04 |")]
+    assert rows[0].startswith("| q04 | 1 | right (no tool call) |") and "| 0 (no tool call) |" in rows[0]
+    assert rows[1].startswith("| q04 | 2 | wrong |") and "no tool call" not in rows[1]
+    assert rows[2].startswith("| q04 | 3 | wrong (no tool call) |")
+
+
+def test_marking_no_tool_call_does_not_change_the_score():
+    plain = summarise(_records(), QUESTIONS, EXPECTED, FREEZE)
+    bare = summarise(_q04_records({"direct": [0, 0, 0], "foundry": [0, 0, 0]}), QUESTIONS, EXPECTED, FREEZE)
+
+    for route in ("direct", "foundry"):
+        assert bare["routes"][route]["per_pass"] == plain["routes"][route]["per_pass"]
+
+
+# --- the commit the report ran from ---
+
+
+def test_the_report_states_its_commit_and_any_dirty_scoring_code():
+    clean = _render(_records(), commit="1a2b3c4")
+    dirty = _render(_records(), commit="1a2b3c4", dirty=True)
+
+    assert "- Fabric commit: `1a2b3c4`" in clean and "DEVELOPMENT ONLY" not in clean
+    assert "- Fabric commit: `1a2b3c4`" in dirty and "DEVELOPMENT ONLY: rendered with --allow-dirty" in dirty
+    assert "- Fabric commit: not given" in _render(_records())
+
+
+def test_cli_states_the_commit(cli):
+    assert capstone_report.main(cli["args"]) == 0
+
+    text = (cli["tmp"] / "report.md").read_text(encoding="utf-8")
+    assert f"- Fabric commit: `{COMMIT}`" in text and "DEVELOPMENT ONLY" not in text
+
+
+def test_cli_refuses_dirty_scoring_code_unless_allowed(cli, capsys, monkeypatch):
+    monkeypatch.setattr(capstone_report, "source_state", lambda: (COMMIT, True))
+
+    assert capstone_report.main(cli["args"]) == 2
+    assert capsys.readouterr().err.strip() == capstone_report.MSG_DIRTY
+    assert not (cli["tmp"] / "report.md").exists()
+
+    assert capstone_report.main(cli["args"] + ["--allow-dirty"]) == 0
+    assert "DEVELOPMENT ONLY" in (cli["tmp"] / "report.md").read_text(encoding="utf-8")
+
+
+def _git(repo: Path, *args) -> None:
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=T", "-c", "user.email=t@example.com", *args],
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_source_state_reads_the_commit_and_sees_changes_to_report_or_score(tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    repo = tmp_path / "fabric"
+    code = repo / "src" / "lakehouse" / "capstone"
+    code.mkdir(parents=True)
+    for name in ("report.py", "score.py", "freeze.py"):
+        (code / name).write_text(f"# {name}\n", encoding="utf-8")
+    _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "one")
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
+
+    assert capstone_report.source_state(repo) == (head.stdout.strip(), False)
+    (code / "freeze.py").write_text("# changed, but not scoring code\n", encoding="utf-8")
+    assert capstone_report.source_state(repo)[1] is False
+    (code / "score.py").write_text("# changed\n", encoding="utf-8")
+    assert capstone_report.source_state(repo)[1] is True
+    _git(repo, "add", "-A")
+    assert capstone_report.source_state(repo)[1] is True  # staged counts too
+    _git(repo, "commit", "-q", "-m", "two")
+    assert capstone_report.source_state(repo)[1] is False
+    (code / "report.py").unlink()
+    assert capstone_report.source_state(repo)[1] is True
+
+
+def test_source_state_outside_a_repository_is_an_input_error(tmp_path):
+    with pytest.raises(capstone_freeze.InputError, match="the Fabric commit cannot be read"):
+        capstone_report.source_state(tmp_path)
+
+
+# --- --rules: the report scores with score.py, so the freeze is verified against it alone ---
+
+
+@pytest.mark.parametrize("form", ["separate", "joined", "the real file"])
+def test_cli_refuses_rules(cli, capsys, form):
+    other = cli["tmp"] / "score.py"
+    other.write_text("# rules that never score\n", encoding="utf-8")
+    extra = {
+        "separate": ["--rules", str(other)],
+        "joined": [f"--rules={other}"],
+        "the real file": ["--rules", str(RULES_PATH)],
+    }[form]
+
+    assert capstone_report.main(cli["args"] + extra) == 2
+    assert capsys.readouterr().err.strip() == capstone_freeze.MSG_NO_RULES
+    assert not (cli["tmp"] / "report.md").exists()
+
+
+def test_cli_verifies_the_freeze_against_score_py(cli, capsys):
+    # A freeze whose rules hash some other file fails at `rules`: the report never scores with code
+    # the freeze did not hash.
+    other = cli["tmp"] / "other-score.py"
+    other.write_text("# rules\n", encoding="utf-8")
+    freeze_path = cli["tmp"] / "freeze.json"
+    freeze = json.loads(freeze_path.read_text(encoding="utf-8"))
+    hashed = build_freeze("", "", "t", cli["tmp"] / "agent", "", MODELS, rules=other)
+    freeze["components"]["rules"] = hashed["components"]["rules"]
+    freeze_path.write_text(json.dumps(freeze) + "\n", encoding="utf-8")
+
+    assert capstone_report.main(cli["args"]) == 1
+    assert "rules changed" in capsys.readouterr().err
+    assert not (cli["tmp"] / "report.md").exists()

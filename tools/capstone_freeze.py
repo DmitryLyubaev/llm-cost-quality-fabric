@@ -56,11 +56,19 @@ def read_instructions(repo: str, commit: str) -> bytes:
     return shown.stdout
 
 
-def add_freeze_arguments(parser: argparse.ArgumentParser) -> None:
-    """The freeze's inputs as options; the runner and the report take the same ones."""
+def add_freeze_arguments(parser: argparse.ArgumentParser, rules: bool = True) -> None:
+    """The freeze's inputs as options; the runner and the report take the same ones, less `--rules`.
+
+    `rules=False` leaves `--rules` out: the runner and the report score with the imported
+    `lakehouse.capstone.score`, so they must verify the freeze against that same file
+    (`freeze.RULES_PATH`), never one named on the command line.
+    """
     parser.add_argument("--questions", type=Path, default=ROOT / "capstone" / "questions.json")
     parser.add_argument("--expected", type=Path, default=ROOT / "capstone" / "expected.json")
-    parser.add_argument("--rules", type=Path, default=None, help="default: src/lakehouse/capstone/score.py")
+    if rules:
+        parser.add_argument("--rules", type=Path, default=None, help="default: src/lakehouse/capstone/score.py")
+    else:
+        parser.set_defaults(rules=None)  # build_freeze then hashes RULES_PATH, the scoring code itself
     parser.add_argument(
         "--data-agent-dir", type=Path, default=ROOT / "fabric-capstone" / "da_portfolio.DataAgent"
     )
@@ -70,6 +78,19 @@ def add_freeze_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model-direct", required=True)
     parser.add_argument("--model-foundry", required=True)
     parser.add_argument("--freeze", type=Path, default=ROOT / "capstone" / "freeze.json")
+
+
+MSG_NO_RULES = (
+    "--rules: not taken here; the freeze is verified against src/lakehouse/capstone/score.py, "
+    "the code that scores (only the freeze command takes --rules)"
+)
+
+
+def refuse_rules(argv: list[str] | None) -> None:
+    """InputError (fixed text) when `argv` names --rules: for the runner and the report, which drop it."""
+    given = sys.argv[1:] if argv is None else argv
+    if any(arg == "--rules" or arg.startswith("--rules=") for arg in given):
+        raise InputError(MSG_NO_RULES)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -92,7 +113,7 @@ def gather_inputs(args: argparse.Namespace, need_freeze: bool) -> dict:
     """
     _require_file("--questions", args.questions)
     _require_file("--expected", args.expected)
-    _require_file("--rules", args.rules)
+    _require_file("--rules", getattr(args, "rules", None))
     if not args.data_agent_dir.is_dir():
         raise InputError("--data-agent-dir: folder not found")
     if need_freeze:
@@ -100,7 +121,7 @@ def gather_inputs(args: argparse.Namespace, need_freeze: bool) -> dict:
     return {
         "questions": args.questions,
         "expected": args.expected,
-        "rules": args.rules,
+        "rules": getattr(args, "rules", None),
         "snapshot_time": args.snapshot_time,
         "data_agent_dir": args.data_agent_dir,
         "analyst_instructions": read_instructions(args.analyst_repo, args.analyst_commit),

@@ -2,9 +2,13 @@
 
 import hashlib
 import json
+import os
 import re
 import shutil
+import stat
 import subprocess
+import sys
+import types
 import unicodedata
 from pathlib import Path
 
@@ -216,6 +220,43 @@ def test_a_symlink_in_the_data_agent_folder_is_rejected(tmp_path, agent):
     (agent / "link.json").unlink()
     (agent / "linked-dir").symlink_to(agent / "sources", target_is_directory=True)
     with pytest.raises(DataAgentError, match="symbolic link"):
+        _build(agent)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junctions are a Windows feature (mklink /J)")
+def test_a_windows_junction_in_the_data_agent_folder_is_rejected(tmp_path, agent, monkeypatch):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.json").write_text("{}\n", encoding="utf-8")
+    made = subprocess.run(["cmd", "/c", "mklink", "/J", str(agent / "junction"), str(outside)], capture_output=True)
+    assert made.returncode == 0, made
+    walked = []
+    real_walk = os.walk
+
+    def recording_walk(*args, **kwargs):
+        for step in real_walk(*args, **kwargs):
+            walked.append(step[0])
+            yield step
+
+    monkeypatch.setattr(freeze_module.os, "walk", recording_walk)
+    with pytest.raises(DataAgentError, match="reparse point: junction$"):
+        _build(agent)
+    assert not any("junction" in Path(current).name for current in walked)  # never descended into it
+
+
+def test_any_reparse_point_is_rejected(agent, monkeypatch):
+    # A reparse point that is neither a symbolic link nor a junction (say, a OneDrive placeholder)
+    # shows only in st_file_attributes; simulate one on every platform.
+    real_lstat = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        result = real_lstat(path, *args, **kwargs)
+        if Path(path).name == "agent.json":
+            return types.SimpleNamespace(st_mode=result.st_mode, st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT)
+        return result
+
+    monkeypatch.setattr(os, "lstat", lstat)
+    with pytest.raises(DataAgentError, match="reparse point: agent.json$"):
         _build(agent)
 
 
@@ -556,7 +597,7 @@ def test_cli_a_symlink_in_the_data_agent_exits_2(tmp_path, agent, analyst_repo, 
     except (OSError, NotImplementedError):
         pytest.skip("symbolic links are not available here")
     assert capstone_freeze.main(_cli_args(tmp_path, agent, repo, first, "freeze")) == 2
-    assert _stderr(capsys) == "--data-agent-dir: the data agent folder holds a symbolic link: link.json"
+    assert _stderr(capsys) == "--data-agent-dir: the data agent folder holds a symbolic link or reparse point: link.json"
 
 
 def test_cli_default_data_agent_folder_is_the_portfolio_data_agent():

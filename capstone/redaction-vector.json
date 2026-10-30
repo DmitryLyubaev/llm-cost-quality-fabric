@@ -1,0 +1,206 @@
+[
+  {
+    "input": "See https://app.fabric.example.com/groups/abc/reports?x=1.",
+    "output": "See <url>."
+  },
+  {
+    "input": "(https://leak.example/x)",
+    "output": "(<url>)"
+  },
+  {
+    "input": "read 9lake.dfs.core.windows.net/x/y now",
+    "output": "read <url> now"
+  },
+  {
+    "input": "read abfss://gold@acct.dfs.core.windows.net/Tables/0f8fad5b-d9cb-469f-a165-70867728950e ok",
+    "output": "read <url> ok"
+  },
+  {
+    "input": "abfs://c@a.dfs.core.windows.net/x",
+    "output": "<url>"
+  },
+  {
+    "input": "POST api.fabric.example.com/v1/mcp/workspaces/w/agent failed.",
+    "output": "POST <url> failed."
+  },
+  {
+    "input": "host leak.example.org, then",
+    "output": "host <url>, then"
+  },
+  {
+    "input": "api.fabric.contoso.dev/v1 and model.studio.ai",
+    "output": "<url> and <url>"
+  },
+  {
+    "input": "item-0f8fad5b-d9cb-469f-a165-70867728950e",
+    "output": "item-<id>"
+  },
+  {
+    "input": "ws0F8FAD5B-D9CB-469F-A165-70867728950Ex",
+    "output": "ws<id>x"
+  },
+  {
+    "input": "{0f8fad5b-d9cb-469f-a165-70867728950e}",
+    "output": "{<id>}"
+  },
+  {
+    "input": "id=7c9e6679742540de944be07fc1f90ae7",
+    "output": "id=<id>"
+  },
+  {
+    "input": "ws_7c9e6679742540de944be07fc1f90ae7_x",
+    "output": "ws_<id>_x"
+  },
+  {
+    "input": "item 7c9e6679742540de944be07fc1f90ae7: 12 checks, A$3.40",
+    "output": "item <id>: 12 checks, A$3.40"
+  },
+  {
+    "input": "a 33-hex run 7c9e6679742540de944be07fc1f90ae7a or 31 7c9e6679742540de944be07fc1f90ae is not an ID",
+    "output": "a 33-hex run 7c9e6679742540de944be07fc1f90ae7a or 31 7c9e6679742540de944be07fc1f90ae is not an ID"
+  },
+  {
+    "input": "mail first.last@example.org, now",
+    "output": "mail <email>, now"
+  },
+  {
+    "input": "a@b.example.com and x+tag@sub.example.io.",
+    "output": "<email> and <email>."
+  },
+  {
+    "input": "Authorization: Bearer abc.def-123_456~789+0/xyz=",
+    "output": "Authorization: Bearer <token>"
+  },
+  {
+    "input": "auth bearer abc.def-123_456~789+0/xyz= failed",
+    "output": "auth bearer <token> failed"
+  },
+  {
+    "input": "the bearer of 3 checks; Bearer short-token-123 failed",
+    "output": "the bearer of 3 checks; Bearer short-token-123 failed"
+  },
+  {
+    "input": "token eyJhbGciOiJ.eyJzdWIiOiJ.c2lnbmF0dXJl-_x used",
+    "output": "token <token> used"
+  },
+  {
+    "input": "header Authorization: Bearer eyJhbGciOiJ.eyJzdWIiOiJ.sig",
+    "output": "header Authorization: Bearer <token>"
+  },
+  {
+    "input": "query ?sv=2024-01-01&se=2026-11-10&sp=r&sig=AbC%2Bx%3D done",
+    "output": "query ?sv=<token>&se=<token>&sp=<token>&sig=<token> done"
+  },
+  {
+    "input": "skoid=x1&sktid=y2&st=2026&spr=https&srt=sco&ss=b&sig=abc",
+    "output": "skoid=<token>&sktid=<token>&st=<token>&spr=<token>&srt=<token>&ss=<token>&sig=<token>"
+  },
+  {
+    "input": "sv=1&sp=r&se=2 without a signature",
+    "output": "sv=1&sp=r&se=2 without a signature"
+  },
+  {
+    "input": "sp=12 failed and st=3 passed",
+    "output": "sp=12 failed and st=3 passed"
+  },
+  {
+    "input": "A$1,234.56",
+    "output": "A$1,234.56"
+  },
+  {
+    "input": "98.3%",
+    "output": "98.3%"
+  },
+  {
+    "input": "p4",
+    "output": "p4"
+  },
+  {
+    "input": "gpt-5.6-luna",
+    "output": "gpt-5.6-luna"
+  },
+  {
+    "input": "gpt-4.1-2025-04-14",
+    "output": "gpt-4.1-2025-04-14"
+  },
+  {
+    "input": "Microsoft.Azure",
+    "output": "Microsoft.Azure"
+  },
+  {
+    "input": "p2.dev",
+    "output": "p2.dev"
+  },
+  {
+    "input": "3.ms",
+    "output": "3.ms"
+  },
+  {
+    "input": "Project p2 spent A$1,234.56 (AUD 1 234.56) in October 2026; p4 had 98.3% with gpt-5.6-luna.",
+    "output": "Project p2 spent A$1,234.56 (AUD 1 234.56) in October 2026; p4 had 98.3% with gpt-5.6-luna."
+  },
+  {
+    "input": "e.g. the p7 checks: i.e. 3 failed. Rate 0.995 vs .75; ratio 3.2.1-beta; file report.md.",
+    "output": "e.g. the p7 checks: i.e. 3 failed. Rate 0.995 vs .75; ratio 3.2.1-beta; file report.md."
+  },
+  {
+    "input": "1.5.us, Fabric.AI and p3.app",
+    "output": "1.5.us, Fabric.AI and p3.app"
+  },
+  {
+    "input": "\u00e9Bearer abcdefghijklmnopqrstuvwxyz",
+    "output": "\u00e9Bearer abcdefghijklmnopqrstuvwxyz"
+  },
+  {
+    "input": "na\u00efve Bearer abcdefghijklmnopqrstuvwxyz0123",
+    "output": "na\u00efve Bearer <token>"
+  },
+  {
+    "input": "Bearer \u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1\u00f1",
+    "output": "Bearer <token>"
+  },
+  {
+    "input": "\u00fcber https://x.example/a",
+    "output": "\u00fcber <url>"
+  },
+  {
+    "input": "\u00fc.name@example.org",
+    "output": "\u00fc<email>"
+  },
+  {
+    "input": "a@b.example.com\u00e9",
+    "output": "<email>.com\u00e9"
+  },
+  {
+    "input": "caf\u00e9_0f8fad5b-d9cb-469f-a165-70867728950e",
+    "output": "caf\u00e9_<id>"
+  },
+  {
+    "input": "\u00e97c9e6679742540de944be07fc1f90ae7\u00e9",
+    "output": "\u00e9<id>\u00e9"
+  },
+  {
+    "input": "e\u0301Bearer abcdefghijklmnopqrstuvwxyz",
+    "output": "e\u0301Bearer <token>"
+  },
+  {
+    "input": "x\u00b2Bearer abcdefghijklmnopqrstuvwxyz",
+    "output": "x\u00b2Bearer abcdefghijklmnopqrstuvwxyz"
+  },
+  {
+    "input": "\u200dBearer abcdefghijklmnopqrstuvwxyz",
+    "output": "\u200dBearer <token>"
+  },
+  {
+    "input": "a\u203fBearer abcdefghijklmnopqrstuvwxyz",
+    "output": "a\u203fBearer <token>"
+  },
+  {
+    "input": "https://x.example/a\u001cb",
+    "output": "<url>\u001cb"
+  },
+  {
+    "input": "see https://x.example/a\u2028then",
+    "output": "see <url>\u2028then"
+  }
+]

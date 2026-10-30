@@ -43,8 +43,9 @@ The data agent folder
       an empty content line. A directory contributes nothing by itself, so an empty folder (or one
       holding only empty directories) hashes the empty byte string.
     - A folder that does not exist, or is not a directory, is an error (`DataAgentError`), never an
-      empty hash. Symbolic links are REJECTED: a link anywhere beneath the folder, to a file or to a
-      directory, is a `DataAgentError`. (The folder argument itself may be a link.)
+      empty hash. A symbolic link or reparse point (including Windows junctions) is REJECTED: one
+      anywhere beneath the folder, to a file or to a directory, is a `DataAgentError`, and the walk
+      never descends into it. (The folder argument itself may be a link.)
     - A path is the file's path relative to the folder: "/"-separated (POSIX style, whatever the
       platform), no leading "./", UTF-8 encoded, case as stored (so "Readme.md" and "readme.md"
       are different files), with no Unicode normalisation.
@@ -70,6 +71,7 @@ from the inputs and raises `FreezeBroken(component)` on the first mismatch.
 import hashlib
 import os
 import re
+import stat
 from pathlib import Path
 
 COMPONENTS = (
@@ -87,7 +89,7 @@ RULES_PATH = Path(__file__).resolve().parent / "score.py"
 
 
 class DataAgentError(Exception):
-    """The data agent folder is missing, is not a directory, or holds a symbolic link."""
+    """The data agent folder is missing, is not a directory, or holds a symbolic link or reparse point."""
 
 
 class FreezeBroken(Exception):
@@ -123,6 +125,13 @@ def _raise(error: OSError):
     raise error
 
 
+def _is_link(path: str) -> bool:
+    """A symbolic link, a Windows junction, or any other reparse point."""
+    if os.path.islink(path) or os.path.isjunction(path):
+        return True
+    return bool(getattr(os.lstat(path), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def _data_agent_bytes(folder: Path) -> bytes:
     if not folder.exists():
         raise DataAgentError("the data agent folder does not exist")
@@ -130,11 +139,12 @@ def _data_agent_bytes(folder: Path) -> bytes:
         raise DataAgentError("the data agent folder is not a directory")
     files: dict[str, str] = {}
     for current, dirnames, filenames in os.walk(folder, followlinks=False, onerror=_raise):
+        # Checked before os.walk descends into `dirnames`, so it never walks into a link or junction.
         for name in dirnames + filenames:
             full = os.path.join(current, name)
-            if os.path.islink(full):
+            if _is_link(full):
                 rel = Path(full).relative_to(folder).as_posix()
-                raise DataAgentError(f"the data agent folder holds a symbolic link: {rel}")
+                raise DataAgentError(f"the data agent folder holds a symbolic link or reparse point: {rel}")
         for name in filenames:
             full = os.path.join(current, name)
             files[Path(full).relative_to(folder).as_posix()] = full

@@ -20,6 +20,11 @@ error too (`ReportError`).
 
 The headline, per route: the mean number correct per pass, out of the number scored; the questions
 correct in all passes; and those correct in none.
+
+The scoring rule is not changed here, but two things it cannot see are shown. A record with 0 tool
+calls (a Foundry answer the data agent never saw) is listed per route and its verdict is marked
+"no tool call" in the per-question table. Every answer to an unanswerable question, right or wrong,
+is quoted with its tool calls beside it, since a refusal passes that question by rule.
 """
 
 import json
@@ -168,6 +173,8 @@ def load_records(paths: list[Path]) -> list[dict]:
     """Every record in the given `.jsonl` files and folders (a folder's `*.jsonl`, sorted by name).
 
     A `.jsonl.partial` file (an interrupted run) is not read. ReportError names a bad file and line.
+    Lines are split on LF alone (a CR before it is JSON whitespace), never on U+2028, U+2029, U+0085
+    or the other breaks `str.splitlines` knows, which may stand unescaped inside a JSON string.
     """
     files = []
     for path in map(Path, paths):
@@ -179,7 +186,10 @@ def load_records(paths: list[Path]) -> list[dict]:
             raise ReportError(f"{path.name}: no such file or folder")
     records = []
     for file in files:
-        for number, line in enumerate(file.read_text(encoding="utf-8").splitlines(), start=1):
+        lines = file.read_text(encoding="utf-8").split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()  # the final newline ends the last line; it does not start another
+        for number, line in enumerate(lines, start=1):
             if not line.strip():
                 continue
             try:
@@ -300,6 +310,24 @@ def _quote(text: str) -> str:
     return "\n".join(f"> {line}" if line.strip() else ">" for line in lines)
 
 
+NO_TOOL_CALL = "no tool call"
+
+
+def _no_tool_call(record: dict) -> bool:
+    """Answered without calling a tool (tool_calls 0): an answer the data agent never saw."""
+    return record["tool_calls"] == 0
+
+
+def _calls(record: dict) -> str:
+    """The record's tool-call count in words, as the report quotes it beside a verdict."""
+    calls = record["tool_calls"]
+    if calls is None:
+        return "tool calls not recorded"
+    if calls == 0:
+        return NO_TOOL_CALL
+    return f"{calls:,} tool call{'s' if calls != 1 else ''}"
+
+
 def _route_section(route: str, data: dict, scored: list[str]) -> list[str]:
     records = list(data["records"].values())
     count = len(records)
@@ -309,6 +337,14 @@ def _route_section(route: str, data: dict, scored: list[str]) -> list[str]:
         out.append(f"- Tool calls: {sum(calls):,} in all, {sum(calls) / len(calls):.1f} per question.")
     else:
         out.append("- Tool calls: not recorded.")
+    keys = [(qid, n) for qid in scored for n in range(1, PASSES + 1)]
+    bare = [key for key in keys if _no_tool_call(data["records"][key])]
+    if bare:
+        listed = ", ".join(f"{qid} pass {n}" for qid, n in bare)
+        out.append(
+            f"- Answered with {NO_TOOL_CALL}: {len(bare)} record{'s' if len(bare) != 1 else ''} ({listed}); "
+            "the data agent never saw these questions, and each verdict is marked."
+        )
     tokens_in = [r["input_tokens"] for r in records if r["input_tokens"] is not None]
     tokens_out = [r["output_tokens"] for r in records if r["output_tokens"] is not None]
     if tokens_in or tokens_out:
@@ -329,14 +365,12 @@ def _route_section(route: str, data: dict, scored: list[str]) -> list[str]:
     for qid in scored:
         for n in range(1, PASSES + 1):
             record, verdict = data["records"][(qid, n)], data["verdicts"][(qid, n)]
-            cells = [
-                qid,
-                str(n),
-                "right" if verdict.correct else "wrong",
-                _cell(verdict.reason),
-                *("–" if record[f] is None else f"{record[f]:,}" for f in ("tool_calls", "input_tokens", "output_tokens")),
-                f"{record['wall_ms'] / 1000:.1f}",
-            ]
+            word = "right" if verdict.correct else "wrong"
+            numbers = ["–" if record[f] is None else f"{record[f]:,}" for f in ("tool_calls", "input_tokens", "output_tokens")]
+            if _no_tool_call(record):
+                word += f" ({NO_TOOL_CALL})"
+                numbers[0] = f"0 ({NO_TOOL_CALL})"
+            cells = [qid, str(n), word, _cell(verdict.reason), *numbers, f"{record['wall_ms'] / 1000:.1f}"]
             out.append("| " + " | ".join(cells) + " |")
     out.append("")
     return out
@@ -353,24 +387,35 @@ def render(
     cu: dict | None = None,
     cu_unit: str | None = None,
     allow_missing=(),
+    commit: str | None = None,
+    dirty: bool = False,
 ) -> str:
     """The report as Markdown (see the module docstring). ReportError if the records are unfit.
 
     `cu` maps a route to its capacity units read by hand from the Capacity Metrics app (or None),
     in `cu_unit`. `freezes` is how many freezes there were in all.
     `allow_missing` names routes that may have no records; each one is reported as not run.
+    `commit` is the Fabric commit the report ran from; `dirty` says report.py or score.py had
+    uncommitted changes (rendered with --allow-dirty), which the report then states.
     """
     summary = summarise(records, questions, expected, freeze, allow_missing)
     scored, dropped, routes = summary["scored"], summary["dropped"], summary["routes"]
     total = len(scored)
     cu = cu or {}
+    source = "not given" if commit is None else f"`{_cell(commit)}`"
     out = [
         "# Capstone report: the data agent, direct and through Foundry",
         "",
         f"- Freeze: `{freeze['short']}`",
+        f"- Fabric commit: {source}",
         f"- Snapshot: {snapshot_time}",
         f"- Freezes: {freezes}",
     ]
+    if dirty:
+        out.append(
+            "- DEVELOPMENT ONLY: rendered with --allow-dirty while src/lakehouse/capstone/report.py or "
+            "score.py had uncommitted changes, so the scoring code is not the commit above. Not a result."
+        )
     scope = f"- Scored: {total} questions are scored, of {len(questions)} in the frozen set"
     if dropped:
         verb = "is" if len(dropped) == 1 else "are"
@@ -416,6 +461,20 @@ def render(
         out += ["No route has records yet.", ""]
     for route, data in routes.items():
         out += _route_section(route, data, scored)
+    # A refusal passes the unanswerable question by rule (frozen policy), so a route could score it
+    # without asking the data agent at all: every such answer is quoted, right or wrong, with its
+    # tool calls beside it, for the reader to judge.
+    unanswerable = [q["id"] for q in questions if q["kind"] == "unanswerable" and q["id"] in scored]
+    if unanswerable and routes:
+        out += ["## Unanswerable answers", ""]
+        out += ["Every answer to an unanswerable question, right or wrong, with its tool calls.", ""]
+        for route, data in routes.items():
+            for qid in unanswerable:
+                for n in range(1, PASSES + 1):
+                    record, verdict = data["records"][(qid, n)], data["verdicts"][(qid, n)]
+                    word = "right" if verdict.correct else "wrong"
+                    out += [f"#### {ROUTES[route]}: {qid}, pass {n}: {word}, {_calls(record)}", ""]
+                    out += [_quote(record["answer_text"]), "", f"Reason: {redact(verdict.reason)}", ""]
     out += ["## Wrong answers", ""]
     wrong_any = False
     for route, data in routes.items():

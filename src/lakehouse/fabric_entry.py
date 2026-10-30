@@ -15,8 +15,6 @@ from pyspark.sql import SparkSession
 
 from lakehouse import security
 from lakehouse.bronze.fetch_public import fetch_manifest
-from lakehouse.capstone.expected import compute_expected
-from lakehouse.capstone.snapshot import SNAPSHOT_TABLES, copy_gold
 from lakehouse.checks import QualityCheckFailed, check_gateway_counts
 from lakehouse.gateway.answers import cost_per_gateway_call
 from lakehouse.gateway.build import (
@@ -312,6 +310,9 @@ def snapshot_gold(source_workspace_id: str, source_lakehouse_id: str, context: d
     ValueError, before anything is copied, when either ID is not a GUID or the source is the
     default lakehouse itself.
     """
+    # Imported here, not at the top, so prod's entry points (nb_load...) never import capstone code.
+    from lakehouse.capstone.snapshot import SNAPSHOT_TABLES, copy_gold
+
     workspace = _guid("source_workspace_id", source_workspace_id)
     lakehouse = _guid("source_lakehouse_id", source_lakehouse_id)
     target = fabric_paths(context)
@@ -328,6 +329,8 @@ def capstone_expected(context: dict) -> dict:
     `expected.json` (indented, sorted keys, LF, a final newline): the bytes the freeze hashes.
     Returns the same dict. FileNotFoundError, before any query, when questions.json is missing.
     """
+    from lakehouse.capstone.expected import compute_expected  # here, as in snapshot_gold
+
     paths = fabric_paths(context)
     if not paths.files_mount:
         raise ValueError("capstone_expected reads questions.json through the files mount, and none is set")

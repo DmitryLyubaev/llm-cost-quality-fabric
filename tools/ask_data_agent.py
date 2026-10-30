@@ -4,10 +4,11 @@
         --analyst-repo <path> --analyst-commit <sha> \\
         --snapshot-time <iso> --model-direct <name> --model-foundry <name>
 
-It takes the same freeze options as tools/capstone_freeze.py and refuses to start (exit 1, naming
-the component) unless verify_freeze passes on them. The endpoint is read from the environment
-variable CAPSTONE_MCP_URL, which must be an https URL with a host, and is never printed: error
-messages give the HTTP status and a code only.
+It takes the same freeze options as tools/capstone_freeze.py, less `--rules` (refused, exit 2: it
+scores with the imported score.py, so the freeze is verified against that file), and refuses to
+start (exit 1, naming the component) unless verify_freeze passes on them. The endpoint is read
+from the environment variable CAPSTONE_MCP_URL, which must be an https URL with a host, and is
+never printed: error messages give the HTTP status and a code only.
 Sign in first with `az login` as fabric@: the token for https://api.fabric.microsoft.com/.default
 comes from AzureCliCredential (`pip install azure-identity`; the deploy extra has it).
 
@@ -39,7 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import capstone_freeze
-from capstone_freeze import InputError, add_freeze_arguments, load_verified_freeze
+from capstone_freeze import InputError, add_freeze_arguments, load_verified_freeze, refuse_rules
 from lakehouse.capstone.freeze import DataAgentError, FreezeBroken
 from lakehouse.capstone.report import load_schema, redact, redact_json, scored_questions, validate_record
 
@@ -240,7 +241,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--passes", type=int, choices=(1, 2, 3), default=3)
     parser.add_argument("--out", type=Path, default=capstone_freeze.ROOT / "capstone" / "runs" / "direct")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S, help="seconds per HTTP call")
-    add_freeze_arguments(parser)
+    add_freeze_arguments(parser, rules=False)
     return parser
 
 
@@ -270,13 +271,20 @@ def _ask_all(client: McpClient, questions: list[dict], freeze: dict, passes: int
                     "started_utc": _utc(started),
                 }
                 validate_record(record, schema)
-                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+                # ASCII only: U+2028, U+0085 and the like (in answer_text and raw_output alike) are
+                # escaped, so a record is always exactly one line.
+                handle.write(json.dumps(record, ensure_ascii=True) + "\n")
                 handle.flush()
                 print(f"{question['id']} pass {n}: {wall_ms / 1000:.1f} s")
 
 
 def main(argv: list[str] | None = None, transport=None) -> int:
     """Run the passes. `transport` replaces the HTTP transport (tests pass a fake)."""
+    try:
+        refuse_rules(argv)
+    except InputError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     args = _parser().parse_args(argv)
     try:
         freeze = load_verified_freeze(args)

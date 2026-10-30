@@ -362,7 +362,7 @@ def test_deploy_permissions_default_to_read_only(deploy):
 
 def test_ci_is_hardened(ci):
     job = ci["jobs"]["test"]
-    assert job["timeout-minutes"] == 90
+    assert job["timeout-minutes"] == 120
     assert ci["permissions"] == {"contents": "read"}
     on = triggers(ci)
     assert set(on) == {"push", "pull_request"}

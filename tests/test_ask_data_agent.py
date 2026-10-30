@@ -11,7 +11,7 @@ import pytest
 import ask_data_agent
 import capstone_freeze
 from lakehouse.capstone.freeze import build_freeze
-from lakehouse.capstone.report import load_schema, redact, validate_record
+from lakehouse.capstone.report import load_records, load_schema, redact, validate_record
 from lakehouse.capstone.score import score_question
 
 # A distinctive endpoint: no output, record or message may ever hold it.
@@ -102,12 +102,10 @@ def inputs(tmp_path, monkeypatch):
     (agent / "data_agent.json").write_text('{"name": "da_portfolio"}\n', encoding="utf-8")
     questions = tmp_path / "questions.json"
     expected = tmp_path / "expected.json"
-    rules = tmp_path / "score.py"
     questions.write_text(json.dumps(QUESTIONS, indent=2) + "\n", encoding="utf-8")
     expected.write_text(json.dumps(EXPECTED, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    rules.write_text("# rules\n", encoding="utf-8")
     monkeypatch.setattr(capstone_freeze, "read_instructions", lambda repo, commit: INSTRUCTIONS)
-    freeze = build_freeze(questions, expected, SNAPSHOT, agent, INSTRUCTIONS, MODELS, rules=rules)
+    freeze = build_freeze(questions, expected, SNAPSHOT, agent, INSTRUCTIONS, MODELS)  # rules: score.py itself
     freeze_path = tmp_path / "freeze.json"
     freeze_path.write_text(json.dumps(freeze, indent=2) + "\n", encoding="utf-8")
     monkeypatch.setenv(ask_data_agent.ENV_URL, ENDPOINT)
@@ -116,7 +114,6 @@ def inputs(tmp_path, monkeypatch):
         "--out", str(tmp_path / "runs" / "direct"),
         "--questions", str(questions),
         "--expected", str(expected),
-        "--rules", str(rules),
         "--data-agent-dir", str(agent),
         "--snapshot-time", SNAPSHOT,
         "--analyst-repo", str(tmp_path),
@@ -511,3 +508,31 @@ def test_an_http_error_whose_body_cannot_be_read_keeps_its_status(monkeypatch):
     transport = ask_data_agent.HttpTransport(ENDPOINT, lambda: "tok", timeout=5)
 
     assert transport.post(b"{}", {}) == (502, {}, b"")
+
+
+def test_an_answer_holding_a_unicode_line_separator_stays_one_line(inputs):
+    odd = "Project p2 spent A$1,234.56\u0085in all (\x1c café)"
+    fake = FakeTransport({"How much has project p2 spent?": odd})
+
+    assert ask_data_agent.main(inputs["args"], transport=fake) == 0
+
+    raw = next(inputs["out"].glob("*.jsonl")).read_bytes()
+    assert raw.isascii()  # every non-ASCII character is escaped, so only LF ends a record
+    assert raw.count(b"\n") == 6 and raw.endswith(b"\n")
+    records = load_records([inputs["out"]])
+    assert len(records) == 6
+    assert records[0]["answer_text"] == odd
+    assert json.loads(records[0]["raw_output"])["content"][0]["text"] == odd
+
+
+@pytest.mark.parametrize("extra", [["--rules", "score.py"], ["--rules=score.py"]])
+def test_refuses_a_rules_option(inputs, capsys, extra):
+    # The runner scores nothing itself, but it is gated on the same freeze as the report: verified
+    # against src/lakehouse/capstone/score.py, never a file named on the command line.
+    fake = FakeTransport()
+
+    assert ask_data_agent.main(inputs["args"] + extra, transport=fake) == 2
+
+    assert fake.calls == []
+    assert capsys.readouterr().err.strip() == capstone_freeze.MSG_NO_RULES
+    assert not inputs["out"].exists()
