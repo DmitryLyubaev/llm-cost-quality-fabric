@@ -17,7 +17,12 @@ CELL_MARKER = "# CELL ********************"
 PARAMETERS_MARKER = "# PARAMETERS CELL ********************"
 MARKDOWN_MARKER = "# MARKDOWN ********************"
 EMPTY_GUID = "00000000-0000-0000-0000-000000000000"
-GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+# The dev workspace and its lh_portfolio. Git sync copies a notebook's default lakehouse as it is:
+# the logicalId plus the empty GUID failed at run time ("LakehouseWorkspaceId is not a valid GUID"),
+# so git holds dev's real IDs and the PROD deploy swaps both (parameter.yml).
+DEV_WORKSPACE = "c1f74f51-78f9-4cc7-b098-2bada9448793"
+DEV_LAKEHOUSE = "f4af17d8-f5b3-4b67-a113-50f079a5efe0"
+GUID =re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 NOTEBOOKS = ["nb_ingest_public", "nb_load"]  # the pipeline's, in activity order
 GATEWAY_NOTEBOOK = "nb_gateway_load"  # run by hand after a session, never by the pipeline
 ACCESS_NOTEBOOK = "nb_access_load"  # run by hand after access.csv is uploaded, never by the pipeline
@@ -177,16 +182,16 @@ def test_notebook_wheel_name_matches_the_package_version(name):
 
 
 @pytest.mark.parametrize("name", ALL_NOTEBOOKS)
-def test_notebook_default_lakehouse_is_lh_portfolio_in_this_workspace(name):
-    lakehouse_id = _logical_ids()["lh_portfolio.Lakehouse"]
+def test_notebook_default_lakehouse_is_lh_portfolio_in_the_dev_workspace(name):
     header = _meta_blocks(_notebook(name))[0]
     assert header["kernel_info"]["name"] == "synapse_pyspark"
     assert header["dependencies"]["lakehouse"] == {
-        "default_lakehouse": lakehouse_id,
+        "default_lakehouse": DEV_LAKEHOUSE,
         "default_lakehouse_name": "lh_portfolio",
-        "default_lakehouse_workspace_id": EMPTY_GUID,
-        "known_lakehouses": [{"id": lakehouse_id}],
+        "default_lakehouse_workspace_id": DEV_WORKSPACE,
+        "known_lakehouses": [{"id": DEV_LAKEHOUSE}],
     }
+    assert DEV_LAKEHOUSE != _logical_ids()["lh_portfolio.Lakehouse"]  # the deployed id, not git's
 
 
 @pytest.mark.parametrize(
@@ -214,7 +219,7 @@ def test_notebook_has_no_forbidden_patterns_or_foreign_ids(name):
     text = _notebook(name)
     for pattern in FORBIDDEN_IN_NOTEBOOKS:
         assert not pattern.search(text), pattern.pattern
-    allowed = {EMPTY_GUID, _logical_ids()["lh_portfolio.Lakehouse"]}
+    allowed = {DEV_WORKSPACE, DEV_LAKEHOUSE}  # the default lakehouse; parameter.yml swaps both for PROD
     assert set(GUID.findall(text)) <= allowed
 
 
@@ -342,7 +347,6 @@ def test_parameter_file_names_only_items_that_exist():
 @pytest.mark.parametrize("name", ALL_NOTEBOOKS)
 def test_parameter_file_repoints_lakehouse_and_enables_prod_schedule(name):
     params = _parameters()
-    lakehouse_id = _logical_ids()["lh_portfolio.Lakehouse"]
     text = _notebook(name)
 
     replaced = {}
@@ -355,8 +359,10 @@ def test_parameter_file_repoints_lakehouse_and_enables_prod_schedule(name):
         match = re.search(rule["find_value"], text)
         assert match, rule["find_value"]
         replaced[match.group(1)] = rule["replace_value"]["PROD"]
-    assert replaced[lakehouse_id] == "$items.Lakehouse.lh_portfolio.$id"
-    assert replaced[EMPTY_GUID] == "$workspace.$id"
+    assert replaced == {
+        DEV_LAKEHOUSE: "$items.Lakehouse.lh_portfolio.$id",
+        DEV_WORKSPACE: "$workspace.$id",
+    }
 
     schedule_rules = [r for r in params["key_value_replace"] if r["item_type"] == "DataPipeline"]
     assert len(schedule_rules) == 1
