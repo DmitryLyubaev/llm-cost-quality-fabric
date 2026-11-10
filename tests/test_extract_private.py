@@ -30,6 +30,15 @@ def p1():
 
 
 @pytest.fixture
+def p1_queries():
+    """The study's golden queries for the fixture: both answerable, both with something to contain."""
+    return [
+        {"id": "q-001", "category": "factual", "must_contain": ["a"]},
+        {"id": "q-002", "category": "temporal", "must_contain": ["b"]},
+    ]
+
+
+@pytest.fixture
 def p2():
     return _load("p2_report.json")
 
@@ -45,8 +54,8 @@ def _p2_row(rows, qid, arm, kind="scored"):
     return row
 
 
-def test_p1_row_shape(p1):
-    rows = extract_p1(p1)
+def test_p1_row_shape(p1, p1_queries):
+    rows = extract_p1(p1, p1_queries)
 
     assert len(rows) == 12
     assert all(set(r) == P1_KEYS for r in rows)
@@ -66,10 +75,39 @@ def test_p1_row_shape(p1):
     assert no_reply[0]["success"] is False
 
 
-def test_p1_error_is_not_success(p1):
+def test_p1_error_is_not_success(p1, p1_queries):
     p1["outcomes"][0]["error"] = "boom"
 
-    assert extract_p1(p1)[0]["success"] is False
+    assert extract_p1(p1, p1_queries)[0]["success"] is False
+
+
+def test_p1_citation_metrics_are_null_for_unanswerable_queries(p1, p1_queries):
+    # ReleaseLens scores citation recall and precision only on answerable queries (its
+    # `_in_scope`); the report still carries 1.0 for the others, which must not reach an average.
+    p1_queries[1]["category"] = "unanswerable"
+
+    rows = extract_p1(p1, p1_queries)
+
+    out = [r for r in rows if r["item_id"] == "q-002"]
+    assert out and all(r["citation_recall"] is None and r["citation_precision"] is None for r in out)
+    assert all(r["groundedness"] is not None for r in out)  # groundedness applies to every query
+    kept = [r for r in rows if r["item_id"] == "q-001"]
+    assert all(r["citation_recall"] is not None for r in kept)
+
+
+def test_p1_must_contain_is_null_when_the_query_has_nothing_to_contain(p1, p1_queries):
+    p1_queries[1]["must_contain"] = []
+
+    rows = extract_p1(p1, p1_queries)
+
+    assert all(r["must_contain"] is None for r in rows if r["item_id"] == "q-002")
+    assert all(r["must_contain"] is not None for r in rows if r["item_id"] == "q-001")
+    assert all(r["citation_recall"] is not None for r in rows)  # still answerable
+
+
+def test_p1_unknown_query_is_an_error(p1, p1_queries):
+    with pytest.raises(ValueError, match="q-001"):
+        extract_p1(p1, [q for q in p1_queries if q["id"] != "q-001"])
 
 
 def test_p2_row_shape(p2, questions):
@@ -109,10 +147,10 @@ def test_p2_target_missing_from_hits(p2, questions):
     assert row["reciprocal_rank"] == 0.0
 
 
-def test_run_label_is_utc(p1):
+def test_run_label_is_utc(p1, p1_queries):
     p1["started_at"] = "2026-10-02T12:15:00+02:00"
 
-    assert extract_p1(p1)[0]["run_id"] == "p1-three-arm-20261002T101500Z"
+    assert extract_p1(p1, p1_queries)[0]["run_id"] == "p1-three-arm-20261002T101500Z"
 
 
 def test_target_rank_counts_distinct_artefacts():
@@ -155,11 +193,11 @@ def test_p2_unknown_question_is_an_error(p2, questions):
         extract_p2(p2, [q for q in questions if q["qid"] != "r-001"])
 
 
-def test_no_text_or_identifiers(p1, p2, questions):
+def test_no_text_or_identifiers(p1, p1_queries, p2, questions):
     raw = json.dumps([p1, p2])
     assert "https://" in raw  # the inputs do carry URLs, so the check below is not vacuous
 
-    rows = extract_p1(p1) + extract_p2(p2, questions)
+    rows = extract_p1(p1, p1_queries) + extract_p2(p2, questions)
 
     assert_clean(rows)
     for row in rows:
@@ -185,3 +223,33 @@ def test_assert_clean_rejects_guid_and_url_values():
         assert_clean([{"run_id": "123e4567-e89b-12d3-a456-426614174000"}])
     with pytest.raises(ValueError, match="model"):
         assert_clean([{"model": "see https://example.invalid/x"}])
+
+
+def test_cli_reads_the_p1_golden_queries_yaml(tmp_path, p1, p2):
+    from lakehouse.extract.private import main
+
+    (tmp_path / "p1.json").write_text(json.dumps(p1), encoding="utf-8")
+    (tmp_path / "p2.json").write_text(json.dumps(p2), encoding="utf-8")
+    (tmp_path / "questions.jsonl").write_text(
+        (FIXTURES / "p2_questions.jsonl").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (tmp_path / "queries.yaml").write_text(
+        "version: 1\n"
+        "queries:\n"
+        "  - id: q-001\n    category: factual\n    must_contain: [\"a\"]\n"
+        "  - id: q-002\n    category: unanswerable\n    must_contain: []\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out"
+
+    main([
+        "--p1", str(tmp_path / "p1.json"), "--p1-queries", str(tmp_path / "queries.yaml"),
+        "--p2", str(tmp_path / "p2.json"), "--questions", str(tmp_path / "questions.jsonl"),
+        "--out", str(out),
+    ])
+
+    rows = [json.loads(line) for line in (out / "p1_outcomes.jsonl").read_text(encoding="utf-8").splitlines()]
+    q2 = [r for r in rows if r["item_id"] == "q-002"]
+    assert q2 and all(
+        r["citation_recall"] is None and r["citation_precision"] is None and r["must_contain"] is None for r in q2
+    )

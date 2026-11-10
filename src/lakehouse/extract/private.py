@@ -30,33 +30,52 @@ def _run_label(study: str, started_at: str) -> str:
     return f"{study}-{moment.astimezone(UTC):%Y%m%dT%H%M%SZ}"
 
 
-def extract_p1(report: dict) -> list[dict]:
-    """One row per scored outcome of the three-arm study."""
-    return [
-        {
-            "study": P1_STUDY,
-            "run_id": _run_label(P1_STUDY, report["started_at"]),
-            "started_at": report["started_at"],
-            "item_id": o["id"],
-            "arm": o["arm"],
-            "pass_index": o["pass_index"],
-            "attempt_kind": "scored",
-            "provider": o["provider"],
-            "model": o["model"],
-            "success": o["error"] is None and not o["no_reply"],
-            "latency_ms": o["latency_ms"],
-            "tokens_in": o["tokens_in"],
-            "tokens_out": o["tokens_out"],
-            "cached_tokens": o["cache_read_input_tokens"],
-            "cost_usd": o["cost_usd"],
-            "judge_cost_usd": o["judge_cost_usd"],
-            "groundedness": o["groundedness"],
-            "citation_recall": o["citation_recall"],
-            "citation_precision": o["citation_precision"],
-            "must_contain": o["must_contain_satisfied"],
-        }
-        for o in report["outcomes"]
-    ]
+UNANSWERABLE = "unanswerable"
+
+
+def extract_p1(report: dict, queries: list[dict]) -> list[dict]:
+    """One row per scored outcome of the three-arm study.
+
+    `queries` are the study's golden queries (`id`, `category`, `must_contain`). A metric that
+    doesn't apply to a query is None, as ReleaseLens scores it: the citation metrics apply only to
+    answerable queries, and must_contain only to queries with something to contain. The report
+    itself still carries a value (1.0 or true) for those, which an average must never see.
+    """
+    by_id = {q["id"]: q for q in queries}
+    rows = []
+    for o in report["outcomes"]:
+        query = by_id.get(o["id"])
+        if query is None:
+            raise ValueError(f"no golden query for {o['id']!r} in the P1 queries file")
+        answerable = query["category"] != UNANSWERABLE
+        has_must_contain = bool(query.get("must_contain"))
+        rows.append(_p1_row(report, o, answerable, has_must_contain))
+    return rows
+
+
+def _p1_row(report: dict, o: dict, answerable: bool, has_must_contain: bool) -> dict:
+    return {
+        "study": P1_STUDY,
+        "run_id": _run_label(P1_STUDY, report["started_at"]),
+        "started_at": report["started_at"],
+        "item_id": o["id"],
+        "arm": o["arm"],
+        "pass_index": o["pass_index"],
+        "attempt_kind": "scored",
+        "provider": o["provider"],
+        "model": o["model"],
+        "success": o["error"] is None and not o["no_reply"],
+        "latency_ms": o["latency_ms"],
+        "tokens_in": o["tokens_in"],
+        "tokens_out": o["tokens_out"],
+        "cached_tokens": o["cache_read_input_tokens"],
+        "cost_usd": o["cost_usd"],
+        "judge_cost_usd": o["judge_cost_usd"],
+        "groundedness": o["groundedness"],
+        "citation_recall": o["citation_recall"] if answerable else None,
+        "citation_precision": o["citation_precision"] if answerable else None,
+        "must_contain": o["must_contain_satisfied"] if has_must_contain else None,
+    }
 
 
 def _target_rank(hits: list[dict], target: str) -> int | None:
@@ -119,6 +138,7 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--p1", required=True, type=Path)
+    parser.add_argument("--p1-queries", required=True, type=Path, help="ReleaseLens eval/golden/queries.yaml")
     parser.add_argument("--p2", required=True, type=Path)
     parser.add_argument("--questions", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
@@ -132,7 +152,10 @@ def main(argv: list[str] | None = None) -> None:
         if line.strip()
     ]
 
-    p1_rows = extract_p1(p1)
+    import yaml  # local-only tool: pyyaml comes with the dev extra, not the Fabric wheel
+
+    p1_queries = yaml.safe_load(args.p1_queries.read_text(encoding="utf-8"))["queries"]
+    p1_rows = extract_p1(p1, p1_queries)
     p2_rows = extract_p2(p2, questions)
     assert_clean(p1_rows)
     assert_clean(p2_rows)
