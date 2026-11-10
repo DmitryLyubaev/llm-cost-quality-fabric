@@ -13,8 +13,8 @@
     },
     {
       "id": "f146de93-7e5f-4c3f-b2f6-e2af5aaea780",
-      "question": "What was project p2's cost over the days 2026-10-01 through 2026-10-05?",
-      "query": "-- A closed range of days: the first and the last day are both included.\nSELECT project, billing_currency, SUM(cost) AS total\nFROM gold.fact_daily_cost\nWHERE project = 'p2'\n  AND cost_date BETWEEN CAST('2026-10-01' AS DATE) AND CAST('2026-10-05' AS DATE)\nGROUP BY project, billing_currency"
+      "question": "What was project p2's cost over the days 2026-10-01 through 2026-10-03?",
+      "query": "-- A closed range of days: the first and the last day are both included.\nSELECT project, billing_currency, SUM(cost) AS total\nFROM gold.fact_daily_cost\nWHERE project = 'p2'\n  AND cost_date BETWEEN CAST('2026-10-01' AS DATE) AND CAST('2026-10-03' AS DATE)\nGROUP BY project, billing_currency"
     },
     {
       "id": "aab44117-2eab-4cd4-a584-c9475e5b391c",

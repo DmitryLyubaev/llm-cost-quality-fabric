@@ -322,28 +322,41 @@ def snapshot_gold(source_workspace_id: str, source_lakehouse_id: str, context: d
 
 
 def capstone_expected(context: dict) -> dict:
-    """The expected answers from the snapshot, run by hand after the snapshot.
+    """The expected answers from the snapshot, and the value-based leak check, run by hand after the
+    snapshot.
 
-    Reads `Files/capstone/questions.json` (uploaded) through the default lakehouse's mount, runs
-    `compute_expected` on that lakehouse's gold, and writes the result beside it as
-    `expected.json` (indented, sorted keys, LF, a final newline): the bytes the freeze hashes.
-    Returns the same dict. FileNotFoundError, before any query, when questions.json is missing.
+    Reads `Files/capstone/questions.json` and `Files/capstone/fewshots-sources.json` (both uploaded)
+    through the default lakehouse's mount, runs `compute_expected` on that lakehouse's gold, and
+    writes the result beside them as `expected.json` (indented, sorted keys, LF, a final newline):
+    the bytes the freeze hashes. Then runs `value_leaks` on the same gold and writes its findings
+    (example and question IDs only) as `leaks.json`, in the same format; `[]` means no leak.
+    Returns `{"expected": ..., "leaks": ...}`. FileNotFoundError, before any query, when either
+    upload is missing.
     """
     from lakehouse.capstone.expected import compute_expected  # here, as in snapshot_gold
+    from lakehouse.capstone.leaks import value_leaks
 
     paths = fabric_paths(context)
     if not paths.files_mount:
         raise ValueError("capstone_expected reads questions.json through the files mount, and none is set")
     folder = Path(paths.files_mount) / CAPSTONE_FILES
-    questions_file = folder / "questions.json"
-    if not questions_file.is_file():
-        raise FileNotFoundError(f"upload Files/{CAPSTONE_FILES}/questions.json first")
-    questions = json.loads(questions_file.read_text(encoding="utf-8"))
+    uploads = {}
+    for name in ("questions.json", "fewshots-sources.json"):
+        if not (folder / name).is_file():
+            raise FileNotFoundError(f"upload Files/{CAPSTONE_FILES}/{name} first")
+        uploads[name] = json.loads((folder / name).read_text(encoding="utf-8"))
+    questions, fewshots = uploads["questions.json"], uploads["fewshots-sources.json"]
     spark = get_active_spark()
     # As run_load does: cost_per_result cuts its month in UTC and refuses another zone.
     spark.conf.set("spark.sql.ansi.enabled", "true")
     spark.conf.set("spark.sql.session.timeZone", "UTC")
     expected = compute_expected(spark, paths, questions)
-    text = json.dumps(expected, indent=2, sort_keys=True) + "\n"
-    (folder / "expected.json").write_text(text, encoding="utf-8", newline="\n")
-    return expected
+    _write_json(folder / "expected.json", expected)
+    leaks = value_leaks(spark, paths, questions, fewshots, expected=expected)
+    _write_json(folder / "leaks.json", leaks)
+    return {"expected": expected, "leaks": leaks}
+
+
+def _write_json(path: Path, value) -> None:
+    """Indented, sorted keys, LF, a final newline: the form the freeze hashes."""
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")

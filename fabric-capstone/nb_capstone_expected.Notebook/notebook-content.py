@@ -40,11 +40,14 @@
 #
 # The capstone's expected answers (spec 4.4). It runs by hand after the snapshot, in the capstone
 # workspace as its admin; never from a pipeline. Upload the frozen `capstone/questions.json` to
-# `Files/capstone/questions.json` first. It computes each question's expected answer from
+# `Files/capstone/questions.json` and `capstone/fewshots-sources.json` to
+# `Files/capstone/fewshots-sources.json` first. It computes each question's expected answer from
 # `lh_capstone`'s gold with `compute_expected` (an answer function plus a selector, never a typed
 # value) and writes them beside the questions as `Files/capstone/expected.json`, the bytes the
-# freeze hashes. All logic lives in the `lakehouse` wheel; this notebook only installs it and calls
-# `lakehouse.fabric_entry.capstone_expected`.
+# freeze hashes. Then it runs the value-based leak check (`value_leaks`) and writes
+# `Files/capstone/leaks.json`: the examples whose result shows a frozen answer, as IDs only. The run
+# stops there if `leaks.json` lists anything. All logic lives in the `lakehouse` wheel; this
+# notebook only installs it and calls `lakehouse.fabric_entry.capstone_expected`.
 
 # CELL ********************
 

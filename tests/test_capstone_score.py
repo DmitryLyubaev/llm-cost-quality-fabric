@@ -1,5 +1,8 @@
 """The rule-based scorer: the number parser and each rule, pass and fail. Pure Python, no Spark."""
 
+import json
+from pathlib import Path
+
 import pytest
 
 from lakehouse.capstone import score as score_module
@@ -572,6 +575,12 @@ def test_an_empty_answer_is_unreadable():
         "With one version only, I can't say whether it rose or fell.",
         "I can't tell if it increased or decreased: there is no version history.",
         "Whether quality is higher or lower on a newer version is not in the data.",
+        # p12 plan 2 step 2: the instructions' own examples, and "change" next to "version"
+        "Not in the data: every model ran on a single version, so quality by version can't be shown.",
+        "Not in the data: it does not record model versions.",
+        "The versions did not change, so I can't compare them.",
+        "There is no version change in the data, so I can't answer that.",
+        "Not in the data: there was no change of model version during the study.",
     ],
 )
 def test_unanswerable_passes_on_a_refusal_or_caveat(answer):
@@ -608,6 +617,17 @@ def test_unanswerable_passes_on_a_refusal_or_caveat(answer):
         "Up or down, it rose; I can't tell exactly.",
         "It went up or down; it went up. I can't say why.",
         "All 60 scored runs used a single model version, so I can't compare versions.",
+        # p12 plan 2 step 2: a claim of no direction is still a claim, and "if" alone excuses nothing
+        "It changed a lot, but the data has only one version.",
+        "It stayed flat across versions; I can't say more.",
+        "Even if the data has no version history, quality went up or down noticeably.",
+        "Quality was stable across versions; the data has only one version.",
+        "Success held steady, though I can't compare versions.",
+        "Quality was unchanged, though the data has a single version.",
+        "The success rate didn't change, but I can't break it down by version.",
+        "There is no change; only one version was tested, so I can't compare.",
+        "The version didn't change much, so I can't compare.",
+        "Even if quality rose or fell, there is no version history, so I can't tell.",
     ],
 )
 def test_unanswerable_fails_on_an_answer(answer):
@@ -624,13 +644,28 @@ def test_refusal_lists_are_fixed_lowercase_tuples():
     for verb in ("can't", "cannot", "unable to"):
         assert verb in REFUSAL_VERBS
     for word in ("better", "worse", "improved", "rose", "fell", "increased", "decreased", "dropped",
-                 "higher", "lower", "up", "down", "grew", "declined", "gained"):  # fmt: skip
+                 "higher", "lower", "up", "down", "grew", "declined", "gained",
+                 "changed", "change", "flat", "stayed", "steady", "stable", "unchanged"):  # fmt: skip
         assert word in score_module.CHANGE_WORDS
     for words in (REFUSAL_PHRASES, REFUSAL_VERBS, score_module.REFUSAL_OBJECTS, score_module.CHANGE_WORDS):
         assert all(p == p.lower().strip() and p for p in words)
     # a plain numeric answer is never a refusal
     assert not score("98.3%", None, "unanswerable").correct
     assert not score("A$3.50", None, "unanswerable").correct
+
+
+CHANGE_WORDS_FILE = Path(__file__).resolve().parents[1] / "capstone" / "change-words.json"
+
+
+def test_change_words_file_is_the_scorers_list_for_project_3():
+    """Project 3's analyst instructions list exactly these words, from a byte copy of this file
+    (p12 plan 2, step 3). Regenerate after changing CHANGE_WORDS:
+    python -c "import json; from lakehouse.capstone.score import CHANGE_WORDS as w; open('capstone/change-words.json', 'w', newline='\\n').write(json.dumps(list(w), indent=2) + '\\n')"
+    """
+    raw = CHANGE_WORDS_FILE.read_bytes()
+    assert b"\r" not in raw
+    assert raw.decode("utf-8") == json.dumps(list(score_module.CHANGE_WORDS), indent=2) + "\n"
+    assert len(set(score_module.CHANGE_WORDS)) == len(score_module.CHANGE_WORDS)
 
 
 # --- the contract ----------------------------------------------------------------------------
