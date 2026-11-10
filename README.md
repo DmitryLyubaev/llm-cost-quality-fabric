@@ -22,7 +22,7 @@ integration and CI/CD), done with every number measured, dated and reproducible.
 
 | Part | State |
 |---|---|
-| Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,486 tests** (projects 9–12); CI green on GitHub |
+| Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,490 tests** (projects 9–12); CI green on GitHub |
 | Cost export (Azure Cost Management → storage) | **Live** since 22 October; daily month-to-date plus a one-time September run |
 | Dev workspace | Syncs from git; first passing pipeline run on 9 November, after the first run failed on the notebooks' lakehouse binding; each of the four quality checks shown failing on purpose on 10 November |
 | Prod workspace | Deployed by GitHub Actions on 10 November; its first run passed all four checks the same day; scheduled daily at 06:00 Brisbane time from 12 November |
@@ -31,6 +31,7 @@ integration and CI/CD), done with every number measured, dated and reproducible.
 
 Every figure below that isn't measured yet says **pending**. Nothing here is aspirational. The
 dated record of how it got here, failures included, is in [docs/live-report.md](docs/live-report.md).
+Dates and times are UTC unless marked as Brisbane time (UTC+10).
 
 ## The answers
 
@@ -58,8 +59,10 @@ group and, for shared resources, by each project's session windows.
 | **untagged** (5 lines, all zero cost) | **0.0000** |
 | **Total** (745 cost lines) | **26.6322** |
 
-Figures are rounded to four places; unrounded, the projects add up to the total exactly. Of the total, 22.88 AUD matched a project's own resource group (326 lines) and 3.75 AUD was
-shared spend split by session window (261 lines). Nothing was dropped: the per-project totals add
+Figures are rounded to four places; unrounded, the projects add up to the total exactly. Of the total, 22.88 AUD matched a project's own resource group (326 lines), 3.75 AUD was
+shared spend split by session window (261 lines), and 0.0001 AUD was shared spend outside any
+session window (153 lines, the `releaselens-shared` row); the other 5 lines are the untagged
+zero-cost ones. Nothing was dropped: the per-project totals add
 up to the export's total, and a quality check holds each month to the export's manifest.
 
 ### 2. Quality across models
@@ -78,8 +81,8 @@ not a result.
 | Z | gpt-4.1-mini `2025-04-14` (Azure OpenAI) | 0.783 | 0.646 | 0.585 | 0.889 | 3.8 s |
 
 Each measure counts only the answers it applies to, as project 1 scores them: groundedness every
-answer, citation recall and precision the 24 to answerable questions, must-contain the 18 to
-questions with something it must contain.
+answer, citation recall and precision the 24 answers to answerable questions, must-contain the
+18 answers to questions with something they must contain.
 
 Project 1's own verdict: every comparison (Z against O, Z against A) was **inconclusive** at its
 sample size.
@@ -100,13 +103,16 @@ E3 − E1 top-1 +0.271 (the published figure), S3 − S1 +0.262 and S3 − S2 +0
 
 **Project 3, Foundry agent** (6 October 2026; n = 60 per arm):
 
-| Arm | Model | Succeeded | Task adherence | Intent resolution | Tool-call accuracy | Mean latency |
+| Arm | Model | Succeeded | Task adherence | Intent resolution | Tool-call accuracy | Mean time per task (whole run) |
 |---|---|---:|---:|---:|---:|---:|
 | gpt | gpt-5.6-luna `2026-07-09` | 59 / 60 | 0.98 | 4.70 | 3.75 | 18.3 s |
 | claude | claude-haiku-4-5 (version 2) | 57 / 60 | 0.93 | 4.67 | 3.88 | 23.7 s |
 
-The last three columns are Foundry's evaluator scores as project 3 recorded them. Project 3's own
-verdict: the success-rate comparison was **inconclusive** at its 20 scenarios.
+Task adherence, intent resolution and tool-call accuracy are Foundry's evaluator scores as
+project 3 recorded them: descriptive, judged by the same gpt-5.6-luna the GPT arm runs on, and
+the first two are preview evaluators. Success is decided by the database. Time per task covers
+the whole run, including any waits for throttling. Project 3's own verdict: the success-rate
+comparison was **inconclusive** at its 20 scenarios.
 
 **Across model versions: the data can't tell.** Every arm resolved to exactly one model version
 (the two no-model arms to none), so no study has two versions of one model to compare
@@ -145,9 +151,9 @@ Measured with Microsoft's Fabric Capacity Metrics app on the FTL64 trial capacit
 | Measure | Value | Measured |
 |---|---|---|
 | One full prod load (its notebooks and pipeline) | **About 1,884 CU-seconds** (4 min 16 s): `nb_load` 1,170, `nb_ingest_public` 673, the pipeline 40 | 10 Nov 2026 |
-| All prod activity that day | About 2,048 CU-seconds: the load, plus the lakehouse (160) and SQL endpoint (4), which also count the deploy's upload, the extracts' upload and a download of gold | 10 Nov 2026 |
-| Peak utilization (dev and prod, 9–10 November) | 0.62% of the trial capacity | 10 Nov 2026 |
-| Rejected operations | 0 | 10 Nov 2026 |
+| All prod activity to 07:52 on 10 November | About 2,048 CU-seconds: the load, plus the lakehouse (160) and SQL endpoint (4), which also count the deploy's upload, the extracts' upload and a download of gold | 10 Nov 2026 |
+| Peak utilization (dev and prod, 9 November to 07:52 on 10 November) | 0.62% of the trial capacity | 10 Nov 2026 |
+| Rejected operations (same window) | 0 | 10 Nov 2026 |
 | Throttling | **pending** | from 14 Nov 2026 |
 | Three scheduled prod runs | **pending** | from 14 Nov 2026 |
 | Smallest paid size that fits | **pending** (worked out, not bought) | from 14 Nov 2026 |
@@ -205,7 +211,7 @@ never dropped.
 |---|---|---|
 | Project 3 agent study (120 runs + 9 repeats) | Public | Fetched by the pipeline, pinned to a commit |
 | Project 2 questions (229) | Public | Fetched, pinned |
-| Project 1 and 2 per-query scores | Private | Sanitised extract (no answer text, no identifiers), uploaded once per workspace |
+| Project 1 and 2 per-query scores | Private | Sanitised extract (no answer text, no identifiers), uploaded by hand to each workspace |
 | Projects 4–8 live checks (74 checks, every fail and not-run kept) | Public reports | Transcribed to a seed, each row citing its report and commit |
 | Model deployment history | Public Terraform history | Seed rows citing their commits; one hand-entered capacity change, flagged |
 | Azure spend | Private | Cost Management export, read through its manifest |
@@ -279,8 +285,10 @@ The full reasoning, including the options rejected, is in the
   month). The two are never summed.
 - **Commit time stands in for apply time** in the Type 2 dimension, because git doesn't record
   applies. The one capacity change that isn't in git is hand-entered and flagged.
-- **Each result keeps the load date it was first seen.** Dev first loaded the results on
-  9 November and prod on 10 November; otherwise the two workspaces' gold is identical.
+- **Each result keeps the load date it was first seen, until one of its values changes.** Dev
+  first loaded the results on 9 November and prod on 10 November; the project 1 fix then moved
+  the 36 project 1 results it changed to 10 November in dev. Apart from that date, the two
+  workspaces' gold was identical after both re-ran with the fix on 10 November.
 - **Four project 10 and 11 items can't sync to dev from git yet** (the real-time dashboard, the
   Activator, the Eventstream and the semantic model; each rejected with its own error). Dev
   follows a branch that leaves them out; prod's deploy skips them until their projects' weeks.
