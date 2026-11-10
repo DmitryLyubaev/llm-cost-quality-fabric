@@ -315,8 +315,9 @@ def test_schedule_is_daily_brisbane_and_disabled_in_git():
     assert config["type"] == "Daily"
     assert config["times"] == ["06:00"]
     assert config["localTimeZoneId"] == "E. Australia Standard Time"
-    # A start in the past fires a run at once; plan 3 moves it if it has passed by deploy time.
-    assert config["startDateTime"] == "2026-11-01T06:00:00"
+    # A start in the past fires a run at once; plan 3 moved it from 2026-11-01 (passed before the first
+    # PROD deploy) to 2026-11-12, the first scheduled run.
+    assert config["startDateTime"] == "2026-11-12T06:00:00"
     assert config["endDateTime"].startswith("2099-01-01")
 
 
