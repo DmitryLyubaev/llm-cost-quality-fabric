@@ -71,14 +71,15 @@ not a result.
 
 **Project 1, cited answers** (2 October 2026; 10 questions × 3 passes = 30 answers per arm):
 
-| Arm | Model | Groundedness (n = 30) | Citation recall | Citation precision | Must-contain | Mean latency |
+| Arm | Model | Groundedness (n = 30) | Citation recall (n = 24) | Citation precision (n = 24) | Must-contain (n = 18) | Mean latency |
 |---|---|---:|---:|---:|---:|---:|
-| A | Claude Sonnet 5 (outside Azure) | 0.84 | **TODO** | **TODO** | **TODO** | 8.5 s |
-| O | gpt-4.1-mini `2025-04-14` (OpenAI, outside Azure) | 0.86 | **TODO** | **TODO** | **TODO** | 3.3 s |
-| Z | gpt-4.1-mini `2025-04-14` (Azure OpenAI) | 0.78 | **TODO** | **TODO** | **TODO** | 3.8 s |
+| A | Claude Sonnet 5 (outside Azure) | 0.840 | 0.889 | 0.569 | 1.000 | 8.5 s |
+| O | gpt-4.1-mini `2025-04-14` (OpenAI, outside Azure) | 0.860 | 0.674 | 0.576 | 1.000 | 3.3 s |
+| Z | gpt-4.1-mini `2025-04-14` (Azure OpenAI) | 0.783 | 0.646 | 0.585 | 0.889 | 3.8 s |
 
-<!-- TODO before publishing: the citation metrics apply only to the 24 answerable answers and
-must-contain only to the 18 with something to contain; re-measure after the extract fix. -->
+Each measure counts only the answers it applies to, as project 1 scores them: groundedness every
+answer, citation recall and precision the 24 to answerable questions, must-contain the 18 to
+questions with something it must contain.
 
 Project 1's own verdict: every comparison (Z against O, Z against A) was **inconclusive** at its
 sample size.

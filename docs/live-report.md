@@ -202,4 +202,12 @@ checks guard (project 1's $2.7055, project 3's 59 and 57, project 2's +0.271) ca
 A review of the drafts on 10 November found that project 1's citation and must-contain means
 were averaged over every answer, including those the metrics don't apply to (the unanswerable
 questions, and questions with nothing to contain). The private extract had dropped the study's
-rule. TODO: record the fix and the re-measured figures.
+rule.
+
+The fix ([#17](https://github.com/DmitryLyubaev/llm-cost-quality-fabric/pull/17), on `main`
+through [#18](https://github.com/DmitryLyubaev/llm-cost-quality-fabric/pull/18)) has the extract
+read the study's golden queries and leave a measure empty where it doesn't apply, so every mean
+skips it. On 11 November the fix was deployed to prod, the new extract uploaded, and prod re-run
+for 10 November: a new baseline, since the code had changed, and every check passed. Re-measured
+from prod's gold, project 1's citation and must-contain means now equal the study's own figures
+(the README's table). Groundedness and the other studies' figures came out as before.
