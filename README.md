@@ -22,9 +22,9 @@ integration and CI/CD), done with every number measured, dated and reproducible.
 
 | Part | State |
 |---|---|
-| Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,486 tests** (projects 9–12); CI green on GitHub (39–51 minutes a run) |
+| Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,486 tests** (projects 9–12); CI green on GitHub |
 | Cost export (Azure Cost Management → storage) | **Live** since 22 October; daily month-to-date plus a one-time September run |
-| Dev workspace | Syncs from git; first pipeline run passed on 9 November; each of the four quality checks shown failing on purpose on 10 November |
+| Dev workspace | Syncs from git; first passing pipeline run on 9 November, after the first run failed on the notebooks' lakehouse binding; each of the four quality checks shown failing on purpose on 10 November |
 | Prod workspace | Deployed by GitHub Actions on 10 November; its first run passed all four checks the same day; scheduled daily at 06:00 Brisbane time from 12 November |
 | The three answers | **Measured** from prod's gold, load date 10 November 2026 |
 | Fabric capacity | One prod load measured on 10 November; the three-run figures and the smallest paid size are **pending** (from 14 November) |
@@ -58,36 +58,44 @@ group and, for shared resources, by each project's session windows.
 | **untagged** (5 lines, all zero cost) | **0.0000** |
 | **Total** (745 cost lines) | **26.6322** |
 
-Of the total, 22.88 AUD matched a project's own resource group (326 lines) and 3.75 AUD was
+Figures are rounded to four places; unrounded, the projects add up to the total exactly. Of the total, 22.88 AUD matched a project's own resource group (326 lines) and 3.75 AUD was
 shared spend split by session window (261 lines). Nothing was dropped: the per-project totals add
 up to the export's total, and a quality check holds each month to the export's manifest.
 
 ### 2. Quality across models
 
 Quality is only comparable within a study: each study asked different questions with different
-measures. Sample sizes are per arm.
+measures. Each study also set its own rule, before any data existed, for when a difference
+counts; that study's verdict is given with its table, and a gap without a declared difference is
+not a result.
 
-**Project 1, cited answers** (2 October 2026; n = 30 per arm):
+**Project 1, cited answers** (2 October 2026; 10 questions × 3 passes = 30 answers per arm):
 
-| Arm | Model | Groundedness | Citation recall | Citation precision | Must-contain | Mean latency |
+| Arm | Model | Groundedness (n = 30) | Citation recall | Citation precision | Must-contain | Mean latency |
 |---|---|---:|---:|---:|---:|---:|
-| A | Claude Sonnet 5 (outside Azure) | 0.84 | 0.91 | 0.65 | 1.00 | 8.5 s |
-| O | gpt-4.1-mini `2025-04-14` (OpenAI, outside Azure) | 0.86 | 0.74 | 0.66 | 1.00 | 3.3 s |
-| Z | gpt-4.1-mini `2025-04-14` (Azure OpenAI) | 0.78 | 0.72 | 0.67 | 0.93 | 3.8 s |
+| A | Claude Sonnet 5 (outside Azure) | 0.84 | **TODO** | **TODO** | **TODO** | 8.5 s |
+| O | gpt-4.1-mini `2025-04-14` (OpenAI, outside Azure) | 0.86 | **TODO** | **TODO** | **TODO** | 3.3 s |
+| Z | gpt-4.1-mini `2025-04-14` (Azure OpenAI) | 0.78 | **TODO** | **TODO** | **TODO** | 3.8 s |
 
-**Project 2, retrieval** (4 October 2026; n = 229 questions per arm; two set-ups, E and S, as
-project 2 defines them):
+<!-- TODO before publishing: the citation metrics apply only to the 24 answerable answers and
+must-contain only to the 18 with something to contain; re-measure after the extract fix. -->
 
-| Arm | Embedding model | Top-1 | MRR |
+Project 1's own verdict: every comparison (Z against O, Z against A) was **inconclusive** at its
+sample size.
+
+**Project 2, retrieval** (3 October 2026; n = 229 questions per arm):
+
+| Arm | What it is | Top-1 | MRR |
 |---|---|---:|---:|
-| E1 | none | 0.376 | 0.494 |
-| E2 | text-embedding-3-small | 0.485 | 0.613 |
-| E3 | text-embedding-3-large | 0.646 | 0.739 |
-| S1 | none | 0.367 | 0.483 |
-| S2 | text-embedding-3-small | 0.524 | 0.637 |
-| S3 | text-embedding-3-small | 0.629 | 0.739 |
+| E1 | BGE-small, run locally (no Azure model) | 0.376 | 0.494 |
+| E2 | text-embedding-3-small, exact cosine | 0.485 | 0.613 |
+| E3 | text-embedding-3-large, exact cosine | 0.646 | 0.739 |
+| S1 | ReleaseLens's own hybrid retriever (no Azure model) | 0.367 | 0.483 |
+| S2 | Azure AI Search hybrid, with text-embedding-3-small | 0.524 | 0.637 |
+| S3 | S2 plus Azure AI Search's semantic ranker | 0.629 | 0.739 |
 
-E3 − E1 top-1 is +0.271, the published figure.
+Project 2's own verdict: three pre-registered comparisons were each a declared **difference**:
+E3 − E1 top-1 +0.271 (the published figure), S3 − S1 +0.262 and S3 − S2 +0.105.
 
 **Project 3, Foundry agent** (6 October 2026; n = 60 per arm):
 
@@ -96,7 +104,8 @@ E3 − E1 top-1 is +0.271, the published figure.
 | gpt | gpt-5.6-luna `2026-07-09` | 59 / 60 | 0.98 | 4.70 | 3.75 | 18.3 s |
 | claude | claude-haiku-4-5 (version 2) | 57 / 60 | 0.93 | 4.67 | 3.88 | 23.7 s |
 
-The last three columns are Foundry's evaluator scores as project 3 recorded them.
+The last three columns are Foundry's evaluator scores as project 3 recorded them. Project 3's own
+verdict: the success-rate comparison was **inconclusive** at its 20 scenarios.
 
 **Across model versions: the data can't tell.** Every arm resolved to exactly one model version
 (the two no-model arms to none), so no study has two versions of one model to compare
@@ -104,7 +113,8 @@ The last three columns are Foundry's evaluator scores as project 3 recorded them
 
 ### 3. Cost per measured result
 
-The estimate (USD at list price, from each study's own token counts) sits beside the actual
+The estimate (USD at list price, from each study's own token counts; project 1's includes its
+groundedness judge's calls) sits beside the actual
 (AUD, from Cost Management). They are never added together, and the actual is never converted.
 The estimate is also shown in AUD at the export's own USD-to-AUD rate for October 2026
 (1.4246).
@@ -117,8 +127,10 @@ The estimate is also shown in AUD at the export's own USD-to-AUD rate for Octobe
 
 No result was unpriced. Why the two columns differ:
 
-- **p1's actual is far below its estimate** because two of its three arms (Claude and OpenAI
-  direct, 2.33 USD of the 2.71) bill outside Azure, where Cost Management can't see them.
+- **p1's actual is far below its estimate** because 2.64 of its 2.71 USD bills outside Azure,
+  where Cost Management can't see it: arms A and O answer through Anthropic and OpenAI directly,
+  and every arm's groundedness judge is Claude Sonnet 5. Only arm Z's answering tokens
+  (0.0631 USD, about 0.09 AUD) run on Azure.
 - **p2's estimate prices only embedding tokens**; its actual is everything attributed to
   project 2 in Azure, including its session-window share of the shared search service.
 - **p3's actual is above its estimate**: the estimate prices the agent's tokens; the actual is
@@ -131,9 +143,11 @@ Measured with Microsoft's Fabric Capacity Metrics app on the FTL64 trial capacit
 
 | Measure | Value | Measured |
 |---|---|---|
-| One full prod load | **About 2,048 CU-seconds** (4 min 16 s): `nb_load` 1,170, `nb_ingest_public` 673, the lakehouse 160, the pipeline 40, the SQL endpoint 4 | 10 Nov 2026 |
+| One full prod load (its notebooks and pipeline) | **About 1,884 CU-seconds** (4 min 16 s): `nb_load` 1,170, `nb_ingest_public` 673, the pipeline 40 | 10 Nov 2026 |
+| All prod activity that day | About 2,048 CU-seconds: the load, plus the lakehouse (160) and SQL endpoint (4), which also count the deploy's upload, the extracts' upload and a download of gold | 10 Nov 2026 |
 | Peak utilization (dev and prod, 9–10 November) | 0.62% of the trial capacity | 10 Nov 2026 |
-| Throttled or rejected operations | 0 | 10 Nov 2026 |
+| Rejected operations | 0 | 10 Nov 2026 |
+| Throttling | **pending** | from 14 Nov 2026 |
 | Three scheduled prod runs | **pending** | from 14 Nov 2026 |
 | Smallest paid size that fits | **pending** (worked out, not bought) | from 14 Nov 2026 |
 
@@ -259,7 +273,7 @@ The full reasoning, including the options rejected, is in the
   study. So the answers compare models, not versions.
 - **Estimates and actuals are different things.** Estimated cost is USD at list price; actual
   spend is in the billing currency (AUD) from Cost Management and covers Azure only, so it can't
-  see project 1's two external arms. The estimate is also shown in AUD, converted at the export's
+  see project 1's two external arms or its judge. The estimate is also shown in AUD, converted at the export's
   own USD-to-AUD rate for the study's month (null when the export has no single rate for that
   month). The two are never summed.
 - **Commit time stands in for apply time** in the Type 2 dimension, because git doesn't record

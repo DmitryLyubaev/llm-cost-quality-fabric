@@ -1,8 +1,8 @@
 # Live report
 
 The dated record of building project 9 live, steps 3 to 16 of the
-[live runbook](superpowers/plans/2026-10-23-plan-3-live-runbook.md), failures included. Times are
-UTC. Identifiers (tenant, subscription, storage, connections, users) are left out on purpose;
+[live runbook](superpowers/plans/2026-10-23-plan-3-live-runbook.md), failures included. Times and
+dates are UTC unless marked as Brisbane time (UTC+10). Identifiers (tenant, subscription, storage, connections, users) are left out on purpose;
 the answers themselves are in the [README](../README.md#the-answers).
 
 ## Summary
@@ -42,6 +42,8 @@ the answers themselves are in the [README](../README.md#the-answers).
   field is required`), set inactive.
 - Each export's identity holds one role, Storage Blob Data Contributor on the container only.
   Both runs completed at 07:33 with shared keys off.
+- Listing the exported files then failed: the owner's own account had no data-plane role. A
+  read-only role on the container alone fixed it.
 - The layout and manifest matched what the code expects; the header (65 columns, data version
   2021-10-01) resolved through the column aliases with no code change.
 - **September held only 30 September** (12 lines, 0.0018 AUD): the subscription changed offer
@@ -52,8 +54,9 @@ the answers themselves are in the [README](../README.md#the-answers).
 ## Step 5: Fabric user and tenant settings, 22 October 2026
 
 - A dedicated Fabric admin user in the subscription's own tenant, so no work account touches the
-  project. Its first Fabric sign-in had to be pinned to that tenant: an existing single sign-on
-  session for another tenant otherwise took over.
+  project. Its first Fabric sign-in worked only in a private browser window: an existing single
+  sign-on session for another tenant took over the normal one, and even a tenant-pinned link
+  failed under it (`AppMetadataInaccessible`).
 - Tenant settings: "Users can sync workspace items with GitHub repositories" turned on; the
   others the runbook needs were already on.
 
@@ -62,8 +65,8 @@ the answers themselves are in the [README](../README.md#the-answers).
 - **22 October:** "A Fabric trial isn't available for your account." The tenant was 73 days old;
   community answers (not Microsoft's documentation) say trials need a tenant of 90 days.
 - **30 October:** refused again.
-- **8 November** (90 days): the activation reported success, but no trial capacity existed. A
-  support case was raised.
+- **7 November, 20:46** (8 November in Brisbane, when the tenant reached 90 days): the
+  activation reported success, but no trial capacity existed. A support case was raised.
 - **9 November:** after re-checking the settings support asked about (all already allowed), the
   retry worked: an F64 trial (FTL64, 64 capacity units, Australia East), ending about
   8 January 2027.
@@ -80,13 +83,15 @@ the answers themselves are in the [README](../README.md#the-answers).
 - Device-code sign-in for the Fabric admin was blocked by the tenant's security defaults
   (`AADSTS530035`). Interactive browser sign-in from WSL worked; security settings weren't changed.
 - Terraform created both workspaces, but **prod's workspace identity failed on create**
-  (`InternalError`). Terraform tainted the workspace. Deprovisioning and provisioning through the
-  API returned success but changed nothing; deleting the failed identity in the portal and
+  (`InternalError`). Terraform tainted the workspace. Provisioning through the API first returned
+  `WorkspaceIdentityAlreadyExists`; deprovisioning and provisioning were then accepted (202) but
+  changed nothing; deleting the failed identity in the portal and
   creating it again worked, and a second apply finished the role assignment.
 - Both workspaces assigned to the trial capacity through the API (Terraform's provider doesn't
   support trial capacity). Spark settings were already as needed (runtime 2.0).
 - Both workspace identities given Storage Blob Data Reader on the export storage; a Fabric
-  connection created with workspace-identity sign-in for the shortcut.
+  connection created with workspace-identity sign-in for the shortcut. Its first create failed on
+  an empty path (`The Value field is required`); leaving the path out worked.
 
 ## Step 9: repo, environments and the first deploy
 
@@ -106,10 +111,11 @@ the answers themselves are in the [README](../README.md#the-answers).
 - **The first "Update from Git" failed**, rejecting the real-time dashboard
   (`InvalidArtifactDefinitionFormat`). Moving items out one at a time showed three more Fabric
   rejects: the Activator (`The importArtifactRequest field is required`), the Eventstream (its
-  connection ID is a placeholder until project 10) and the semantic model (its lakehouse
-  reference is a placeholder until project 11).
-- **Update from Git isn't atomic:** one failed attempt had already created 11 items. Dev follows
-  a sync branch that leaves the four items out; that sync succeeded.
+  connection ID is a placeholder until project 10) and the semantic model
+  (`Dataset_Import_FailedToImportDataset`, "Fabric artifact empty GUID not found").
+- **Update from Git isn't reliably atomic:** the first failed attempt created nothing, but a later
+  one had already created 11 items before it failed. Dev follows a sync branch that leaves the
+  four items out; that sync succeeded.
 - Checked against the repo: the lakehouse is schema-enabled; the pipeline's notebook references
   resolve to dev's real IDs; the schedule arrives disabled, as committed. Fabric rewrites some
   markdown cells (cosmetic).
@@ -136,10 +142,12 @@ the answers themselves are in the [README](../README.md#the-answers).
   export was read through the shortcut (729 lines to 8 November); 1,773 results; 0 rejects. The
   SQL endpoint synced all 15 tables as `schema.table`.
 - **Run 3, the same date, passed** with gold identical across all 9 tables.
+- The fix's first CI run failed: a note added after the local test run named the capstone, which
+  a test forbids in project 9's Fabric files. Reworded; CI passed.
 
 ## Step 13: the checks failing on purpose, 10 November 2026
 
-The first three ran on a load date with no passed run yet, so each could fail only the check
+The first three ran on a load date with no passed run yet, so each should fail only the check
 under test; the fourth ran after a passing baseline on that date. Failed runs are never logged
 as passed, so none became a baseline.
 
@@ -155,7 +163,9 @@ as passed, so none became a baseline.
   gold, and the published-figures check failed instead (`p1_total_cost_usd: gold 2.73169,
   published 2.7055`). Redone with an Azure arm.
 - Removing a cost line meant replacing the export shortcut with a copy for one run; the real
-  export was never written to (the shortcut's identity can only read).
+  export was never written to (the shortcut's identity can only read). For about 30 seconds after
+  the shortcut was deleted, OneLake still showed it, and the first uploads failed with
+  `PathConflict` (nothing written).
 - Each failing run took about 12 minutes, because the load activity retries twice.
 - Each change was undone. A final run passed with gold identical to the baseline.
 
@@ -178,12 +188,18 @@ as passed, so none became a baseline.
 
 ## Step 15: capacity
 
-**Pending** until three scheduled prod runs (12–14 November). The Capacity Metrics app was
-connected on 10 November; its first readings (one prod load about 2,048 CU-seconds, a peak of
-0.62%, nothing throttled) are in the [README](../README.md#capacity).
+**Pending** until three scheduled prod runs (06:00 Brisbane time on 12–14 November). The
+Capacity Metrics app was connected on 10 November; its first readings (one prod load about
+1,884 CU-seconds, a peak of 0.62%, nothing rejected) are in the
+[README](../README.md#capacity). Throttling is read in step 15.
 
 ## Step 16: the three answers, 10 November 2026
 
 Measured from a copy of prod's gold taken after the first prod run, with the package's own
 answer functions. They're in the [README](../README.md#the-answers). Each published figure the
 checks guard (project 1's $2.7055, project 3's 59 and 57, project 2's +0.271) came out the same.
+
+A review of the drafts on 10 November found that project 1's citation and must-contain means
+were averaged over every answer, including those the metrics don't apply to (the unanswerable
+questions, and questions with nothing to contain). The private extract had dropped the study's
+rule. TODO: record the fix and the re-measured figures.
