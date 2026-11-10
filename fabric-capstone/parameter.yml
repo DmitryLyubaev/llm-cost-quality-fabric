@@ -7,6 +7,13 @@
 # for both (fabric-capstone/VERIFY.md). One rule per field, each anchored on the field name, since a
 # capture group swaps one value. fabric-cicd applies find_replace before its own swap of an empty
 # `workspaceId` (fabric_workspace.py, _publish_item), so the workspace rule decides it, not that fallback.
+#
+# The two notebooks' default lakehouse: git holds lh_capstone's logicalId with the empty workspace GUID.
+# Project 9's first dev run failed on that form ("LakehouseWorkspaceId is not a valid GUID"), because
+# nothing swapped it before the runtime read it. The capstone workspace exists only for the live run, so
+# git cannot hold its real IDs as fabric/ holds dev's; these rules swap them on every publish, as
+# fabric/parameter.yml's PROD rules do. Each captures whatever GUID is there, so the result is the same
+# whether fabric-cicd's own logicalId swap runs before them or not.
 
 find_replace:
     # The source's workspace: the empty GUID in git -> the capstone workspace.
@@ -23,3 +30,23 @@ find_replace:
       is_regex: "true"
       item_type: "DataAgent"
       file_path: "**/datasource.json"
+    # The notebooks' default lakehouse: lh_capstone's logicalId in git -> its deployed ID.
+    - find_value: '\#\s*META\s+"default_lakehouse":\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"'
+      replace_value:
+        CAPSTONE: "$items.Lakehouse.lh_capstone.$id"
+      is_regex: "true"
+      item_type: "Notebook"
+      file_path: "**/notebook-content.py"
+    - find_value: '"known_lakehouses":\s*\[\s*# META\s*\{\s*# META\s*"id":\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"'
+      replace_value:
+        CAPSTONE: "$items.Lakehouse.lh_capstone.$id"
+      is_regex: "true"
+      item_type: "Notebook"
+      file_path: "**/notebook-content.py"
+    # The default lakehouse's workspace: the empty GUID in git -> the capstone workspace.
+    - find_value: '\#\s*META\s+"default_lakehouse_workspace_id":\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"'
+      replace_value:
+        CAPSTONE: "$workspace.$id"
+      is_regex: "true"
+      item_type: "Notebook"
+      file_path: "**/notebook-content.py"

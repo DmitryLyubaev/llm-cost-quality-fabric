@@ -421,6 +421,9 @@ def test_notebook_installs_the_wheel_then_takes_its_parameters_then_makes_one_ca
 
 @pytest.mark.parametrize("name", [SNAPSHOT_NOTEBOOK, EXPECTED_NOTEBOOK])
 def test_notebook_default_lakehouse_is_lh_capstone_in_this_workspace(name):
+    # The git form. The runtime cannot use it as is (project 9's first dev run failed on the empty
+    # workspace GUID), so publish-capstone swaps in the real IDs (fabric-capstone/parameter.yml, tested
+    # in tests/test_deploy.py). The capstone workspace is never synced from git.
     lakehouse_id = _platform(LAKEHOUSE)["config"]["logicalId"]
     header = _meta_blocks(_notebook(name))[0]
     assert header["kernel_info"]["name"] == "synapse_pyspark"

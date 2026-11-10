@@ -42,6 +42,23 @@ Then publish the report and delete everything that bills.
 - **Practice only before the freeze.** Tuning uses `capstone/practice.json` alone. The frozen 15 are never asked before step 13.
 - **Endpoints and IDs:** `CAPSTONE_WORKSPACE_ID`, `CAPSTONE_MCP_URL`, `ANALYST_MCP_URL`, `ANALYST_CONNECTION_ID` and `FWA_PROJECT_ENDPOINT` are set in the process only and never printed. The runners already refuse to print them.
 
+### Project 9's live lessons (`docs/live-report.md`, 9–10 November 2026)
+
+- **The notebooks' default lakehouse.** Project 9's first dev run failed with `LakehouseWorkspaceId is not a valid GUID: 00000000-…`: nothing swapped the git form (the logicalId with the empty workspace GUID) before the runtime read it.
+  - The capstone notebooks keep that form in git, because the capstone workspace exists only for this run. `fabric-capstone/parameter.yml` swaps in the real workspace and `lh_capstone` IDs on every `publish-capstone`, as project 9's PROD rules do.
+  - Step 6 checks the swap before either notebook runs.
+- **No git sync for the capstone.** "Update from Git" isn't atomic: one failed attempt in project 9 had already created 11 items. It would also bring the placeholder form back.
+  - Never connect the capstone workspace to git. `publish-capstone` is its only deploy.
+  - fabric-cicd also publishes item by item, so a failed `publish-capstone` can leave some items made. Re-run it (it deploys and publishes again) rather than deleting items by hand.
+- **Branches.** PRs go into `dev`; `dev` reaches `main` by a `dev`→`main` PR. Every push to either starts `deploy.yml` (dev at once, prod after the owner's approval).
+  - While the repo's "automatically delete head branches" setting is on, merging `dev` into `main` deletes `dev`. Note `dev`'s commit before the merge and push it back at once: `git push origin <that commit>:refs/heads/dev`.
+- **Deploy sign-in.** `deploy.yml` signs in by OIDC, and GitHub now sends ID-based subjects: `repo:<owner>@<ownerId>/<repo>@<repoId>:environment:<env>`, not the name-based form.
+  - Project 9's two credentials already use it. A deploy that fails at sign-in with `AADSTS700213` means a credential's subject doesn't match that form.
+  - Any new federated credential uses the ID-based form. This runbook plans none.
+- **Schedules.** A schedule written with a start in the past fires a run at once (project 9 moved prod's start to 12 November for that reason).
+  - The capstone has no schedule. If one is ever added, its start must be in the future at deploy time.
+  - Prod's `pl_daily_load` start is now in the past, so treat any prod deploy as one that may start a load at once. Step 7 keeps prod deploys out of its window.
+
 ## Preconditions
 
 - **Project 9:** plan 3 has run, so prod gold exists and loads daily.
@@ -59,7 +76,7 @@ Then publish the report and delete everything that bills.
 - **Resource provider:** `az provider show --namespace Microsoft.Fabric --query registrationState`. Record it. Registering it is step 5's first action.
 - **Region:** read the trial capacity's region in Fabric's admin portal (owner's screen 👤). Set `location` in `infra/capstone/capacity/terraform.tfvars` to it; it's `australiaeast` unless the portal says otherwise.
 - **Tenant settings 👤:** read whether Copilot and both Azure OpenAI cross-geo settings (processing and storage) are on. Don't change them yet.
-- **Repo state:** both repos' `main` are clean and current. Authors are personal-only.
+- **Repo state:** both repos' `main` are clean and current, and this repo's `dev` exists (a `dev`→`main` merge deletes it). Authors are personal-only.
 
 ### Step 2: Close the scorer gaps, and add the value-based leak check (offline TDD, this repo)
 
@@ -123,6 +140,9 @@ Then publish the report and delete everything that bills.
 
 - **The wheel 👤 or 🔒:** upload `lakehouse-<version>-py3-none-any.whl`, from `python -m build --wheel` on `main`, to `lh_capstone`'s `Files/wheels/`. This happens after the first publish creates `lh_capstone`, so run `publish-capstone` once, upload, and run it again.
 - **Publish:** `CAPSTONE_WORKSPACE_ID=… python .deploy/deploy.py publish-capstone`, as `fabric@` in the `.azure-fabric` shell. Expect `publish-capstone: ok`.
+- **The notebooks' default lakehouse:** after the first publish, export both notebooks' definitions (Get Item Definition) to `private/live/p12/`.
+  - In each header, `default_lakehouse`, `known_lakehouses[0].id` and `default_lakehouse_workspace_id` must hold `lh_capstone`'s deployed ID and the capstone workspace's ID.
+  - **Stop** if any still holds the empty GUID or `lh_capstone`'s logicalId: steps 7 and 8 would fail as project 9's first dev run did. Fix `fabric-capstone/parameter.yml` on a branch with its tests, merge on a yes, and re-publish.
 - **Definition format:** export `da_portfolio`'s definition (Get Item Definition) to `private/live/p12/` and diff it against `fabric-capstone/da_portfolio.DataAgent/`. Resolve every format row in `fabric-capstone/VERIFY.md`: the folder casing, `$schema`, the `elements` shape and the `fewShots` key. Where Fabric differs, take Fabric's form on a branch, update the tests, open a PR, merge on a yes, and re-publish. The definition is hashed, so this must land before the freeze.
 - **Example SQL:** in a notebook in the capstone workspace, run `evaluate_few_shots` on the deployed agent 👤. Any example Fabric rejects is fixed on that same branch, with its Source test still passing.
 - **Record** the commit `publish-capstone` ran from (ruling R6: the published description sits outside the freeze).
@@ -130,6 +150,7 @@ Then publish the report and delete everything that bills.
 ### Step 7: The snapshot 🔒 (outside prod's daily-load window)
 
 - **When:** check that prod's `pl_daily_load` isn't running and won't start within 30 minutes. It runs daily at 06:00 Brisbane.
+  - No prod deploy may run in that window either: a deploy rewrites the schedule, whose start is now in the past, and may fire a load at once. Check no `deploy.yml` prod job is running or waiting for approval, and approve none until the snapshot is done.
 - **Run 👤:** run `nb_capstone_snapshot` with `source_workspace_id` and `source_lakehouse_id` set at run time, and never saved to git (VERIFY row). It copies all 9 gold tables at pinned versions.
 - **Check:** `Files/capstone/snapshot.json` has the snapshot time, one Delta version per table, and row counts matching prod's.
 - **Commit:** download `snapshot.json` to `capstone/snapshot.json` and commit it on the run branch.
@@ -249,3 +270,4 @@ Run `python tools/ask_data_agent.py --passes 3 --out capstone/runs/direct` as `f
 3. **The snapshot mixing two loads, or answers leaking into examples on real data.** Step 7 avoids the load window. Step 8's value-based leak check stops the run.
 4. **Anything changed after the freeze.** Every runner verifies the freeze. The report counts freezes and refuses dirty scoring code.
 5. **The F2 left running.** Step 16 destroys both stacks and checks the resource group is gone. Pausing between days is the only exception, and it's recorded.
+6. **The notebooks' default lakehouse unbound.** The git form failed project 9's first run. `publish-capstone` swaps in the real IDs, and step 6 checks the deployed notebooks before either runs.

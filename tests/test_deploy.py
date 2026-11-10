@@ -1365,6 +1365,10 @@ DATASOURCE = (
     CAPSTONE_DIR / "da_portfolio.DataAgent" / "Files" / "Config" / "draft"
     / "lakehouse-tables-lh_capstone" / "datasource.json"
 )
+CAPSTONE_NOTEBOOKS = [
+    CAPSTONE_DIR / f"{name}.Notebook" / "notebook-content.py"
+    for name in ("nb_capstone_expected", "nb_capstone_snapshot")
+]
 CAPSTONE_TYPES = ["Lakehouse", "Notebook", "DataAgent"]
 # The capstone workspace, read from its own variable; `env` sets FABRIC_WORKSPACE_ID to prod's WS.
 CAPSTONE_WS = "13131313-aaaa-bbbb-cccc-000000000013"
@@ -1671,19 +1675,27 @@ def test_the_capstone_has_its_own_parameter_file_and_publish_capstone_points_no_
     assert Path(capstone.ws_kwargs["repository_directory"]) / "parameter.yml" == CAPSTONE_PARAMETERS
 
 
-def test_capstone_parameter_file_holds_exactly_the_two_datasource_rules():
+def _capstone_rules(item_type: str) -> list[dict]:
+    return [r for r in _capstone_parameters()["find_replace"] if r["item_type"] == item_type]
+
+
+def test_capstone_parameter_file_holds_the_two_datasource_rules_and_three_notebook_rules():
     params = _capstone_parameters()
     assert set(params) == {"find_replace"}
     rules = params["find_replace"]
-    assert len(rules) == 2
+    assert sorted(r["item_type"] for r in rules) == ["DataAgent"] * 2 + ["Notebook"] * 3
+    files = {"DataAgent": "**/datasource.json", "Notebook": "**/notebook-content.py"}
     for rule in rules:
+        # no item_name: a notebook rule applies to both notebooks
         assert set(rule) == {"find_value", "replace_value", "is_regex", "item_type", "file_path"}
         assert rule["is_regex"] == "true"  # a string, as fabric-cicd's _validate_find_regex needs
-        assert rule["item_type"] == "DataAgent" and rule["item_type"] in CAPSTONE_TYPES
-        assert rule["file_path"] == "**/datasource.json"
+        assert rule["item_type"] in CAPSTONE_TYPES
+        assert rule["file_path"] == files[rule["item_type"]]
         assert set(rule["replace_value"]) == {"CAPSTONE"}
+        assert rule["replace_value"]["CAPSTONE"] in CAPSTONE_RESOLVED
         assert re.compile(rule["find_value"]).groups == 1  # fabric-cicd's _validate_regex_structure
-    assert sorted(r["replace_value"]["CAPSTONE"] for r in rules) == sorted(CAPSTONE_RESOLVED)
+    for item_type in files:
+        assert {r["replace_value"]["CAPSTONE"] for r in _capstone_rules(item_type)} == set(CAPSTONE_RESOLVED)
 
 
 def test_capstone_rules_name_only_items_the_capstone_deploys():
@@ -1702,7 +1714,7 @@ def test_capstone_rules_apply_only_to_the_one_datasource_file():
     other file of the data agent."""
     agent_files = [p for p in (CAPSTONE_DIR / "da_portfolio.DataAgent").rglob("*") if p.is_file()]
     text = DATASOURCE.read_text(encoding="utf-8")
-    for rule in _capstone_parameters()["find_replace"]:
+    for rule in _capstone_rules("DataAgent"):
         assert sorted(CAPSTONE_DIR.glob(rule["file_path"])) == [DATASOURCE]
         assert len(re.findall(rule["find_value"], text)) == 1, rule["find_value"]
         for path in agent_files:
@@ -1713,7 +1725,7 @@ def test_capstone_rules_apply_only_to_the_one_datasource_file():
 def test_capstone_rules_are_anchored_on_their_field_names():
     text = DATASOURCE.read_text(encoding="utf-8")
     fields = {}
-    for rule in _capstone_parameters()["find_replace"]:
+    for rule in _capstone_rules("DataAgent"):
         match = re.search(rule["find_value"], text)
         assert match.group(1) == EMPTY_GUID
         field = re.match(r'"(\w+)"', match.group(0)).group(1)
@@ -1729,7 +1741,7 @@ def test_capstone_rules_change_only_the_two_ids_in_the_datasource(order):
 
     text = DATASOURCE.read_text(encoding="utf-8")
     result = text
-    for rule in _capstone_parameters()["find_replace"][::order]:
+    for rule in _capstone_rules("DataAgent")[::order]:
         assert len(re.findall(rule["find_value"], result)) == 1
         result = _apply_find_replace(rule, result, CAPSTONE_RESOLVED[rule["replace_value"]["CAPSTONE"]])
 
@@ -1739,6 +1751,55 @@ def test_capstone_rules_change_only_the_two_ids_in_the_datasource(order):
         k: v for k, v in before.items() if k not in ("workspaceId", "artifactId")
     }
     assert result.replace(CAPSTONE_WS, EMPTY_GUID).replace(CAPSTONE_LH, EMPTY_GUID) == text
+
+
+# The notebooks' default lakehouse. Project 9's first dev run failed on the git form, lh_portfolio's
+# logicalId with the empty workspace GUID ("LakehouseWorkspaceId is not a valid GUID"): nothing swapped
+# it before the runtime read it. The capstone workspace only exists for the live run, so git cannot hold
+# its real IDs; publish-capstone swaps both, as project 9's PROD deploy does (fabric/parameter.yml).
+
+
+def _capstone_lakehouse_logical_id() -> str:
+    platform = json.loads((CAPSTONE_DIR / "lh_capstone.Lakehouse" / ".platform").read_text(encoding="utf-8"))
+    return platform["config"]["logicalId"]
+
+
+def test_capstone_notebook_rules_apply_to_both_notebooks_once_each_and_to_no_agent_file():
+    agent_files = [p for p in (CAPSTONE_DIR / "da_portfolio.DataAgent").rglob("*") if p.is_file()]
+    for rule in _capstone_rules("Notebook"):
+        assert sorted(CAPSTONE_DIR.glob(rule["file_path"])) == sorted(CAPSTONE_NOTEBOOKS)
+        for path in CAPSTONE_NOTEBOOKS:
+            assert len(re.findall(rule["find_value"], path.read_text(encoding="utf-8"))) == 1, (rule, path)
+        for path in agent_files:
+            assert not re.search(rule["find_value"], path.read_text(encoding="utf-8")), path
+    for rule in _capstone_rules("DataAgent"):
+        for path in CAPSTONE_NOTEBOOKS:
+            assert not re.search(rule["find_value"], path.read_text(encoding="utf-8")), path
+
+
+@pytest.mark.parametrize("logical_ids_first", [False, True], ids=["git_form", "logical_ids_swapped"])
+@pytest.mark.parametrize("order", [1, -1], ids=["as_written", "reversed"])
+@pytest.mark.parametrize("path", CAPSTONE_NOTEBOOKS, ids=lambda p: p.parent.stem)
+def test_capstone_notebook_rules_bind_lh_capstone_in_the_capstone_workspace(path, order, logical_ids_first):
+    """Every notebook rule in turn, in either order, from the git form or from the form after fabric-cicd's
+    own logicalId swap: the header names the deployed lakehouse and workspace, and nothing else changes."""
+    from test_fabric_items import _apply_find_replace, _meta_blocks
+
+    logical_id = _capstone_lakehouse_logical_id()
+    text = path.read_text(encoding="utf-8")
+    result = text.replace(logical_id, CAPSTONE_LH) if logical_ids_first else text
+    for rule in _capstone_rules("Notebook")[::order]:
+        assert len(re.findall(rule["find_value"], result)) == 1
+        result = _apply_find_replace(rule, result, CAPSTONE_RESOLVED[rule["replace_value"]["CAPSTONE"]])
+
+    assert _meta_blocks(result)[0]["dependencies"]["lakehouse"] == {
+        "default_lakehouse": CAPSTONE_LH,
+        "default_lakehouse_name": "lh_capstone",
+        "default_lakehouse_workspace_id": CAPSTONE_WS,
+        "known_lakehouses": [{"id": CAPSTONE_LH}],
+    }
+    assert EMPTY_GUID not in result
+    assert result.replace(CAPSTONE_WS, EMPTY_GUID).replace(CAPSTONE_LH, logical_id) == text
 
 
 def test_the_prod_parameter_file_knows_nothing_of_the_capstone():
