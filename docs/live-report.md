@@ -114,8 +114,10 @@ the answers themselves are in the [README](../README.md#the-answers).
   resolve to dev's real IDs; the schedule arrives disabled, as committed. Fabric rewrites some
   markdown cells (cosmetic).
 - The dev deploy then succeeded: wheel uploaded, cost-export shortcut created.
-- Since then, Fabric's git status for dev times out or fails exporting the project 10 KQL
-  database. It doesn't affect the deploy or the runs; it stays with project 10.
+- For about a day afterwards, Fabric's git status for dev timed out or failed exporting the
+  project 10 KQL database (which had likely gone cold). It affected neither the deploy nor the
+  runs, and by 10 November it worked again. Every item shows as modified by the workspace:
+  Fabric's own formatting of the definitions, not a real change.
 
 ## Step 11: private extracts, 9 November 2026
 
