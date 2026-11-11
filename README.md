@@ -22,7 +22,7 @@ integration and CI/CD), done with every number measured, dated and reproducible.
 
 | Part | State |
 |---|---|
-| Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,490 tests** (projects 9–12); CI green on GitHub |
+| Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,535 tests** (projects 9–12); CI green on GitHub |
 | Cost export (Azure Cost Management → storage) | **Live** since 22 October; daily month-to-date plus a one-time September run |
 | Dev workspace | Syncs from git; first passing pipeline run on 9 November, after the first run failed on the notebooks' lakehouse binding; each of the four quality checks shown failing on purpose on 10 November |
 | Prod workspace | Deployed by GitHub Actions on 10 November; its first run passed all four checks the same day; scheduled daily at 06:00 Brisbane time from 12 November |
