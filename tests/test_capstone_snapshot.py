@@ -283,17 +283,13 @@ def test_snapshot_gold_refuses_its_own_default_lakehouse_as_the_source(monkeypat
         fabric_entry.snapshot_gold(SOURCE_WS, SOURCE_LH, context)
 
 
-def test_capstone_expected_reads_questions_and_writes_expected_beside_them(spark, loaded_lake, tmp_path, monkeypatch):
-    paths = loaded_lake[0]
+def _expected_mount(paths, tmp_path, monkeypatch, spark, questions, fewshots) -> tuple[Path, dict]:
+    """A files mount holding the uploaded questions.json and fewshots-sources.json."""
     mount = tmp_path / "mount"
     folder = mount / "capstone"
     folder.mkdir(parents=True)
-    questions = [
-        q
-        for q in json.loads((ROOT / "capstone" / "questions.json").read_text(encoding="utf-8"))
-        if q["id"] in ("q01", "q05", "q11", "q15")
-    ]
     (folder / "questions.json").write_text(json.dumps(questions), encoding="utf-8")
+    (folder / "fewshots-sources.json").write_text(json.dumps(fewshots), encoding="utf-8")
     seen = {}
 
     def fake_paths(context):
@@ -302,29 +298,67 @@ def test_capstone_expected_reads_questions_and_writes_expected_beside_them(spark
 
     monkeypatch.setattr(fabric_entry, "fabric_paths", fake_paths)
     monkeypatch.setattr(fabric_entry, "get_active_spark", lambda: spark)
+    return folder, seen
+
+
+def _frozen(*ids: str) -> list[dict]:
+    return [q for q in json.loads((ROOT / "capstone" / "questions.json").read_text(encoding="utf-8")) if q["id"] in ids]
+
+
+def test_capstone_expected_reads_questions_and_writes_expected_and_leaks_beside_them(
+    spark, loaded_lake, tmp_path, monkeypatch
+):
+    paths = loaded_lake[0]
+    questions = _frozen("q01", "q05", "q11", "q15")
+    fewshots = json.loads((ROOT / "capstone" / "fewshots-sources.json").read_text(encoding="utf-8"))
+    folder, seen = _expected_mount(paths, tmp_path, monkeypatch, spark, questions, fewshots)
 
     result = fabric_entry.capstone_expected(CONTEXT)
 
     assert seen["context"] is CONTEXT
     want = compute_expected(spark, paths, questions)
-    assert result == want
-    assert set(result) == {"q01", "q05", "q11"}
+    assert result == {"expected": want, "leaks": []}
+    assert set(want) == {"q01", "q05", "q11"}
     raw = (folder / "expected.json").read_bytes()
     assert b"\r" not in raw and raw.endswith(b"}\n")
     assert json.loads(raw) == want
     assert raw.decode("utf-8") == json.dumps(want, indent=2, sort_keys=True) + "\n"
+    assert (folder / "leaks.json").read_bytes() == b"[]\n"
     assert spark.conf.get("spark.sql.session.timeZone") == "UTC"
 
 
-def test_capstone_expected_needs_the_uploaded_questions(tmp_path, monkeypatch):
+def test_capstone_expected_lists_an_example_that_shows_a_frozen_answer(spark, loaded_lake, tmp_path, monkeypatch):
+    paths = loaded_lake[0]
+    leaking = {
+        "id": "a-leaking-example",
+        "columns": ["project", "billing_currency", "total"],
+        "source": {"function": "lakehouse.answers.cost_per_project", "args": {}, "select": {"project": "p2"}},
+    }
+    folder, _ = _expected_mount(paths, tmp_path, monkeypatch, spark, _frozen("q01", "q02"), [leaking])
+
+    result = fabric_entry.capstone_expected(CONTEXT)
+
+    assert result["leaks"] == [{"example_id": "a-leaking-example", "question_id": "q01"}]
+    raw = (folder / "leaks.json").read_text(encoding="utf-8")
+    assert raw == json.dumps(result["leaks"], indent=2, sort_keys=True) + "\n"
+    assert (folder / "expected.json").is_file()  # written before the check, so a leak loses nothing
+
+
+@pytest.mark.parametrize("missing", ["questions.json", "fewshots-sources.json"])
+def test_capstone_expected_needs_both_uploads(tmp_path, monkeypatch, missing):
+    folder = tmp_path / "capstone"
+    folder.mkdir()
+    for name in {"questions.json", "fewshots-sources.json"} - {missing}:
+        (folder / name).write_text("[]", encoding="utf-8")
     monkeypatch.setattr(fabric_entry, "FILES_MOUNT", str(tmp_path))
     monkeypatch.setattr(fabric_entry, "get_active_spark", lambda: object())
     monkeypatch.setattr(expected_module, "compute_expected", lambda *a: pytest.fail("must not compute"))
 
-    with pytest.raises(FileNotFoundError, match="questions.json"):
+    with pytest.raises(FileNotFoundError, match=missing):
         fabric_entry.capstone_expected(CONTEXT)
 
-    assert not (tmp_path / "capstone" / "expected.json").exists()
+    assert not (folder / "expected.json").exists()
+    assert not (folder / "leaks.json").exists()
 
 
 def test_snapshot_module_has_no_live_imports():
@@ -464,7 +498,9 @@ def test_expected_notebook_says_where_it_reads_and_writes():
     text = _notebook(EXPECTED_NOTEBOOK)
     markdown = " ".join(text.split(MARKDOWN_MARKER, 1)[1].split(CELL_MARKER, 1)[0].lower().split())
     assert "files/capstone/questions.json" in markdown
+    assert "files/capstone/fewshots-sources.json" in markdown
     assert "expected.json" in markdown
+    assert "leaks.json" in markdown
     assert "after the snapshot" in markdown
 
 

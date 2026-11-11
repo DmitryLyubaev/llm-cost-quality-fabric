@@ -46,7 +46,7 @@
       "function": "lakehouse.capstone.answers.cost_by_project_between",
       "args": {
         "start": "2026-10-01",
-        "end": "2026-10-05"
+        "end": "2026-10-03"
       },
       "select": {
         "project": "p2",

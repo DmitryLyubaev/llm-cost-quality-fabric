@@ -35,10 +35,16 @@ count question's selected `verdict` along.
   followed by `much`, `a lot` and the like); it states no figure at all (`parse_numbers` is
   empty: dates and `version 2` are not figures; ruling R5, so a refusal that states any figure,
   such as "all 60 runs used one version, so I can't compare", stays wrong); and it uses no word
-  from `CHANGE_WORDS` anywhere. `if` and `whether` excuse only an either/or pair from
-  `EITHER_OR_PAIRS` after them in the same clause ("I can't tell whether it went up or down"); a
-  lone change word stays a claim ("if you ask me, it rose"). The `down` of `break down` and the
-  `up` of `set up`, `look up`, `make up`, `sum up` and `add up` are not directions.
+  from `CHANGE_WORDS` anywhere. A claim of no change is a claim too (`changed`, `flat`, `stayed`,
+  `stable`, `unchanged`), except "change" next to "version": `the version didn't change` (not
+  followed by `much` and the like), `no version change`, `no change of version`. `if` and
+  `whether` excuse only an either/or pair from `EITHER_OR_PAIRS` after them in the same clause,
+  and only when a refusal governs the question: a refusal verb and object before the `if` or
+  `whether` ("I can't tell whether it went up or down"), or a clause opening with `whether` with
+  a refusal after the pair ("Whether it is higher or lower is not in the data"). So "even if ...
+  it went up or down" is a claim, and a lone change word stays a claim ("if you ask me, it
+  rose"). The `down` of `break down` and the `up` of `set up`, `look up`, `make up`, `sum up` and
+  `add up` are not directions.
 
 For money, count and rate, an answer with no figure of the scored kind is wrong (`unreadable`), as
 is one whose scored figure is a range; one with more than `SHOTGUN_LIMIT` such figures is wrong
@@ -123,13 +129,15 @@ REFUSAL_OBJECTS = (  # each word may take an ending: "determine" also matches "d
 )
 NO_CHANGE = ("didn't change", "did not change")
 NO_CHANGE_UNLESS = ("much", "a lot", "significantly", "greatly", "substantially", "that much", "very much", "by")
-CHANGE_WORDS = (  # direction and comparison words, matched as whole words anywhere in the answer
+CHANGE_WORDS = (  # direction, comparison and no-change words, matched as whole words anywhere in the answer
     "better", "worse", "improved", "improvement", "worsened", "rose", "risen", "fell", "fallen",
     "increased", "decreased", "dropped", "higher", "lower", "up", "down", "grew", "grown",
     "declined", "gained", "jumped", "climbed",
+    "changed", "change", "flat", "stayed", "steady", "stable", "unchanged",
 )  # fmt: skip
-# An either/or pair after "whether" or "if" in the same clause asks, it does not claim: "I can't
-# tell whether it went up or down". A lone change word stays a claim, wherever it is.
+# An either/or pair after "whether" or "if" in the same clause asks, it does not claim, when a
+# refusal governs it: "I can't tell whether it went up or down". A lone change word stays a claim,
+# wherever it is.
 EITHER_OR_PAIRS = (("up", "down"), ("better", "worse"), ("rose", "fell"), ("increased", "decreased"), ("higher", "lower"))
 VERDICT_WORDS = {
     "fail": r"fail(?:s|ed|ing|ures?)?",
@@ -417,6 +425,13 @@ _CHANGE = re.compile(rf"\b(?:{_words(CHANGE_WORDS)})\b")
 _NOT_A_DIRECTION = re.compile(
     r"\b(?:break|breaks|broke|broken|breaking)\s+(?:\w+\s+)?down\b|\b(?:set|sets|look|looked|make|made|sum|add|adds)\s+up\b"
 )
+# "change" next to "version" says there was one version, not how a figure moved: "the version
+# didn't change" (not followed by "much" and the like), "no version change", "no change of version".
+_VERSION_NO_CHANGE = re.compile(
+    rf"\bversions?\s+(?:{_words(NO_CHANGE)})\b(?!\s+(?:{_words(NO_CHANGE_UNLESS)})\b)"
+    r"|\bno\s+(?:model\s+)?version\s+change\b"
+    r"|\bno\s+change\s+(?:in|of|to)\s+(?:the\s+)?(?:model\s+)?versions?\b"
+)
 
 
 _EITHER_OR = re.compile(
@@ -427,11 +442,27 @@ _WHETHER = re.compile(r"\b(?:whether|if)\b")
 
 
 def _blank_open_questions(lowered: str) -> str:
-    """Blank an either/or pair ("up or down") that follows "whether" or "if" in the same clause."""
+    """Blank an either/or pair ("up or down") that follows "whether" or "if" in the same clause, when
+    a refusal governs that question: a refusal verb and object before the "whether" or "if" in the
+    clause ("I can't tell whether it rose or fell"), or a clause that opens with "whether" and has a
+    refusal after the pair ("Whether it is higher or lower is not in the data"). "Even if ... up or
+    down" asks nothing, so its pair stays a claim."""
 
     def blank(m: re.Match) -> str:
         clause_start = max((e.end() for e in _CLAUSE_END.finditer(lowered, 0, m.start())), default=0)
-        return " " * len(m.group(0)) if _WHETHER.search(lowered, clause_start, m.start()) else m.group(0)
+        asks = list(_WHETHER.finditer(lowered, clause_start, m.start()))
+        if not asks:
+            return m.group(0)
+        ask = asks[-1]
+        clause_end = next((e.start() for e in _CLAUSE_END.finditer(lowered, m.end())), len(lowered))
+        governed = _REFUSAL.search(lowered, clause_start, ask.start()) is not None
+        rest = lowered[m.end() : clause_end]
+        subject = (
+            ask.group(0) == "whether"
+            and not lowered[clause_start : ask.start()].strip()
+            and (_REFUSAL.search(rest) is not None or any(p in rest for p in REFUSAL_PHRASES))
+        )
+        return " " * len(m.group(0)) if governed or subject else m.group(0)
 
     return _EITHER_OR.sub(blank, lowered)
 
@@ -442,7 +473,8 @@ def _score_unanswerable(text: str) -> Verdict:
     if figures:  # ruling R5: a refusal that states any figure stays wrong
         return _wrong(f"refusal: the answer states {len(figures)} figure(s)")
     lowered = text.lower()
-    change = _CHANGE.search(_blank_open_questions(_NOT_A_DIRECTION.sub(" ", lowered)))
+    blanked = _VERSION_NO_CHANGE.sub(lambda m: " " * len(m.group(0)), _NOT_A_DIRECTION.sub(" ", lowered))
+    change = _CHANGE.search(_blank_open_questions(blanked))
     if change:
         return _wrong(f"refusal: the answer uses a direction or comparison word ({change.group(0)!r})")
     for phrase in REFUSAL_PHRASES:
