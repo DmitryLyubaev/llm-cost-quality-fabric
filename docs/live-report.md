@@ -21,7 +21,7 @@ the answers themselves are in the [README](../README.md#the-answers).
 | 12. First dev run | 9 Nov 2026 | Failed: git sync doesn't bind a notebook's lakehouse. Fixed; two runs passed, identical |
 | 13. Checks failing on purpose | 10 Nov 2026 | Each of the four checks failed alone, then everything was restored |
 | 14. Prod | 10 Nov 2026 | Deployed by GitHub Actions; first run passed; gold matches dev's except each result's first-seen load date |
-| 15. Capacity | from 14 Nov 2026 | **Pending**: needs three scheduled prod runs. One load measured on 10 November |
+| 15. Capacity | 10–14 Nov 2026 | Read live from the metrics app; no throttling; scheduled runs 1 and 2 passed, run 3 **pending** |
 | 16. The three answers | 10 Nov 2026 | Measured from prod's gold |
 
 ## Step 3: cost-export storage, 22 October 2026
@@ -186,12 +186,20 @@ as passed, so none became a baseline.
   load date (9 November in dev, 10 November in prod).
 - **No backfill:** one load reads everything, and once a date has run, earlier dates are refused.
 
-## Step 15: capacity
+## Step 15: capacity, 10–14 November 2026
 
-**Pending** until three scheduled prod runs (06:00 Brisbane time on 12–14 November). The
-Capacity Metrics app was connected on 10 November; its first readings, up to 07:52 that day
-(one prod load about 1,884 CU-seconds, a peak of 0.62%, nothing rejected), are in the
-[README](../README.md#capacity). Throttling is read in step 15.
+- The Capacity Metrics app was connected on 10 November. Its first readings, up to 07:52 that
+  day: one prod load about 1,884 CU-seconds, a peak of 0.62%, nothing rejected.
+- The app's import refresh runs once a day at midnight Brisbane time, which looked like a day's
+  wait before each run could be read. It isn't: the usage tables are DirectQuery. A query gets rows
+  only when it sets the model's capacity parameter (`CapacitiesList`), and then a run shows
+  minutes after it ends. `tools/capacity_report.py` reads them that way through the Power BI REST
+  API.
+- Scheduled runs 1 and 2 fired at 06:00 Brisbane time on 12 and 13 November, which confirms the
+  schedule's time zone. Both passed all four checks. Run 3: **pending** (14 November).
+- To 13 November: four prod runs used 1,587–2,417 CU-seconds each; nothing was throttled,
+  rejected or billed as overage; the peak was 0.67%. The figures and the smallest paid size are
+  in the [README](../README.md#capacity).
 
 ## Step 16: the three answers, 10 November 2026
 
