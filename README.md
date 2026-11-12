@@ -22,12 +22,12 @@ integration and CI/CD), done with every number measured, dated and reproducible.
 
 | Part | State |
 |---|---|
-| Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,550 tests** (projects 9–12); CI green on GitHub |
+| Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,565 tests** (projects 9–12); CI green on GitHub |
 | Cost export (Azure Cost Management → storage) | **Live** since 22 October; daily month-to-date plus a one-time September run |
 | Dev workspace | Syncs from git; first passing pipeline run on 9 November, after the first run failed on the notebooks' lakehouse binding; each of the four quality checks shown failing on purpose on 10 November |
 | Prod workspace | Deployed by GitHub Actions on 10 November; its first run passed all four checks the same day; scheduled daily at 06:00 Brisbane time from 12 November |
 | The three answers | **Measured** from prod's gold, load date 10 November 2026 |
-| Fabric capacity | Four prod runs measured (10–13 November): no throttling; smallest paid size F2 on one node, F16 as measured. The third scheduled run is **pending** (14 November) |
+| Fabric capacity | Four prod runs measured (10–13 November), no throttling. Smallest paid size: F2 by capacity units; keeping the trial's Spark nodes needs F16, or a custom pool on F4. The third scheduled run is **pending** (14 November) |
 
 Every figure below that isn't measured yet says **pending**. Nothing here is aspirational. The
 dated record of how it got here, failures included, is in [docs/live-report.md](docs/live-report.md).
@@ -148,35 +148,41 @@ No result was unpriced. Why the two columns differ:
 Measured with Microsoft's Fabric Capacity Metrics app on the FTL64 trial capacity (64 capacity
 units, Australia East), read from the app's semantic model with
 [`tools/capacity_report.py`](tools/capacity_report.py). Times here are Brisbane time. A run counts
-what prod used in the hour it started and the hour after.
+what prod used in the hour it started in and the hour after. Parts may not add up exactly because
+of rounding.
 
-| Prod run (Brisbane time) | CU-seconds | Notebooks | Pipeline | Lakehouse traffic |
+| Prod run, started (Brisbane time) | CU-seconds | Notebooks | Pipeline | Lakehouse traffic |
 |---|---|---|---|---|
-| 10 Nov 15:00, first prod load (by hand) | 2,047 | 1,844 | 40 | 163 |
-| 11 Nov 05:00, re-run after the project 1 fix (by hand) | 1,960 | 1,770 | 40 | 149 |
+| 10 Nov 15:26, first prod load (by hand) | 2,046 | 1,844 | 40 | 162 |
+| 11 Nov 05:37, re-run after the project 1 fix (by hand) | 1,959 | 1,770 | 40 | 149 |
 | 12 Nov 06:00, scheduled | 1,587 | 1,423 | 40 | 124 |
 | 13 Nov 06:00, scheduled | 2,417 | 2,249 | 40 | 127 |
 | 14 Nov 06:00, scheduled | **pending** | | | |
 
 The two notebooks are most of each run: `nb_load` 1,031–1,392 CU-seconds and `nb_ingest_public`
-294–857; each ran 73–134 seconds. Lakehouse traffic is OneLake reads and writes in those two hours;
-it also counts anything else that read prod's tables then, such as the checks' own downloads.
+294–857; each ran 73–134 seconds. Lakehouse traffic is OneLake reads and writes in those two hours.
+It also counts anything else that touched prod's tables then: the copies of gold downloaded to
+check each run, and the private extract uploaded just before the 11 November re-run.
 
 | Measure | Value | Measured |
 |---|---|---|
 | Throttling, rejections, overage | **None**: 0 minutes throttled, 0 operations rejected, no day with a delay, rejection or overage | 9–13 Nov 2026 |
 | Peak utilization (dev and prod) | 0.67% of the trial capacity | 9–13 Nov 2026 |
-| Busiest day, whole capacity | 35,309 CU-seconds, 10 November (dev's runs, with each check failing on purpose) | 10 Nov 2026 |
-| Busiest notebook session | About 21 Spark vCores on average (`nb_load`, 1,392 CU-seconds in 134 s; one CU is two vCores) | 13 Nov 2026 |
-| Smallest paid size that fits | **F2** if the notebooks run on one node; **F16** to run them as measured. Not bought | 13 Nov 2026 |
+| Busiest day, whole capacity | 35,309 CU-seconds, 10 November: mostly dev's runs with each check failing on purpose, plus prod's deploy and first load | 10 Nov 2026 |
+| Busiest notebook session | About 21 Spark vCores allocated on average (`nb_load`, 1,392 CU-seconds in 134 s; one CU is two vCores). The metrics don't give the peak | 13 Nov 2026 |
+| Smallest paid size that fits | **F2** by capacity units. Keeping the Spark nodes the notebooks had on the trial needs F16 with the default pool, or a custom pool on F4 (not tested). Not bought | 13 Nov 2026 |
 
-Why two answers. Fabric smooths background jobs over 24 hours, so a capacity's daily budget is its
-capacity units × 86,400 CU-seconds: 172,800 for an F2. The largest prod run used 1.4% of that,
-and even the busiest whole-capacity day used 20%. Spark is the tighter limit: the busiest session
-averaged about 21 vCores, three 8-vCore Medium nodes, and starter pools allow one node on F2 and
-F4, two on F8 and four on F16 ([Microsoft Learn, starter pools](https://learn.microsoft.com/en-us/fabric/data-engineering/configure-starter-pools),
-read 12 November 2026). On an F2 the same notebooks would run on one node, more slowly. That
-isn't measured.
+Why it depends on Spark. Fabric smooths background jobs over 24 hours, so a capacity's daily
+budget is its capacity units × 86,400 CU-seconds: 172,800 for an F2. The largest prod run used
+1.4% of that, and even the busiest whole-capacity day used 20%. Spark sets the other limit. The
+busiest session averaged about 21 allocated vCores, so at times it had at least three 8-vCore
+Medium nodes. The default (starter) pool allows one Medium node on F2 and F4, two on F8 and four
+on F16 ([starter pools](https://learn.microsoft.com/en-us/fabric/data-engineering/configure-starter-pools));
+a custom pool can use the capacity's burst cores, 24 vCores (three Medium nodes) on F4
+([job concurrency](https://learn.microsoft.com/en-us/fabric/data-engineering/spark-job-concurrency-and-queueing));
+both read 12 November 2026. On an F2 the notebooks would get one node. One session already ran
+that way: `nb_ingest_public` on 12 November averaged 8 vCores, one node, and was its fastest run
+(73 seconds). How `nb_load` would do on one node isn't measured.
 
 A backfill isn't measured because none is needed: one load reads the whole cost export, both
 private extracts and the public sources, so the first run built everything.
@@ -345,7 +351,7 @@ pytest -q
 | `fabric-capstone/` | The capstone data agent, deployed by hand (`publish-capstone`) |
 | `.deploy/deploy.py` | Wheel upload, `fabric-cicd` publish, shortcut |
 | `infra/` | Terraform: Fabric workspaces, cost-export storage, Event Hubs, the capstone F2 and workspace (`infra/capstone/`) |
-| `tools/` | Local tools: the hygiene check, the capacity report, the deployment-seed check, the capstone's helpers |
+| `tools/` | Local tools: the hygiene check, the capacity report, the deployment-seed check, the gateway event replay, the capstone's helpers |
 | `docs/live-report.md` | The dated record of the live build, failures included |
 | `docs/superpowers/` | Design spec and implementation plans |
 | `docs/research/` | Dated Fabric research the design relies on |

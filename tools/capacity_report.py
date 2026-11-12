@@ -19,6 +19,7 @@ import argparse
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 from collections import defaultdict
@@ -27,11 +28,15 @@ from datetime import datetime, timedelta
 
 RunDax = Callable[[str], list[dict]]
 
+
+class QueryError(RuntimeError):
+    """An executeQueries failure; its message holds only the HTTP status and error code."""
+
 PROD_WORKSPACE = "bcaf8b2a-3413-4e0e-bbe1-45be8855629e"
 PROD_PIPELINE = "225e8da0-7d29-4ac4-9636-a84bbff3292d"
 DAY_SECONDS = 86_400
 MEDIUM_NODE_VCORES = 8
-NOTEBOOK_OPERATION = "Notebook Pipeline Run"
+NOTEBOOK_KINDS = {"SynapseNotebook", "Notebook"}
 PBI = "https://api.powerbi.com/v1.0/myorg"
 
 # (SKU, capacity units, max Spark vCores with burst, starter pool max Medium nodes). Read
@@ -76,34 +81,47 @@ def _hour(text: str) -> datetime:
     return datetime.fromisoformat(text)
 
 
+def _id(value) -> str:
+    return (value or "").lower()
+
+
 def find_runs(hourly: list[dict], pipeline_id: str) -> list[datetime]:
-    """Start hour of each pipeline run: the first hour of each local day the pipeline ran in."""
-    hours = sorted({_hour(r["Datetime"]) for r in hourly if r["Item Id"].lower() == pipeline_id.lower() and (r["ops"] or 0) > 0})
+    """Start hour of each pipeline run.
+
+    A run is a stretch of consecutive hours with pipeline activity; a gap of more than an hour
+    starts a new one, so a run may cross midnight and a day may hold several runs.
+    """
+    hours = sorted({_hour(r["Datetime"]) for r in hourly if _id(r["Item Id"]) == _id(pipeline_id) and (r["ops"] or 0) > 0})
     starts: list[datetime] = []
+    previous = None
     for hour in hours:
-        if not starts or hour.date() != starts[-1].date():
+        if previous is None or hour - previous > timedelta(hours=1):
             starts.append(hour)
+        previous = hour
     return starts
 
 
 def run_breakdown(hourly: list[dict], workspace_id: str, start: datetime, kinds: dict[str, str]) -> dict:
     """CU-seconds in the workspace over the run's start hour and the next.
 
-    Split into notebooks (pipeline-run notebook sessions), the pipeline itself, and everything else
-    (OneLake reads and writes against the lakehouse and SQL endpoint). The window can include
-    other OneLake traffic in those two hours, such as someone reading the tables.
+    Split into notebooks (any operation on a notebook item, or named "Notebook ..."), the pipeline
+    itself, and everything else (OneLake reads and writes against the lakehouse and SQL endpoint).
+    The window can include other traffic in those two hours, such as someone reading the tables.
+    `avg_vcores` is 2 x CU-seconds / duration: the average Spark vCores allocated over the session
+    (one CU is two vCores). The metrics don't give the peak.
     """
     window = {start, start + timedelta(hours=1)}
     out = {"start": start.isoformat(), "notebooks": 0.0, "pipeline": 0.0, "storage": 0.0, "notebook_sessions": []}
     for r in hourly:
-        if r["Workspace Id"].lower() != workspace_id.lower() or _hour(r["Datetime"]) not in window:
+        if _id(r["Workspace Id"]) != _id(workspace_id) or _hour(r["Datetime"]) not in window:
             continue
         cus = r["cus"] or 0.0
-        if r["Operation name"] == NOTEBOOK_OPERATION:
+        item = _id(r["Item Id"])
+        if kinds.get(item) in NOTEBOOK_KINDS or (r["Operation name"] or "").startswith("Notebook"):
             out["notebooks"] += cus
             if r["dur"]:
-                out["notebook_sessions"].append({"item": r["Item Id"].lower(), "cus": cus, "seconds": r["dur"], "avg_vcores": 2 * cus / r["dur"]})
-        elif kinds.get(r["Item Id"].lower()) == "Pipeline":
+                out["notebook_sessions"].append({"item": item, "cus": cus, "seconds": r["dur"], "avg_vcores": 2 * cus / r["dur"]})
+        elif kinds.get(item) == "Pipeline":
             out["pipeline"] += cus
         else:
             out["storage"] += cus
@@ -123,11 +141,14 @@ def sizing(largest_run: float, busiest_day: float, peak_vcores: float) -> list[d
     """Each F SKU against the measured use.
 
     Background work is smoothed over 24 hours, so a SKU's budget is CU x 86,400 CU-seconds a day.
-    `fits_budget`: the busiest whole-capacity day fits in that budget. `fits_session`: the starter
-    pool's Medium-node cap holds the busiest notebook session's average vCores. With fewer nodes
-    Spark would still run the work, more slowly; that is not measured.
+    `fits_budget`: the busiest whole-capacity day fits in that budget. The Spark checks ask whether
+    the busiest session's average allocated vCores, in whole Medium nodes, fit the starter pool's
+    node cap (`fits_starter_pool`) or a custom pool using the SKU's burst vCores
+    (`fits_custom_pool`). The peak isn't measured, so these are lower bounds on what the trial
+    gave; with fewer nodes Spark still runs the work.
     """
-    nodes_needed = math.ceil(peak_vcores / MEDIUM_NODE_VCORES) if peak_vcores else 0
+    # The small epsilon keeps a session of exactly one node (8.0001 vCores from rounding) at one.
+    nodes_needed = math.ceil(peak_vcores / MEDIUM_NODE_VCORES - 1e-3) if peak_vcores else 0
     rows = []
     for sku, cu, burst, max_nodes in SKUS:
         budget = cu * DAY_SECONDS
@@ -135,7 +156,8 @@ def sizing(largest_run: float, busiest_day: float, peak_vcores: float) -> list[d
             "sku": sku, "cu": cu, "budget_cus": budget,
             "largest_run_pct": 100 * largest_run / budget, "busiest_day_pct": 100 * busiest_day / budget,
             "burst_vcores": burst, "max_nodes": max_nodes,
-            "fits_budget": busiest_day <= budget, "fits_session": max_nodes >= nodes_needed,
+            "nodes_needed": nodes_needed, "fits_budget": busiest_day <= budget,
+            "fits_starter_pool": max_nodes >= nodes_needed, "fits_custom_pool": burst // MEDIUM_NODE_VCORES >= nodes_needed,
         })
     return rows
 
@@ -146,8 +168,8 @@ def smallest(rows: list[dict], key: str) -> str | None:
 
 def collect(run_dax: RunDax, capacity_id: str, workspace_id: str = PROD_WORKSPACE, pipeline_id: str = PROD_PIPELINE) -> dict:
     items = clean(run_dax("EVALUATE " + ITEMS))
-    kinds = {r["Item Id"].lower(): r["Item kind"] for r in items}
-    names = {r["Item Id"].lower(): r["Item name"] for r in items}
+    kinds = {_id(r["Item Id"]): r["Item kind"] for r in items}
+    names = {_id(r["Item Id"]): r["Item name"] for r in items}
     hourly = [r for r in clean(run_dax(live(capacity_id, HOURLY))) if (r["cus"] or 0) > 0 or (r["ops"] or 0) > 0]
     states = clean(run_dax(live(capacity_id, STATES)))
     health = clean(run_dax(live(capacity_id, HEALTH)))
@@ -170,7 +192,8 @@ def collect(run_dax: RunDax, capacity_id: str, workspace_id: str = PROD_WORKSPAC
         "peak_notebook_vcores": peak_vcores,
         "sizing": sizes,
         "smallest_by_budget": smallest(sizes, "fits_budget"),
-        "smallest_by_session": smallest(sizes, "fits_session"),
+        "smallest_by_starter_pool": smallest(sizes, "fits_starter_pool"),
+        "smallest_by_custom_pool": smallest(sizes, "fits_custom_pool"),
     }
 
 
@@ -186,11 +209,12 @@ def render(report: dict) -> str:
         lines.append(f"  {r['start']}: {r['total']:,.1f} = {r['notebooks']:,.1f} + {r['pipeline']:,.1f} + {r['storage']:,.1f}  [{sessions}]")
     lines.append("Whole capacity per local day (CU-seconds):")
     lines += [f"  {day} {total:,.1f}" for day, total in report["days"].items()]
-    lines.append(f"Busiest notebook session: {report['peak_notebook_vcores']:.1f} Spark vCores on average")
+    lines.append(f"Busiest notebook session: {report['peak_notebook_vcores']:.1f} Spark vCores allocated on average (peak not measured)")
     for s in report["sizing"]:
         lines.append(f"  {s['sku']:>4}: largest run {s['largest_run_pct']:.2f}% of a day's budget, busiest day {s['busiest_day_pct']:.2f}%; "
                      f"burst {s['burst_vcores']} vCores, starter pool up to {s['max_nodes']} Medium node(s)")
-    lines.append(f"Smallest SKU by CU budget: {report['smallest_by_budget']}; smallest whose starter pool fits the measured session: {report['smallest_by_session']}")
+    lines.append(f"Smallest SKU by CU budget: {report['smallest_by_budget']}; keeping the busiest session's nodes: "
+                 f"{report['smallest_by_starter_pool']} with the starter pool, {report['smallest_by_custom_pool']} with a custom pool")
     return "\n".join(lines)
 
 
@@ -198,7 +222,8 @@ def power_bi_dax() -> RunDax:  # pragma: no cover - network
     """A `run_dax` that queries the Capacity Metrics app's model as the signed-in `az` account."""
     import requests
 
-    token = subprocess.run(["az", "account", "get-access-token", "--resource", "https://analysis.windows.net/powerbi/api",
+    az = shutil.which("az") or "az"  # az.cmd on Windows
+    token = subprocess.run([az, "account", "get-access-token", "--resource", "https://analysis.windows.net/powerbi/api",
                             "--query", "accessToken", "-o", "tsv"], capture_output=True, text=True, check=True).stdout.strip()
     session = requests.Session()
     session.headers["Authorization"] = f"Bearer {token}"
@@ -215,9 +240,15 @@ def power_bi_dax() -> RunDax:  # pragma: no cover - network
     def run_dax(query: str) -> list[dict]:
         response = session.post(f"{PBI}/groups/{group}/datasets/{dataset}/executeQueries",
                                 json={"queries": [{"query": query}], "serializerSettings": {"includeNulls": True}}, timeout=300)
+        if response.status_code != 200:
+            try:
+                code = response.json().get("error", {}).get("code", "")
+            except ValueError:
+                code = ""
+            raise QueryError(f"executeQueries failed: HTTP {response.status_code} {code}".rstrip())
         body = response.json()
-        if response.status_code != 200 or "tables" not in body.get("results", [{}])[0]:
-            raise RuntimeError(f"executeQueries failed: HTTP {response.status_code} {body.get('error', {}).get('code', '')}")
+        if "tables" not in body.get("results", [{}])[0]:
+            raise QueryError("executeQueries failed: no result table")
         return body["results"][0]["tables"][0]["rows"]
 
     return run_dax
@@ -236,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - network
     try:
         report = collect(power_bi_dax(), capacity_id, args.workspace, args.pipeline)
     except Exception as exc:  # noqa: BLE001 - print only the type, never a URL or ID
-        print(f"capacity_report: {type(exc).__name__}: {exc}" if isinstance(exc, RuntimeError) else f"capacity_report: {type(exc).__name__}", file=sys.stderr)
+        print(f"capacity_report: {type(exc).__name__}: {exc}" if isinstance(exc, QueryError) else f"capacity_report: {type(exc).__name__}", file=sys.stderr)
         return 1
     print(render(report))
     if args.json:

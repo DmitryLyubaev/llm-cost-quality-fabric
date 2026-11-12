@@ -4,6 +4,7 @@ from datetime import datetime
 
 import pytest
 
+import capacity_report
 from capacity_report import (
     PROD_PIPELINE,
     PROD_WORKSPACE,
@@ -100,6 +101,27 @@ def test_find_runs_takes_the_first_pipeline_hour_of_each_day():
     assert find_runs(rows, PROD_PIPELINE) == [datetime(2026, 11, 13, 6), datetime(2026, 11, 14, 6)]
 
 
+def test_find_runs_keeps_a_run_across_midnight_as_one():
+    rows = clean([
+        hour("2026-11-13T23:00:00", WS, PIPELINE, "ActivityRun", 10.0, 60, 1),
+        hour("2026-11-14T00:00:00", WS, PIPELINE, "ActivityRun", 10.0, 60, 1),
+    ])
+    assert find_runs(rows, PROD_PIPELINE) == [datetime(2026, 11, 13, 23)]
+
+
+def test_find_runs_finds_two_runs_in_one_day():
+    rows = clean([
+        hour("2026-11-13T06:00:00", WS, PIPELINE, "ActivityRun", 10.0, 60, 1),
+        hour("2026-11-13T19:00:00", WS, PIPELINE, "ActivityRun", 10.0, 60, 1),
+    ])
+    assert find_runs(rows, PROD_PIPELINE) == [datetime(2026, 11, 13, 6), datetime(2026, 11, 13, 19)]
+
+
+def test_find_runs_tolerates_null_ids():
+    rows = clean([hour("2026-11-13T06:00:00", WS, None, "ActivityRun", 10.0, 60, 1)])
+    assert find_runs(rows, PROD_PIPELINE) == []
+
+
 def test_find_runs_ignores_hours_without_operations():
     rows = clean([hour("2026-11-12T06:00:00", WS, PIPELINE, "ActivityRun", 0.0, 0, 0)])
     assert find_runs(rows, PROD_PIPELINE) == []
@@ -114,6 +136,13 @@ def test_run_breakdown_splits_the_two_hour_window():
     assert run["total"] == 2300.0
     vcores = sorted(s["avg_vcores"] for s in run["notebook_sessions"])
     assert vcores == [16.0, 20.0]  # 2 x CU-s / seconds
+
+
+def test_run_breakdown_counts_any_notebook_operation_as_notebooks():
+    rows = clean([hour("2026-11-13T06:00:00", WS, NB_LOAD.upper(), "Notebook Interactive Run", 50.0, 25)])
+    run = run_breakdown(rows, PROD_WORKSPACE, datetime(2026, 11, 13, 6), {NB_LOAD: "SynapseNotebook"})
+    assert (run["notebooks"], run["storage"]) == (50.0, 0.0)
+    assert run["notebook_sessions"][0]["avg_vcores"] == 4.0
 
 
 def test_run_breakdown_crosses_midnight():
@@ -135,17 +164,26 @@ def test_sizing_budget_and_session_fit():
     by = {r["sku"]: r for r in rows}
     assert by["F2"]["budget_cus"] == 172_800
     assert by["F2"]["largest_run_pct"] == pytest.approx(100 * 2400 / 172_800)
-    assert by["F2"]["fits_budget"] and not by["F2"]["fits_session"]
-    assert not by["F8"]["fits_session"]  # 20.7 vCores needs three 8-vCore nodes; F8 allows two
-    assert by["F16"]["fits_session"]
+    assert by["F2"]["nodes_needed"] == 3  # 20.7 vCores: at least three 8-vCore nodes
+    assert by["F2"]["fits_budget"] and not by["F2"]["fits_starter_pool"]
+    assert not by["F8"]["fits_starter_pool"]  # the starter pool allows two nodes on F8
+    assert by["F16"]["fits_starter_pool"]
+    assert not by["F2"]["fits_custom_pool"]  # burst 20 vCores: two nodes
+    assert by["F4"]["fits_custom_pool"]  # burst 24 vCores: three nodes
     assert smallest(rows, "fits_budget") == "F2"
-    assert smallest(rows, "fits_session") == "F16"
+    assert smallest(rows, "fits_starter_pool") == "F16"
+    assert smallest(rows, "fits_custom_pool") == "F4"
+
+
+@pytest.mark.parametrize(("vcores", "nodes"), [(8.0, 1), (8.0001, 1), (8.5, 2), (16.0, 2), (16.0004, 2), (0.0, 0)])
+def test_sizing_counts_whole_nodes(vcores, nodes):
+    assert sizing(0.0, 0.0, vcores)[0]["nodes_needed"] == nodes
 
 
 def test_sizing_when_a_day_exceeds_small_budgets():
     rows = sizing(largest_run=0.0, busiest_day=200_000.0, peak_vcores=8.0)
     assert smallest(rows, "fits_budget") == "F4"
-    assert smallest(rows, "fits_session") == "F2"  # one Medium node holds 8 vCores
+    assert smallest(rows, "fits_starter_pool") == "F2"  # one Medium node holds 8 vCores
 
 
 def test_collect_and_render_end_to_end():
@@ -156,7 +194,8 @@ def test_collect_and_render_end_to_end():
     assert report["throttling_minutes"] == 0
     assert report["peak_notebook_vcores"] == 20.0
     assert report["smallest_by_budget"] == "F2"
-    assert report["smallest_by_session"] == "F16"
+    assert report["smallest_by_starter_pool"] == "F16"
+    assert report["smallest_by_custom_pool"] == "F4"
     names = {s["item"] for r in report["runs"] for s in r["notebook_sessions"]}
     assert names == {"nb_load", "nb_ingest_public"}
     # Every usage query is scoped to the capacity; the import-mode Items query needs no parameter.
@@ -165,7 +204,7 @@ def test_collect_and_render_end_to_end():
     text = render(report)
     assert CAP not in text
     assert "FTL64 (64 CU)" in text and "peak 0.670%" in text
-    assert "Smallest SKU by CU budget: F2; smallest whose starter pool fits the measured session: F16" in text
+    assert "Smallest SKU by CU budget: F2; keeping the busiest session's nodes: F16 with the starter pool, F4 with a custom pool" in text
 
 
 def test_collect_reports_days_with_overage():
@@ -173,3 +212,36 @@ def test_collect_reports_days_with_overage():
                         "[BackgroundRejection]": 0.0, "[Overage]": 12.5}]
     report = collect(FakeDax(states), CAP)
     assert [d["Date"] for d in report["throttled_days"]] == ["2026-11-15T00:00:00"]
+
+
+@pytest.mark.parametrize("error", [
+    RuntimeError(f"executeQueries failed for {CAP}"),
+    ValueError(f"bad capacity {CAP}"),
+    OSError(f"https://api.example/{CAP}?token=secret"),
+])
+def test_main_never_prints_the_capacity_id(monkeypatch, capsys, error):
+    def boom():
+        raise error
+
+    monkeypatch.setenv("CAPACITY_ID", CAP)
+    monkeypatch.setattr(capacity_report, "power_bi_dax", boom)
+    assert capacity_report.main([]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("capacity_report: ")
+    assert CAP not in err and "secret" not in err and "https://" not in err
+    assert err.strip() == f"capacity_report: {type(error).__name__}"
+
+
+def test_main_prints_its_own_query_errors(monkeypatch, capsys):
+    def boom():
+        raise capacity_report.QueryError("executeQueries failed: HTTP 400 DatasetExecuteQueriesError")
+
+    monkeypatch.setenv("CAPACITY_ID", CAP)
+    monkeypatch.setattr(capacity_report, "power_bi_dax", boom)
+    assert capacity_report.main([]) == 1
+    assert "HTTP 400 DatasetExecuteQueriesError" in capsys.readouterr().err
+
+
+def test_main_needs_the_capacity_id(monkeypatch, capsys):
+    monkeypatch.delenv("CAPACITY_ID", raising=False)
+    assert capacity_report.main([]) == 2
