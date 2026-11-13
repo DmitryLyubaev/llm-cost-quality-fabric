@@ -46,13 +46,9 @@ find_replace:
       file_path: "**/definition/expressions.tmdl"
 
 key_value_replace:
-    # The daily schedule is disabled in git (dev never runs on a timer); PROD turns it on.
-    - find_key: $.schedules[?(@.jobType=="Execute")].enabled
-      replace_value:
-        PROD: true
-      item_type: "DataPipeline"
-      item_name: "pl_daily_load"
-      file_path: "**/.schedules"
+    # The daily schedule is disabled in git and now in PROD too. PROD ran it on 12-14 November 2026
+    # (plan 3, step 15) and then switched it off, so prod's gold stays as the README publishes it.
+    # Run the pipeline by hand, or restore a PROD: true rule on its `enabled` key, to load again.
     # The queryset and dashboard keep an empty cluster URI in git (the same-workspace form Fabric writes);
     # PROD points them at the deployed Eventhouse's query service URI.
     - find_key: $.queryset.dataSources[*].clusterUri
