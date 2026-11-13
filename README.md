@@ -22,10 +22,10 @@ integration and CI/CD), done with every number measured, dated and reproducible.
 
 | Part | State |
 |---|---|
-| Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,565 tests** (projects 9–12); CI green on GitHub |
+| Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,564 tests** (projects 9–12); CI green on GitHub |
 | Cost export (Azure Cost Management → storage) | **Live** since 22 October; daily month-to-date plus a one-time September run |
 | Dev workspace | Syncs from git; first passing pipeline run on 9 November, after the first run failed on the notebooks' lakehouse binding; each of the four quality checks shown failing on purpose on 10 November |
-| Prod workspace | Deployed by GitHub Actions on 10 November; its first run passed all four checks the same day; scheduled daily at 06:00 Brisbane time from 12 November |
+| Prod workspace | Deployed by GitHub Actions on 10 November; its first run passed all four checks the same day; ran on a daily schedule at 06:00 Brisbane time on 12–14 November, then the schedule was switched off so prod's gold stays as published here |
 | The three answers | **Measured** from prod's gold, load date 10 November 2026 |
 | Fabric capacity | Four prod runs measured (10–13 November), no throttling. Smallest paid size: F2 by capacity units; keeping the trial's Spark nodes needs F16, or a custom pool on F4. The third scheduled run is **pending** (14 November) |
 

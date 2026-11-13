@@ -346,7 +346,7 @@ def test_parameter_file_names_only_items_that_exist():
 
 
 @pytest.mark.parametrize("name", ALL_NOTEBOOKS)
-def test_parameter_file_repoints_lakehouse_and_enables_prod_schedule(name):
+def test_parameter_file_repoints_lakehouse_and_keeps_prod_schedule_off(name):
     params = _parameters()
     text = _notebook(name)
 
@@ -365,10 +365,9 @@ def test_parameter_file_repoints_lakehouse_and_enables_prod_schedule(name):
         DEV_WORKSPACE: "$workspace.$id",
     }
 
-    schedule_rules = [r for r in params["key_value_replace"] if r["item_type"] == "DataPipeline"]
-    assert len(schedule_rules) == 1
-    assert schedule_rules[0]["find_key"] == '$.schedules[?(@.jobType=="Execute")].enabled'
-    assert schedule_rules[0]["replace_value"] == {"PROD": True}
+    # The schedule stays as git has it (disabled) in PROD too: it ran 12-14 November 2026 and was
+    # then switched off (plan 3, step 15), so no rule may turn it back on.
+    assert [r for r in params["key_value_replace"] if r["item_type"] == "DataPipeline"] == []
 
 
 # --- Real-time items (project 10) ----------------------------------------------------------------
@@ -709,7 +708,6 @@ def _leaves(node, path=()) -> dict[tuple, object]:
 # What each key_value_replace rule must change, worked out from the documents without JSONPath. Keyed by
 # (item_name, find_key), so a second rule for the same item is a new entry, not an overwrite.
 ACT_KEY = '$[?(@.payload.definition.type=="Rule")].payload.definition.settings.shouldRun'
-PIPELINE_KEY = '$.schedules[?(@.jobType=="Execute")].enabled'
 QUERYSET_KEY = "$.queryset.dataSources[*].clusterUri"
 DASHBOARD_KEY = "$.dataSources[*].clusterUri"
 EVENTSTREAM_KEY = '$.sources[?(@.type=="AzureEventHub")].properties.dataConnectionId'
@@ -719,16 +717,12 @@ EXPECTED_KEY_LEAVES = {
         for i, e in enumerate(doc)
         if e["type"] == "timeSeriesView-v1" and e["payload"]["definition"]["type"] == "Rule"
     ],
-    ("pl_daily_load", PIPELINE_KEY): lambda doc: [
-        ("schedules", i, "enabled") for i, s in enumerate(doc["schedules"]) if s["jobType"] == "Execute"
-    ],
     ("kq_gateway", QUERYSET_KEY): lambda doc: [("queryset", "dataSources", 0, "clusterUri")],
     ("rtd_gateway", DASHBOARD_KEY): lambda doc: [("dataSources", 0, "clusterUri")],
     ("es_gateway", EVENTSTREAM_KEY): lambda doc: [("sources", 0, "properties", "dataConnectionId")],
 }
 EXPECTED_KEY_MATCHES = {
     ("act_gateway", ACT_KEY): 2,
-    ("pl_daily_load", PIPELINE_KEY): 1,
     ("kq_gateway", QUERYSET_KEY): 1,
     ("rtd_gateway", DASHBOARD_KEY): 1,
     ("es_gateway", EVENTSTREAM_KEY): 1,
