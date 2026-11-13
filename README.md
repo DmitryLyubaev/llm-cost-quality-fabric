@@ -18,18 +18,18 @@ them as a star schema that answers three questions:
 work (PySpark and Delta, dimensional modelling with a Type 2 dimension, Fabric pipelines, git
 integration and CI/CD), done with every number measured, dated and reproducible.
 
-## Status, 10 November 2026
+## Status, 14 November 2026
 
 | Part | State |
 |---|---|
 | Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,564 tests** (projects 9–12); CI green on GitHub |
 | Cost export (Azure Cost Management → storage) | **Live** since 22 October; daily month-to-date plus a one-time September run |
 | Dev workspace | Syncs from git; first passing pipeline run on 9 November, after the first run failed on the notebooks' lakehouse binding; each of the four quality checks shown failing on purpose on 10 November |
-| Prod workspace | Deployed by GitHub Actions on 10 November; its first run passed all four checks the same day; ran on a daily schedule at 06:00 Brisbane time on 12–14 November, then the schedule was switched off so prod's gold stays as published here |
+| Prod workspace | Deployed by GitHub Actions on 10 November; its first run passed all four checks the same day; ran on a daily schedule at 06:00 Brisbane time on 12–14 November; the schedule was then switched off (14 November) so prod's gold stays as published here |
 | The three answers | **Measured** from prod's gold, load date 10 November 2026 |
-| Fabric capacity | Four prod runs measured (10–13 November), no throttling. Smallest paid size: F2 by capacity units; keeping the trial's Spark nodes needs F16, or a custom pool on F4. The third scheduled run is **pending** (14 November) |
+| Fabric capacity | Five prod runs measured (10–14 November, three of them scheduled), no throttling. Smallest paid size: F2 by capacity units; keeping the trial's Spark nodes needs F16, or a custom pool on F4 |
 
-Every figure below that isn't measured yet says **pending**. Nothing here is aspirational. The
+Every figure below is measured and dated. Nothing here is aspirational. The
 dated record of how it got here, failures included, is in [docs/live-report.md](docs/live-report.md).
 Dates and times are UTC unless marked as Brisbane time (UTC+10).
 
@@ -157,7 +157,7 @@ of rounding.
 | 11 Nov 05:37, re-run after the project 1 fix (by hand) | 1,959 | 1,770 | 40 | 149 |
 | 12 Nov 06:00, scheduled | 1,587 | 1,423 | 40 | 124 |
 | 13 Nov 06:00, scheduled | 2,417 | 2,249 | 40 | 127 |
-| 14 Nov 06:00, scheduled | **pending** | | | |
+| 14 Nov 06:00, scheduled | 2,200 | 2,037 | 40 | 123 |
 
 The two notebooks are most of each run: `nb_load` 1,031–1,392 CU-seconds and `nb_ingest_public`
 294–857; each ran 73–134 seconds. Lakehouse traffic is OneLake reads and writes in those two hours.
@@ -166,11 +166,11 @@ check each run, and the private extract uploaded just before the 11 November re-
 
 | Measure | Value | Measured |
 |---|---|---|
-| Throttling, rejections, overage | **None**: 0 minutes throttled, 0 operations rejected, no day with a delay, rejection or overage | 9–13 Nov 2026 |
-| Peak utilization (dev and prod) | 0.67% of the trial capacity | 9–13 Nov 2026 |
+| Throttling, rejections, overage | **None**: 0 minutes throttled, 0 operations rejected, no day with a delay, rejection or overage | 9–14 Nov 2026 |
+| Peak utilization (dev and prod) | 0.67% of the trial capacity | 9–14 Nov 2026 |
 | Busiest day, whole capacity | 35,309 CU-seconds, 10 November: mostly dev's runs with each check failing on purpose, plus prod's deploy and first load | 10 Nov 2026 |
-| Busiest notebook session | About 21 Spark vCores allocated on average (`nb_load`, 1,392 CU-seconds in 134 s; one CU is two vCores). The metrics don't give the peak | 13 Nov 2026 |
-| Smallest paid size that fits | **F2** by capacity units. Keeping the Spark nodes the notebooks had on the trial needs F16 with the default pool, or a custom pool on F4 (not tested). Not bought | 13 Nov 2026 |
+| Busiest notebook session | About 21 Spark vCores allocated on average (`nb_load`, 1,357 CU-seconds in 128 s; one CU is two vCores). The metrics don't give the peak | 14 Nov 2026 |
+| Smallest paid size that fits | **F2** by capacity units. Keeping the Spark nodes the notebooks had on the trial needs F16 with the default pool, or a custom pool on F4 (not tested). Not bought | 14 Nov 2026 |
 
 Why it depends on Spark. Fabric smooths background jobs over 24 hours, so a capacity's daily
 budget is its capacity units × 86,400 CU-seconds: 172,800 for an F2. The largest prod run used

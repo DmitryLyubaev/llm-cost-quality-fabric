@@ -21,7 +21,7 @@ the answers themselves are in the [README](../README.md#the-answers).
 | 12. First dev run | 9 Nov 2026 | Failed: git sync doesn't bind a notebook's lakehouse. Fixed; two runs passed, identical |
 | 13. Checks failing on purpose | 10 Nov 2026 | Each of the four checks failed alone, then everything was restored |
 | 14. Prod | 10 Nov 2026 | Deployed by GitHub Actions; first run passed; gold matches dev's except each result's first-seen load date |
-| 15. Capacity | 10–14 Nov 2026 | Read live from the metrics app; no throttling; scheduled runs 1 and 2 passed, run 3 **pending** |
+| 15. Capacity | 10–14 Nov 2026 | Read live from the metrics app; three scheduled runs passed; no throttling; then the schedule was switched off |
 | 16. The three answers | 10 Nov 2026 | Measured from prod's gold |
 
 ## Step 3: cost-export storage, 22 October 2026
@@ -195,11 +195,14 @@ as passed, so none became a baseline.
   only when it sets the model's capacity parameter (`CapacitiesList`), and then a run shows
   minutes after it ends. `tools/capacity_report.py` reads them that way through the Power BI REST
   API.
-- Scheduled runs 1 and 2 fired at 06:00 Brisbane time on 12 and 13 November, which confirms the
-  schedule's time zone. Both passed all four checks. Run 3: **pending** (14 November).
-- To 13 November: four prod runs used 1,587–2,417 CU-seconds each; nothing was throttled,
-  rejected or billed as overage; the peak was 0.67%. The figures and the smallest paid size are
-  in the [README](../README.md#capacity).
+- Scheduled runs 1–3 fired at 06:00 Brisbane time on 12, 13 and 14 November, which confirms the
+  schedule's time zone. All three passed all four checks.
+- Five prod runs used 1,587–2,417 CU-seconds each; nothing was throttled, rejected or billed as
+  overage; the peak was 0.67%. The figures and the smallest paid size are in the
+  [README](../README.md#capacity).
+- Prod's schedule was then switched off (20:49 on 13 November, 06:49 on 14 November in Brisbane),
+  so prod's gold stays as published. Prod deploys used to turn it on; `parameter.yml` no longer
+  does, so a deploy keeps it off. The pipeline still runs by hand.
 
 ## Step 16: the three answers, 10 November 2026
 
