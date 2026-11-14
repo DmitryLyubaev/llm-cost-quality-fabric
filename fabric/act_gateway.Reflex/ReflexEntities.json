@@ -18,7 +18,16 @@
         "queryString": "let _startTime = ago(1h);\nlet _endTime = now();\n// Minutes in which at least one call was answered by the secondary backend.\ndatabase(\"kql_gateway\").GatewayCalls()\n| where answered_by == \"secondary\"\n| summarize secondary_calls = count() by minute = bin(event_time, 1m)\n| order by minute asc\n| where minute >= _startTime and minute < bin(_endTime, 1m)\n"
       },
       "eventhouseItem": {
-        "targetUniqueIdentifier": "84a9c8b1-b26d-47ce-9b29-4cf9e1244570"
+        "itemId": "70675b27-fc20-40ec-8234-e5a6bc7ad1cf",
+        "workspaceId": "00000000-0000-0000-0000-000000000000",
+        "itemType": "KustoDatabase"
+      },
+      "queryParameters": [],
+      "metadata": {
+        "workspaceId": "00000000-0000-0000-0000-000000000000",
+        "measureName": "secondary_calls",
+        "querySetId": "",
+        "queryId": ""
       },
       "parentContainer": {
         "targetUniqueIdentifier": "3ef637cb-b4e2-417a-b1d1-0b0b348f3da0"
@@ -82,7 +91,7 @@
       },
       "definition": {
         "type": "Rule",
-        "instance": "{\"templateId\":\"AttributeTrigger\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"ScalarSelectStep\",\"id\":\"18084901-bc74-4a24-8df5-54cea6968ad5\",\"rows\":[{\"name\":\"AttributeSelector\",\"kind\":\"Attribute\",\"arguments\":[{\"kind\":\"AttributeReference\",\"type\":\"complex\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"3e9d33c0-1e24-41c2-8006-52a4b1c73e5c\"}],\"name\":\"attribute\"}]}]},{\"name\":\"ScalarDetectStep\",\"id\":\"fea2d924-9763-4b23-9ea2-9e78c19858c9\",\"rows\":[{\"name\":\"NumberBecomes\",\"kind\":\"NumberBecomes\",\"arguments\":[{\"name\":\"op\",\"type\":\"string\",\"value\":\"BecomesGreaterThan\"},{\"name\":\"value\",\"type\":\"number\",\"value\":0.0}]},{\"name\":\"OccurrenceOption\",\"kind\":\"EachTime\",\"arguments\":[]}]}]}",
+        "instance": "{\"templateId\":\"AttributeTrigger\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"ScalarSelectStep\",\"id\":\"18084901-bc74-4a24-8df5-54cea6968ad5\",\"rows\":[{\"name\":\"AttributeSelector\",\"kind\":\"Attribute\",\"arguments\":[{\"kind\":\"AttributeReference\",\"type\":\"complex\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"3e9d33c0-1e24-41c2-8006-52a4b1c73e5c\"}],\"name\":\"attribute\"}]}]},{\"name\":\"ScalarDetectStep\",\"id\":\"fea2d924-9763-4b23-9ea2-9e78c19858c9\",\"rows\":[{\"name\":\"NumberBecomes\",\"kind\":\"NumberBecomes\",\"arguments\":[{\"name\":\"op\",\"type\":\"string\",\"value\":\"BecomesGreaterThan\"},{\"name\":\"value\",\"type\":\"number\",\"value\":0.0}]},{\"name\":\"OccurrenceOption\",\"kind\":\"EachTime\",\"arguments\":[]}]},{\"name\":\"ActStep\",\"id\":\"e9ef7c49-6c1e-4ffe-b061-68c91c5bdf23\",\"rows\":[{\"name\":\"EmailBinding\",\"kind\":\"EmailMessage\",\"arguments\":[{\"name\":\"messageLocale\",\"type\":\"string\",\"value\":\"\"},{\"name\":\"sentTo\",\"type\":\"array\",\"values\":[]},{\"name\":\"copyTo\",\"type\":\"array\",\"values\":[]},{\"name\":\"bCCTo\",\"type\":\"array\",\"values\":[]},{\"name\":\"subject\",\"type\":\"array\",\"values\":[{\"type\":\"string\",\"value\":\"Gateway alert: Call answered by the secondary backend\"}]},{\"name\":\"headline\",\"type\":\"array\",\"values\":[{\"type\":\"string\",\"value\":\"Call answered by the secondary backend\"}]},{\"name\":\"optionalMessage\",\"type\":\"array\",\"values\":[{\"type\":\"string\",\"value\":\"\"}]},{\"name\":\"additionalInformation\",\"type\":\"array\",\"values\":[]}]}]}]}",
         "settings": {
           "shouldRun": false,
           "shouldApplyRuleOnUpdate": false
@@ -102,7 +111,16 @@
         "queryString": "let _startTime = ago(1h);\nlet _endTime = now();\nlet threshold = 5000;\n// Caller-minutes whose summed tokens exceed the threshold (the Activator rule's condition).\ndatabase(\"kql_gateway\").GatewayCalls()\n| where isnotnull(tokens)\n| summarize tokens = sum(tokens) by minute = bin(event_time, 1m), caller\n| where tokens > threshold\n| order by minute asc, caller asc\n| where minute >= _startTime and minute < bin(_endTime, 1m)\n"
       },
       "eventhouseItem": {
-        "targetUniqueIdentifier": "84a9c8b1-b26d-47ce-9b29-4cf9e1244570"
+        "itemId": "70675b27-fc20-40ec-8234-e5a6bc7ad1cf",
+        "workspaceId": "00000000-0000-0000-0000-000000000000",
+        "itemType": "KustoDatabase"
+      },
+      "queryParameters": [],
+      "metadata": {
+        "workspaceId": "00000000-0000-0000-0000-000000000000",
+        "measureName": "tokens",
+        "querySetId": "",
+        "queryId": ""
       },
       "parentContainer": {
         "targetUniqueIdentifier": "3ef637cb-b4e2-417a-b1d1-0b0b348f3da0"
@@ -166,7 +184,7 @@
       },
       "definition": {
         "type": "Rule",
-        "instance": "{\"templateId\":\"AttributeTrigger\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"ScalarSelectStep\",\"id\":\"7177146d-44ba-4c12-932e-a0d98245c96c\",\"rows\":[{\"name\":\"AttributeSelector\",\"kind\":\"Attribute\",\"arguments\":[{\"kind\":\"AttributeReference\",\"type\":\"complex\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"2de2839e-35ab-4674-a624-b973a3f4cf91\"}],\"name\":\"attribute\"}]}]},{\"name\":\"ScalarDetectStep\",\"id\":\"e2e464a6-88ef-41bb-9c1a-944ddbd16e94\",\"rows\":[{\"name\":\"NumberBecomes\",\"kind\":\"NumberBecomes\",\"arguments\":[{\"name\":\"op\",\"type\":\"string\",\"value\":\"BecomesGreaterThan\"},{\"name\":\"value\",\"type\":\"number\",\"value\":5000.0}]},{\"name\":\"OccurrenceOption\",\"kind\":\"EachTime\",\"arguments\":[]}]}]}",
+        "instance": "{\"templateId\":\"AttributeTrigger\",\"templateVersion\":\"1.1\",\"steps\":[{\"name\":\"ScalarSelectStep\",\"id\":\"7177146d-44ba-4c12-932e-a0d98245c96c\",\"rows\":[{\"name\":\"AttributeSelector\",\"kind\":\"Attribute\",\"arguments\":[{\"kind\":\"AttributeReference\",\"type\":\"complex\",\"arguments\":[{\"name\":\"entityId\",\"type\":\"string\",\"value\":\"2de2839e-35ab-4674-a624-b973a3f4cf91\"}],\"name\":\"attribute\"}]}]},{\"name\":\"ScalarDetectStep\",\"id\":\"e2e464a6-88ef-41bb-9c1a-944ddbd16e94\",\"rows\":[{\"name\":\"NumberBecomes\",\"kind\":\"NumberBecomes\",\"arguments\":[{\"name\":\"op\",\"type\":\"string\",\"value\":\"BecomesGreaterThan\"},{\"name\":\"value\",\"type\":\"number\",\"value\":5000.0}]},{\"name\":\"OccurrenceOption\",\"kind\":\"EachTime\",\"arguments\":[]}]},{\"name\":\"ActStep\",\"id\":\"6159dfab-c81c-43b6-be5a-9f554dbf2d6f\",\"rows\":[{\"name\":\"EmailBinding\",\"kind\":\"EmailMessage\",\"arguments\":[{\"name\":\"messageLocale\",\"type\":\"string\",\"value\":\"\"},{\"name\":\"sentTo\",\"type\":\"array\",\"values\":[]},{\"name\":\"copyTo\",\"type\":\"array\",\"values\":[]},{\"name\":\"bCCTo\",\"type\":\"array\",\"values\":[]},{\"name\":\"subject\",\"type\":\"array\",\"values\":[{\"type\":\"string\",\"value\":\"Gateway alert: Caller tokens in a minute above the threshold\"}]},{\"name\":\"headline\",\"type\":\"array\",\"values\":[{\"type\":\"string\",\"value\":\"Caller tokens in a minute above the threshold\"}]},{\"name\":\"optionalMessage\",\"type\":\"array\",\"values\":[{\"type\":\"string\",\"value\":\"\"}]},{\"name\":\"additionalInformation\",\"type\":\"array\",\"values\":[]}]}]}]}",
         "settings": {
           "shouldRun": false,
           "shouldApplyRuleOnUpdate": false
