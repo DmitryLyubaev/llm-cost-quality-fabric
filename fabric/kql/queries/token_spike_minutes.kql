@@ -1,4 +1,4 @@
-let threshold = 5000;
+let threshold = 8000;
 // Caller-minutes whose summed tokens exceed the threshold (the Activator rule's condition).
 GatewayCalls()
 | where isnotnull(tokens)
