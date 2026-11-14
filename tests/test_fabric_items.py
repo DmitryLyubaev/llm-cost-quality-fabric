@@ -574,12 +574,17 @@ def test_reflex_has_exactly_two_rules_on_the_alert_tiles():
     ]
     assert len(rules) == 2
 
-    eventhouse_id = _logical_ids()["eh_gateway.Eventhouse"]
+    kql_id = _logical_ids()["kql_gateway.KQLDatabase"]
     watched = {}
     for rule in rules:
         source = _rule_source(entities, rule)
         assert source["type"] == "kqlSource-v1"
-        assert source["payload"]["eventhouseItem"]["targetUniqueIdentifier"] == eventhouse_id
+        # The KQL database, as real exports write it (Learn's Reflex page shows an Eventhouse
+        # `targetUniqueIdentifier`, which Fabric rejects). The empty workspace GUID is resolved by
+        # Fabric to the item's own workspace (probed in dev, 14 Nov 2026).
+        assert source["payload"]["eventhouseItem"] == {
+            "itemId": kql_id, "workspaceId": EMPTY_GUID, "itemType": "KustoDatabase",
+        }
         # The tile's query with two differences only: the tile's time range bound the way the dashboard
         # binds it, and the function named in kql_gateway (the Eventhouse also has a default database).
         query = source["payload"]["query"]["queryString"]
@@ -597,6 +602,53 @@ def test_reflex_has_exactly_two_rules_on_the_alert_tiles():
     assert threshold == 5000
     assert _rule_threshold(watched["token_spike_minutes"]) == threshold
     assert _rule_threshold(watched["failover_minutes"]) == 0
+
+
+def _reflex_rules(entities: dict[str, dict]) -> list[dict]:
+    return [
+        e for e in entities.values()
+        if e["type"] == "timeSeriesView-v1" and e["payload"]["definition"]["type"] == "Rule"
+    ]
+
+
+def test_reflex_kql_sources_carry_the_fields_fabric_needs():
+    # Without queryParameters and metadata (and the database-shaped eventhouseItem above), Fabric's
+    # create API fails to read the definition at all: "The importArtifactRequest field is required"
+    # (dev's git import, 9 Nov; the create API, probed 14 Nov 2026). Real exports carry all three.
+    entities = _reflex()
+    expected_measure = {"failover_minutes": "secondary_calls", "token_spike_minutes": "tokens"}
+    tiles = _dashboard_tiles()
+    seen = set()
+    for rule in _reflex_rules(entities):
+        payload = _rule_source(entities, rule)["payload"]
+        figure_id = next(f for f in ALERT_FIGURES if payload["query"]["queryString"].endswith(
+            tiles[f][1]["text"].split("GatewayCalls()")[1]))
+        assert payload["queryParameters"] == []
+        assert payload["metadata"] == {
+            "workspaceId": EMPTY_GUID, "measureName": expected_measure[figure_id],
+            "querySetId": "", "queryId": "",
+        }
+        seen.add(figure_id)
+    assert seen == ALERT_FIGURES
+
+
+def test_each_reflex_rule_ends_in_an_email_action_with_no_recipient_in_git():
+    # Fabric rejects a rule with no action: "Expected at least 1 occurrences of ActStep" (probed in
+    # dev, 14 Nov 2026). The recipient is an address in the tenant, so git holds none; it is added
+    # in Fabric in project 10's plan 2, step 8. A rule with no recipient was accepted.
+    entities = _reflex()
+    step_ids = []
+    for rule in _reflex_rules(entities):
+        steps = _instance(rule)["steps"]
+        assert [s["name"] for s in steps] == ["ScalarSelectStep", "ScalarDetectStep", "ActStep"]
+        step_ids += [s["id"] for s in steps]
+        [row] = steps[-1]["rows"]
+        assert (row["name"], row["kind"]) == ("EmailBinding", "EmailMessage")
+        args = {a["name"]: a for a in row["arguments"]}
+        for recipients in ("sentTo", "copyTo", "bCCTo"):
+            assert args[recipients] == {"name": recipients, "type": "array", "values": []}
+        assert "@" not in json.dumps(row)
+    assert len(set(step_ids)) == len(step_ids) == 6
 
 
 def test_eventstream_reads_event_hubs_into_the_gateway_table():
