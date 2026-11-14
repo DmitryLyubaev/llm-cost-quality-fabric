@@ -109,8 +109,10 @@ margin, below the 10,000 limit, and far below the burst.
 - [ ] Change the values in the files above. The tile, queryset and Reflex copies follow the `.kql`
   file, and the existing copy tests enforce that.
 - [ ] Run them again and see them PASS. Then run the hygiene check.
-- [ ] Commit `Set the token-spike threshold to 8,000 from the 9 October traffic`, open the PR, and
-  **do not merge yet**. Its merge is the prod deploy in step 7.
+- [ ] Commit `Set the token-spike threshold to 8,000 from the 9 October traffic`, open the PR into
+  `dev`, and **do not merge yet**. Its merge, then the release of `dev` to `main`, is the prod
+  deploy in step 7. (Opened as PR #10 against `main`; retargeted to `dev` on 14 Nov 2026, so dev
+  and main move together as in project 9's releases.)
 
 ### Step 3: The ReleaseLens PR 🔒
 
@@ -166,8 +168,13 @@ margin, below the 10,000 limit, and far below the burst.
 
 ### Step 7: Deploy prod 🔒, then approve 👤
 
-- Merge step 2's PR (squash) once `test` is green. The push to `main` starts `deploy`; the owner
-  approves the `prod` job.
+- Rebase step 2's PR onto `dev` if `dev` has moved, and merge it into `dev` (squash) once `test`
+  is green.
+- Release `dev` to `main`. `main` is protected (a pull request and the `test` check are required),
+  so open a release PR `dev` → `main`, wait for its `test`, then push `dev`'s tested commit to
+  `main` by fast-forward; the PR then shows merged. This is project 9's path (PR #21 into `dev`,
+  release PR #22). Check `dev` still exists afterwards.
+- The push to `main` starts `deploy`; the owner approves the `prod` job.
 - Expected log, in order:
   1. `publish: done`, with the six real-time types in scope (no "skipped" line);
   2. `upload-wheel` and `ensure-shortcut`, as before;
@@ -197,7 +204,9 @@ record each as **confirmed** or **differs: …**. In particular:
   `gateway_calls_json`. **Activate** the stream.
 - **Queryset and dashboard** open against `kql_gateway`; every tile runs, and is empty for now.
 - **Lakehouse:** `lh_portfolio` shows `Tables/dbo/gateway_calls`.
-- **Activator email 👤:** add an email action to both rules, to the owner's address. Record whether
+- **Activator email 👤:** each rule already ends in an email action with no recipient (Fabric
+  rejects a rule with no action; probed 14 Nov 2026, see VERIFY). Add the owner's address as its
+  recipient on both rules. Record whether
   Fabric accepts an address outside the tenant (spec §7). If grouping per caller is offered
   ("On each event grouped by"), group the token-spike rule by `caller`.
 - Export `act_gateway`'s definition afterwards to `private/live/p10/act_gateway-after.json` for
