@@ -624,6 +624,10 @@ def test_reflex_kql_sources_carry_the_fields_fabric_needs():
         figure_id = next(f for f in ALERT_FIGURES if payload["query"]["queryString"].endswith(
             tiles[f][1]["text"].split("GatewayCalls()")[1]))
         assert payload["queryParameters"] == []
+        # As Fabric writes it back (PROD export of 14 Nov 2026, project 10 plan 2 step 8): it adds
+        # isStopped false ahead of the 300 s poll, so git carries it and the two definitions match.
+        assert payload["runSettings"] == {"isStopped": False, "executionIntervalInSeconds": 300}
+        assert list(payload["runSettings"]) == ["isStopped", "executionIntervalInSeconds"]
         assert payload["metadata"] == {
             "workspaceId": EMPTY_GUID, "measureName": expected_measure[figure_id],
             "querySetId": "", "queryId": "",

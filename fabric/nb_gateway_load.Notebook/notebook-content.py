@@ -24,7 +24,8 @@
 
 # The wheel's file name follows pyproject.toml's version (tests/test_fabric_items.py checks it).
 # This cell comes first because %pip restarts the Python interpreter and drops earlier variables.
-# verify in project 10 plan 2: that the parameters set for the run still land after this restart.
+# Checked in PROD on 16 Nov 2026: the run's parameters land after this restart. A run started
+# outside a pipeline (the job API) must pass _inlineInstallationEnabled = true, or %pip is disabled.
 %pip install /lakehouse/default/Files/wheels/lakehouse-0.1.0-py3-none-any.whl
 
 # METADATA ********************

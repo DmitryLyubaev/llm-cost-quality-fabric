@@ -1,0 +1,15 @@
+{
+ "session": "p10-2026-11-15",
+ "test_on_raw": false,
+ "eventhouse_count": 107,
+ "duplicate_request_ids": 0,
+ "row_counts": {
+  "answered_by_per_minute": 8,
+  "delay_p50_p95_max": 1,
+  "failover_minutes": 3,
+  "refusals_per_minute": 0,
+  "session_counts": 1,
+  "token_spike_minutes": 1,
+  "tokens_per_minute_per_caller": 6
+ }
+}

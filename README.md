@@ -18,16 +18,17 @@ them as a star schema that answers three questions:
 work (PySpark and Delta, dimensional modelling with a Type 2 dimension, Fabric pipelines, git
 integration and CI/CD), done with every number measured, dated and reproducible.
 
-## Status, 14 November 2026
+## Status, 16 November 2026
 
 | Part | State |
 |---|---|
-| Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,564 tests** (projects 9–12); CI green on GitHub |
+| Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,567 tests** (projects 9–12); CI green on GitHub |
 | Cost export (Azure Cost Management → storage) | **Live** since 22 October; daily month-to-date plus a one-time September run |
 | Dev workspace | Syncs from git; first passing pipeline run on 9 November, after the first run failed on the notebooks' lakehouse binding; each of the four quality checks shown failing on purpose on 10 November |
 | Prod workspace | Deployed by GitHub Actions on 10 November; its first run passed all four checks the same day; ran on a daily schedule at 06:00 Brisbane time on 12–14 November; the schedule was then switched off (14 November) so prod's gold stays as published here |
 | The three answers | **Measured** from prod's gold, load date 10 November 2026 |
 | Fabric capacity | Five prod runs measured (10–14 November, three of them scheduled), no throttling. Smallest paid size: F2 by capacity units; keeping the trial's Spark nodes needs F16, or a custom pool on F4 |
+| Real-time path (project 10) | **Measured** in one staged session on 15 November 2026, then torn down; [see below](#real-time-the-ai-gateways-calls-project-10). One manual prod load on 16 November took prod's gold past the answers' range |
 
 Every figure below is measured and dated. Nothing here is aspirational. The
 dated record of how it got here, failures included, is in [docs/live-report.md](docs/live-report.md).
@@ -142,6 +143,50 @@ No result was unpriced. Why the two columns differ:
   project 2 in Azure, including its session-window share of the shared search service.
 - **p3's actual is above its estimate**: the estimate prices the agent's tokens; the actual is
   all of project 3's Azure spend.
+
+## Real-time: the AI gateway's calls (project 10)
+
+> **A demo stream.** One staged session on 15 November 2026: 107 calls from one caller, with a
+> forced failover and a short token burst. Good for showing the path works and how fast; not a
+> measure of production traffic.
+
+The ReleaseLens AI gateway (Azure API Management) sends one event per call through Event Hubs into
+Fabric: an Eventstream into an Eventhouse (KQL), a Real-Time Dashboard, an Activator with two
+alert rules, and OneLake availability into the lakehouse, where `nb_gateway_load` builds silver
+`gateway_calls` and gold `fact_gateway_call`. The dated record, failures included, is in
+[docs/live-report-p10.md](docs/live-report-p10.md).
+
+| Part | Status |
+|---|---|
+| Event Hubs → Eventstream → Eventhouse (KQL) | Ran 14–15 Nov; Event Hubs torn down 15 Nov; the stream is paused |
+| Real-Time Dashboard (7 tiles) | Published; snapshot in [docs/live/p10/](docs/live/p10/) |
+| Activator (failover, token spike) | Both fired in the session (4 min and 3 min after their trigger); both stopped since |
+| OneLake availability → lakehouse `gateway_calls` | On; replay and session rows arrived (157 = 50 replay + 107 session) |
+| `fact_gateway_call` in gold | 107 rows for the session, loaded by `nb_gateway_load` (16 Nov; count check passed) |
+
+**The four answers**, measured 15–16 November 2026:
+
+| Question | Answer | Sample and limits |
+|---|---|---|
+| Does an alert fire on a forced failover? | **Yes**, 4 min 13 s after the first secondary answer | one failover; the rule polls every 5 minutes |
+| How long from the gateway to the Eventhouse? | p50 18.6 s, p95 18.7 s, max 23.7 s | 107 calls; events arrive in batches |
+| What does it look like? | [top](docs/live/p10/dashboard-1-top.jpg) and [bottom](docs/live/p10/dashboard-2-bottom.jpg) of the dashboard | the session's 20 minutes |
+| What did a gateway call cost? | **A$0.0027** (A$0.29 of API Management, one billed hour, over 107 calls) | one day; the hour, not the calls, sets it |
+
+A second alert, for a token spike, also fired: 3 min 16 s after the burst's minute closed.
+
+**The threshold is 8,000 tokens per caller-minute**, set from the 9 October gateway traffic: the
+failover test runs at about 5,250 tokens a minute and the burst at about 21,000, so 8,000 sits above
+the failover with a margin and below the gateway's 10,000 limit. On 15 Nov the failover minutes peaked
+at about 5,250 and the burst minute at 21,000, as expected.
+
+**What the gateway can observe:** 429s per backend
+([design spec](docs/superpowers/specs/2026-10-23-project-10-realtime-gateway-design.md) §4.1). Its retry hides a backend's 429 from
+the caller when the other backend answers, so refusals counted here are the gateway's own. None
+occurred in the session.
+
+**Spec change (14 Nov):** Fabric read Event Hubs with a listen-only key for the session week, because
+the Eventstream source does not accept workspace identity; everything else stayed keyless.
 
 ## Capacity
 
@@ -293,6 +338,7 @@ The full reasoning, including the options rejected, is in the
 |---|---|
 | Cost-export storage (all of project 9's Azure spend) | 0.0024 AUD, 22 October to 9 November 2026 |
 | Fabric trial capacity | Free for 60 days (from 9 November 2026); capacity used: see [Capacity](#capacity) |
+| Project 10's gateway session | About 1.22 AUD: Event Hubs 0.90 (about 20 hours), API Management 0.29 (one hour), model tokens 0.03 |
 | CI | GitHub-hosted runners, public repo |
 
 ## Limits
@@ -317,7 +363,11 @@ The full reasoning, including the options rejected, is in the
   workspaces' gold was identical after both re-ran with the fix on 10 November.
 - **Four project 10 and 11 items can't sync to dev from git yet** (the real-time dashboard, the
   Activator, the Eventstream and the semantic model; each rejected with its own error). Dev
-  follows a branch that leaves them out; prod's deploy skips them until their projects' weeks.
+  follows a branch that leaves them out. Prod's deploy published project 10's three for its
+  session; it skips them again now that the session's connection is gone.
+- **Prod's gold has moved past the answers' range.** One manual load on 16 November (for project
+  10's cost answer) added 14 and 15 November's costs. The three answers above stay as measured on
+  10 November.
 - **Small data.** Sample sizes are stated with every answer.
 
 ## What this doesn't do yet
@@ -325,7 +375,6 @@ The full reasoning, including the options rejected, is in the
 The code for these is in the repo and tested offline; their live runs belong to their own
 projects, and prod leaves them out until then:
 
-- **Streaming** (gateway events through Event Hubs into an Eventhouse): project 10.
 - **The semantic model, DAX measures, row-level security and the report:** project 11.
 - **The capstone data agent:** project 12.
 
@@ -353,5 +402,6 @@ pytest -q
 | `infra/` | Terraform: Fabric workspaces, cost-export storage, Event Hubs, the capstone F2 and workspace (`infra/capstone/`) |
 | `tools/` | Local tools: the hygiene check, the capacity report, the deployment-seed check, the gateway event replay, the capstone's helpers |
 | `docs/live-report.md` | The dated record of the live build, failures included |
+| `docs/live-report-p10.md`, `docs/live/p10/` | Project 10's live session: the record, the dashboard snapshot and the query results |
 | `docs/superpowers/` | Design spec and implementation plans |
 | `docs/research/` | Dated Fabric research the design relies on |
