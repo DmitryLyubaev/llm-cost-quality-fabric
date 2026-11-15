@@ -12,6 +12,7 @@
     "payload": {
       "name": "failover_minutes tile",
       "runSettings": {
+        "isStopped": false,
         "executionIntervalInSeconds": 300
       },
       "query": {
@@ -105,6 +106,7 @@
     "payload": {
       "name": "token_spike_minutes tile",
       "runSettings": {
+        "isStopped": false,
         "executionIntervalInSeconds": 300
       },
       "query": {

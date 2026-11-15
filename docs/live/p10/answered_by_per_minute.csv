@@ -1,0 +1,9 @@
+minute,answered_by,calls
+2026-11-15T00:53:00Z,primary,2
+2026-11-15T00:59:00Z,primary,2
+2026-11-15T01:00:00Z,secondary,15
+2026-11-15T01:01:00Z,secondary,14
+2026-11-15T01:01:00Z,primary,1
+2026-11-15T01:02:00Z,secondary,12
+2026-11-15T01:02:00Z,primary,1
+2026-11-15T01:05:00Z,primary,60
