@@ -1,0 +1,105 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.4.0/schema.json",
+  "name": "project_table",
+  "position": {
+    "x": 790,
+    "y": 145,
+    "z": 7,
+    "height": 555,
+    "width": 470,
+    "tabOrder": 7
+  },
+  "visual": {
+    "visualType": "tableEx",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "dim_project"
+                    }
+                  },
+                  "Property": "project"
+                }
+              },
+              "queryRef": "dim_project.project",
+              "nativeQueryRef": "project"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_daily_cost"
+                    }
+                  },
+                  "Property": "attribution_rule"
+                }
+              },
+              "queryRef": "fact_daily_cost.attribution_rule",
+              "nativeQueryRef": "attribution_rule"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_daily_cost"
+                    }
+                  },
+                  "Property": "Cost (AUD)"
+                }
+              },
+              "queryRef": "fact_daily_cost.Cost (AUD)",
+              "nativeQueryRef": "Cost (AUD)"
+            }
+          ]
+        }
+      },
+      "sortDefinition": {
+        "sort": [
+          {
+            "field": {
+              "Measure": {
+                "Expression": {
+                  "SourceRef": {
+                    "Entity": "fact_daily_cost"
+                  }
+                },
+                "Property": "Cost (AUD)"
+              }
+            },
+            "direction": "Descending"
+          }
+        ],
+        "isDefaultSort": true
+      }
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Cost by project and attribution rule'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

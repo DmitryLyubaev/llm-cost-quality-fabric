@@ -1,0 +1,213 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.4.0/schema.json",
+  "name": "quality_table",
+  "position": {
+    "x": 590,
+    "y": 70,
+    "z": 2,
+    "height": 630,
+    "width": 670,
+    "tabOrder": 2
+  },
+  "visual": {
+    "visualType": "tableEx",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "dim_study"
+                    }
+                  },
+                  "Property": "study"
+                }
+              },
+              "queryRef": "dim_study.study",
+              "nativeQueryRef": "study"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "dim_arm"
+                    }
+                  },
+                  "Property": "arm"
+                }
+              },
+              "queryRef": "dim_arm.arm",
+              "nativeQueryRef": "arm"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "dim_arm"
+                    }
+                  },
+                  "Property": "model"
+                }
+              },
+              "queryRef": "dim_arm.model",
+              "nativeQueryRef": "model"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "dim_model_deployment"
+                    }
+                  },
+                  "Property": "model_version"
+                }
+              },
+              "queryRef": "dim_model_deployment.model_version",
+              "nativeQueryRef": "model_version"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_eval_attempt"
+                    }
+                  },
+                  "Property": "Results (n)"
+                }
+              },
+              "queryRef": "fact_eval_attempt.Results (n)",
+              "nativeQueryRef": "Results (n)"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_eval_attempt"
+                    }
+                  },
+                  "Property": "Success rate"
+                }
+              },
+              "queryRef": "fact_eval_attempt.Success rate",
+              "nativeQueryRef": "Success rate"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_eval_attempt"
+                    }
+                  },
+                  "Property": "Groundedness (mean)"
+                }
+              },
+              "queryRef": "fact_eval_attempt.Groundedness (mean)",
+              "nativeQueryRef": "Groundedness (mean)"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_eval_attempt"
+                    }
+                  },
+                  "Property": "Top-1 rate"
+                }
+              },
+              "queryRef": "fact_eval_attempt.Top-1 rate",
+              "nativeQueryRef": "Top-1 rate"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_eval_attempt"
+                    }
+                  },
+                  "Property": "MRR"
+                }
+              },
+              "queryRef": "fact_eval_attempt.MRR",
+              "nativeQueryRef": "MRR"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_eval_attempt"
+                    }
+                  },
+                  "Property": "Task adherence"
+                }
+              },
+              "queryRef": "fact_eval_attempt.Task adherence",
+              "nativeQueryRef": "Task adherence"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_eval_attempt"
+                    }
+                  },
+                  "Property": "Estimated cost per result (USD)"
+                }
+              },
+              "queryRef": "fact_eval_attempt.Estimated cost per result (USD)",
+              "nativeQueryRef": "Estimated cost per result (USD)"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_eval_attempt"
+                    }
+                  },
+                  "Property": "Estimated cost per result (AUD)"
+                }
+              },
+              "queryRef": "fact_eval_attempt.Estimated cost per result (AUD)",
+              "nativeQueryRef": "Estimated cost per result (AUD)"
+            }
+          ]
+        }
+      }
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Each study's results by arm and model'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

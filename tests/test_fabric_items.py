@@ -100,6 +100,7 @@ def test_expected_items_exist():
         "nb_model_check.Notebook",
         "pl_daily_load.DataPipeline",
         "sm_portfolio.SemanticModel",
+        "rp_portfolio.Report",
     } | REALTIME_ITEMS
 
 
@@ -990,3 +991,71 @@ def test_the_binding_connection_resolves_to_a_guid_only_when_the_variable_is_set
     assert VALID_GUID.match(bound({"P11_MODEL_CONNECTION_ID": EMPTY_GUID}))
     # unset, the token stays and fabric-cicd refuses the whole file: hence the stand-in
     assert not VALID_GUID.match(bound({}))
+
+
+# --- The report (project 11) ---------------------------------------------------------------------
+
+REPORT = FABRIC / "rp_portfolio.Report"
+REPORT_PAGES = {
+    "spend": "Spend by project (AUD, actual)",
+    "quality": "Quality across models",
+    "gateway": "Gateway health (project 10's session)",
+}
+_FIELD = re.compile(
+    r'"(Column|Measure)": \{\s*"Expression": \{\s*"SourceRef": \{\s*"Entity": "([^"]+)"\s*\}\s*\},\s*"Property": "([^"]+)"'
+)
+
+
+def _model_fields() -> dict[str, tuple[set[str], set[str]]]:
+    fields = {}
+    for path in (FABRIC / "sm_portfolio.SemanticModel" / "definition" / "tables").glob("*.tmdl"):
+        text = path.read_text(encoding="utf-8")
+        columns = {c.strip().strip("'") for c in re.findall(r"^\tcolumn (.+)$", text, re.M)}
+        measures = {m.strip().strip("'") for m in re.findall(r"^\tmeasure (.+?) =", text, re.M)}
+        fields[path.stem] = (columns, measures)
+    return fields
+
+
+def test_report_is_bound_by_path_to_the_model():
+    # fabric-cicd rewrites only byPath (to byConnection on the target's model); Fabric git writes byPath
+    # when the model and report share a workspace.
+    platform = _json("rp_portfolio.Report/.platform")
+    assert platform["metadata"] == {"type": "Report", "displayName": "rp_portfolio"}
+    pbir = _json("rp_portfolio.Report/definition.pbir")
+    assert pbir["datasetReference"] == {"byPath": {"path": "../sm_portfolio.SemanticModel"}}
+    assert (REPORT / pbir["datasetReference"]["byPath"]["path"] / ".platform").is_file()
+
+
+def test_report_has_the_three_spec_pages_in_order():
+    pages = _json("rp_portfolio.Report/definition/pages/pages.json")
+    assert pages["pageOrder"] == list(REPORT_PAGES)
+    for name, display in REPORT_PAGES.items():
+        page = _json(f"rp_portfolio.Report/definition/pages/{name}/page.json")
+        assert (page["name"], page["displayName"]) == (name, display)
+        visuals = sorted((REPORT / "definition" / "pages" / name / "visuals").glob("*/visual.json"))
+        assert visuals, name
+        for path in visuals:
+            assert json.loads(path.read_text(encoding="utf-8"))["name"] == path.parent.name
+
+
+def test_report_uses_only_the_models_own_fields():
+    # No report-level measures (the model-versus-gold check cannot see them), and every field exists.
+    assert not (REPORT / "definition" / "reportExtensions.json").exists()
+    fields = _model_fields()
+    used = set()
+    for path in REPORT.rglob("visual.json"):
+        for kind, entity, prop in _FIELD.findall(path.read_text(encoding="utf-8")):
+            columns, measures = fields[entity]
+            assert prop in (columns if kind == "Column" else measures), (path, kind, entity, prop)
+            used.add((kind, entity, prop))
+    assert ("Measure", "fact_daily_cost", "Cost (AUD)") in used
+    assert ("Measure", "fact_eval_attempt", "Success rate") in used
+    assert ("Measure", "fact_gateway_call", "Cost per 1,000 calls") in used
+
+
+def test_report_banners_carry_the_specs_caveats():
+    quality = _json("rp_portfolio.Report/definition/pages/quality/visuals/version_banner/visual.json")
+    gateway = _json("rp_portfolio.Report/definition/pages/gateway/visuals/session_banner/visual.json")
+    text = lambda v: v["visual"]["objects"]["general"][0]["properties"]["paragraphs"][0]["textRuns"][0]["value"]
+    assert text(quality) == "No model changed version between measured runs: this compares models, not versions."
+    assert text(gateway).startswith("One measured session on 15 November 2026 (p10-2026-11-15): a demo stream")

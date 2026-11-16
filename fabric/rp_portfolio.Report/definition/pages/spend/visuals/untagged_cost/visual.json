@@ -1,0 +1,59 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.4.0/schema.json",
+  "name": "untagged_cost",
+  "position": {
+    "x": 310,
+    "y": 20,
+    "z": 1,
+    "height": 110,
+    "width": 280,
+    "tabOrder": 1
+  },
+  "visual": {
+    "visualType": "card",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_daily_cost"
+                    }
+                  },
+                  "Property": "Untagged cost"
+                }
+              },
+              "queryRef": "fact_daily_cost.Untagged cost",
+              "nativeQueryRef": "Untagged cost"
+            }
+          ]
+        }
+      }
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Untagged cost (AUD)'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
