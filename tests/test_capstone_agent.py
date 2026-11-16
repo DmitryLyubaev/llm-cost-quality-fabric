@@ -35,6 +35,27 @@ GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-
 PLATFORM_SCHEMA = (
     "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json"
 )
+# The $schema values Fabric's own export (Get Item Definition, 16 Nov 2026) writes in each file.
+_DEFINITION_SCHEMA = "https://developer.microsoft.com/json-schemas/fabric/item/dataAgent/definition/{}/schema.json"
+DEFINITION_SCHEMAS = {
+    "data_agent.json": _DEFINITION_SCHEMA.format("dataAgent/2.1.0"),
+    "stage_config.json": _DEFINITION_SCHEMA.format("stageConfiguration/1.0.0"),
+    "datasource.json": _DEFINITION_SCHEMA.format("dataSource/1.0.0"),
+    "fewshots.json": _DEFINITION_SCHEMA.format("fewShots/1.0.0"),
+}
+# Fabric's export order of a data source's keys and of each element's keys.
+DATASOURCE_KEYS = [
+    "$schema",
+    "artifactId",
+    "workspaceId",
+    "dataSourceInstructions",
+    "displayName",
+    "type",
+    "userDescription",
+    "metadata",
+    "elements",
+]
+ELEMENT_KEYS = ["id", "is_selected", "display_name", "type", "description", "children"]
 NEAR_COPY = 0.8  # token Jaccard overlap at or above which an example question is a near-copy
 FLOAT_TOLERANCE = 1e-9
 INSTRUCTIONS_LIMIT = 15_000  # characters, for agent-level instructions (research file, section 2)
@@ -129,11 +150,24 @@ def test_platform_names_the_data_agent():
 
 
 def test_data_agent_and_stage_config_follow_the_definition_format():
-    assert _json(CONFIG / "data_agent.json") == {"$schema": "2.1.0"}
+    assert _json(CONFIG / "data_agent.json") == {"$schema": DEFINITION_SCHEMAS["data_agent.json"]}
     stage = _json(DRAFT / "stage_config.json")
-    assert set(stage) == {"$schema", "aiInstructions"}
-    assert stage["$schema"] == "1.0.0"
+    assert list(stage) == ["$schema", "aiInstructions"]
+    assert stage["$schema"] == DEFINITION_SCHEMAS["stage_config.json"]
     assert 0 < len(stage["aiInstructions"]) <= INSTRUCTIONS_LIMIT
+
+
+def test_datasource_keeps_fabrics_exported_form():
+    # Fabric's export lists these keys in this order, and writes null for the data source's
+    # `metadata` and for each element's `id` and `description` (no element needs an ID).
+    source = _datasource()
+    assert list(source) == DATASOURCE_KEYS
+    assert source["$schema"] == DEFINITION_SCHEMAS["datasource.json"]
+    assert source["metadata"] is None
+    elements = source["elements"] + [t for s in source["elements"] for t in s["children"]]
+    for element in elements:
+        assert list(element) == ELEMENT_KEYS, element["display_name"]
+        assert element["id"] is None and element["description"] is None, element["display_name"]
 
 
 def test_datasource_selects_the_nine_gold_tables_of_lh_capstone():
@@ -166,6 +200,8 @@ def test_the_definition_holds_no_url_address_or_foreign_id():
         text = path.read_text(encoding="utf-8")
         if path.name == ".platform":
             text = text.replace(PLATFORM_SCHEMA, "")  # the one public schema URL every item carries
+        elif path.name in DEFINITION_SCHEMAS:
+            text = text.replace(DEFINITION_SCHEMAS[path.name], "")  # Fabric's public definition schema
         rel = path.relative_to(AGENT).as_posix()
         assert "@" not in text, rel
         assert not re.search(r"https?://|abfss://|onelake|\.(com|net|io)\b", text, re.IGNORECASE), rel
@@ -187,7 +223,8 @@ def test_capstone_files_pass_hygiene_with_lf_endings():
 
 def test_about_twenty_examples_each_with_a_guid_a_question_and_a_query():
     shots = _fewshots()
-    assert _json(SOURCE_DIR / "fewshots.json")["$schema"] == "1.0.0"
+    assert list(_json(SOURCE_DIR / "fewshots.json")) == ["$schema", "fewShots"]
+    assert _json(SOURCE_DIR / "fewshots.json")["$schema"] == DEFINITION_SCHEMAS["fewshots.json"]
     assert 18 <= len(shots) <= 25
     for shot in shots:
         assert set(shot) == {"id", "question", "query"}
