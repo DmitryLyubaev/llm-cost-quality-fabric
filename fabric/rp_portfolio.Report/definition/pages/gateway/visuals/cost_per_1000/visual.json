@@ -1,0 +1,59 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.4.0/schema.json",
+  "name": "cost_per_1000",
+  "position": {
+    "x": 860,
+    "y": 70,
+    "z": 3,
+    "height": 110,
+    "width": 400,
+    "tabOrder": 3
+  },
+  "visual": {
+    "visualType": "card",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_gateway_call"
+                    }
+                  },
+                  "Property": "Cost per 1,000 calls"
+                }
+              },
+              "queryRef": "fact_gateway_call.Cost per 1,000 calls",
+              "nativeQueryRef": "Cost per 1,000 calls"
+            }
+          ]
+        }
+      }
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Cost per 1,000 calls (AUD)'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

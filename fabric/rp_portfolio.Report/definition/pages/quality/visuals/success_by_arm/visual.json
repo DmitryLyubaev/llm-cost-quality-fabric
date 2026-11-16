@@ -1,0 +1,111 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.4.0/schema.json",
+  "name": "success_by_arm",
+  "position": {
+    "x": 20,
+    "y": 70,
+    "z": 1,
+    "height": 630,
+    "width": 560,
+    "tabOrder": 1
+  },
+  "visual": {
+    "visualType": "clusteredBarChart",
+    "query": {
+      "queryState": {
+        "Category": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "dim_arm"
+                    }
+                  },
+                  "Property": "label"
+                }
+              },
+              "queryRef": "dim_arm.label",
+              "nativeQueryRef": "label",
+              "active": true
+            }
+          ]
+        },
+        "Y": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_eval_attempt"
+                    }
+                  },
+                  "Property": "Success rate"
+                }
+              },
+              "queryRef": "fact_eval_attempt.Success rate",
+              "nativeQueryRef": "Success rate"
+            }
+          ]
+        },
+        "Tooltips": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_eval_attempt"
+                    }
+                  },
+                  "Property": "Results (n)"
+                }
+              },
+              "queryRef": "fact_eval_attempt.Results (n)",
+              "nativeQueryRef": "Results (n)"
+            }
+          ]
+        }
+      }
+    },
+    "objects": {
+      "labels": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Success rate by arm (n in each bar's tooltip and the table)'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

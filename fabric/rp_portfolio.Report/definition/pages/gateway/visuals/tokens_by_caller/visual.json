@@ -1,0 +1,93 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.4.0/schema.json",
+  "name": "tokens_by_caller",
+  "position": {
+    "x": 440,
+    "y": 195,
+    "z": 5,
+    "height": 505,
+    "width": 400,
+    "tabOrder": 5
+  },
+  "visual": {
+    "visualType": "clusteredBarChart",
+    "query": {
+      "queryState": {
+        "Category": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_gateway_call"
+                    }
+                  },
+                  "Property": "caller"
+                }
+              },
+              "queryRef": "fact_gateway_call.caller",
+              "nativeQueryRef": "caller",
+              "active": true
+            }
+          ]
+        },
+        "Y": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_gateway_call"
+                    }
+                  },
+                  "Property": "Tokens (total)"
+                }
+              },
+              "queryRef": "fact_gateway_call.Tokens (total)",
+              "nativeQueryRef": "Tokens (total)"
+            }
+          ]
+        }
+      }
+    },
+    "objects": {
+      "labels": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Tokens by caller'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

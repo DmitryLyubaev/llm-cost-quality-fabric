@@ -1,0 +1,59 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.4.0/schema.json",
+  "name": "calls",
+  "position": {
+    "x": 20,
+    "y": 70,
+    "z": 1,
+    "height": 110,
+    "width": 400,
+    "tabOrder": 1
+  },
+  "visual": {
+    "visualType": "card",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_gateway_call"
+                    }
+                  },
+                  "Property": "Calls"
+                }
+              },
+              "queryRef": "fact_gateway_call.Calls",
+              "nativeQueryRef": "Calls"
+            }
+          ]
+        }
+      }
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Calls'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

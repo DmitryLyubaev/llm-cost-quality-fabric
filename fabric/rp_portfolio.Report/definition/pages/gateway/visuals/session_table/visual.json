@@ -1,0 +1,115 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.4.0/schema.json",
+  "name": "session_table",
+  "position": {
+    "x": 860,
+    "y": 195,
+    "z": 6,
+    "height": 505,
+    "width": 400,
+    "tabOrder": 6
+  },
+  "visual": {
+    "visualType": "tableEx",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_gateway_call"
+                    }
+                  },
+                  "Property": "session"
+                }
+              },
+              "queryRef": "fact_gateway_call.session",
+              "nativeQueryRef": "session"
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_gateway_call"
+                    }
+                  },
+                  "Property": "caller"
+                }
+              },
+              "queryRef": "fact_gateway_call.caller",
+              "nativeQueryRef": "caller"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_gateway_call"
+                    }
+                  },
+                  "Property": "Calls"
+                }
+              },
+              "queryRef": "fact_gateway_call.Calls",
+              "nativeQueryRef": "Calls"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_gateway_call"
+                    }
+                  },
+                  "Property": "Tokens per call"
+                }
+              },
+              "queryRef": "fact_gateway_call.Tokens per call",
+              "nativeQueryRef": "Tokens per call"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_gateway_call"
+                    }
+                  },
+                  "Property": "Refused by gateway"
+                }
+              },
+              "queryRef": "fact_gateway_call.Refused by gateway",
+              "nativeQueryRef": "Refused by gateway"
+            }
+          ]
+        }
+      }
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Session and caller'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

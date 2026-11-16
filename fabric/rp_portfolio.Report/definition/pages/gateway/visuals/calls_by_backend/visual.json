@@ -1,0 +1,93 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.4.0/schema.json",
+  "name": "calls_by_backend",
+  "position": {
+    "x": 20,
+    "y": 195,
+    "z": 4,
+    "height": 505,
+    "width": 400,
+    "tabOrder": 4
+  },
+  "visual": {
+    "visualType": "clusteredColumnChart",
+    "query": {
+      "queryState": {
+        "Category": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_gateway_call"
+                    }
+                  },
+                  "Property": "answered_by"
+                }
+              },
+              "queryRef": "fact_gateway_call.answered_by",
+              "nativeQueryRef": "answered_by",
+              "active": true
+            }
+          ]
+        },
+        "Y": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "fact_gateway_call"
+                    }
+                  },
+                  "Property": "Calls"
+                }
+              },
+              "queryRef": "fact_gateway_call.Calls",
+              "nativeQueryRef": "Calls"
+            }
+          ]
+        }
+      }
+    },
+    "objects": {
+      "labels": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'Calls by answering backend'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
