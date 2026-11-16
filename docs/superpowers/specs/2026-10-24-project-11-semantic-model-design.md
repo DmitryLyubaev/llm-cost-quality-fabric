@@ -227,7 +227,10 @@ hand-written.
   OneLake table over 1,000 Parquet files errors rather than falling back. How the model then picks
   the load up is decided in plan 2, at the `fabric/VERIFY.md` row on the model's refresh after the
   daily load: the model's automatic updates if a daily load shows up without `refresh-model`,
-  otherwise a refresh after `nb_load` in the pipeline.
+  otherwise a refresh after `nb_load` in the pipeline. **Decided 16 Nov 2026: a refresh in the
+  pipeline** (automatic updates did not reframe the model after a prod load); the step is Fabric's
+  Semantic model refresh activity through a workspace-identity Power BI connection, off in git and
+  switched on in PROD (see the VERIFY rows).
 
 ### 4.5 The model-versus-gold check
 
@@ -293,7 +296,7 @@ The run finishes by about 20 December.
 - Exact DAX and visual choices within the pages above.
 - Measure and display-folder names beyond those listed.
 - Whether the model refreshes from the pipeline or by automatic updates: decided in plan 2, at
-  the `fabric/VERIFY.md` row on the model's refresh after the daily load (4.4).
+  the `fabric/VERIFY.md` row on the model's refresh after the daily load (4.4): from the pipeline.
 - The fixed identity's credential type, if the workspace identity is refused.
 - The TMDL details Learn doesn't show in full: check them against the first model Fabric commits.
 

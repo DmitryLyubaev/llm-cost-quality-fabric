@@ -24,6 +24,14 @@ DEV_WORKSPACE = "c1f74f51-78f9-4cc7-b098-2bada9448793"
 DEV_LAKEHOUSE = "f4af17d8-f5b3-4b67-a113-50f079a5efe0"
 GUID =re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 NOTEBOOKS = ["nb_ingest_public", "nb_load"]  # the pipeline's, in activity order
+# The pipeline's model refresh (project 11 step 9) and the four leaves PROD rewrites in it.
+REFRESH_ACTIVITY = '$.properties.activities[?(@.name=="refresh")]'
+REFRESH_LEAVES = {
+    ".state": ("state",),
+    ".typeProperties.groupId": ("typeProperties", "groupId"),
+    ".typeProperties.datasetId": ("typeProperties", "datasetId"),
+    ".externalReferences.connection": ("externalReferences", "connection"),
+}
 GATEWAY_NOTEBOOK = "nb_gateway_load"  # run by hand after a session, never by the pipeline
 ACCESS_NOTEBOOK = "nb_access_load"  # run by hand after access.csv is uploaded, never by the pipeline
 MODEL_CHECK_NOTEBOOK = "nb_model_check"  # run by hand, as a user, after the model refreshes
@@ -281,8 +289,8 @@ def test_pipeline_runs_ingest_then_load_with_retries():
     assert props["parameters"] == {"load_date": {"type": "string", "defaultValue": ""}}
 
     activities = props["activities"]
-    assert [a["type"] for a in activities] == ["TridentNotebook", "TridentNotebook"]
-    assert [a["name"] for a in activities] == ["ingest", "load"]
+    assert [a["type"] for a in activities] == ["TridentNotebook", "TridentNotebook", "PBISemanticModelRefresh"]
+    assert [a["name"] for a in activities] == ["ingest", "load", "refresh"]
     assert activities[0]["dependsOn"] == []
     assert activities[1]["dependsOn"] == [
         {"activity": "ingest", "dependencyConditions": ["Succeeded"]}
@@ -303,6 +311,34 @@ def test_pipeline_runs_ingest_then_load_with_retries():
             "load_date": {"value": {"value": expression, "type": "Expression"}, "type": "string"},
             "_inlineInstallationEnabled": {"value": True, "type": "bool"},
         }
+
+
+def test_pipeline_refreshes_the_model_after_the_load_and_the_step_is_off_in_git():
+    """Project 11 step 9: Direct Lake's automatic updates did not reframe the model after a prod load,
+    so the pipeline refreshes it. The activity is Fabric's own (PBISemanticModelRefresh, shape taken
+    from a dev probe). Its connection (workspace identity) is an identifier that never enters git, so
+    git holds the empty GUID there and for the workspace and model, and the step is deactivated
+    (a deactivated step is skipped and marked Succeeded): dev, which syncs from git, never runs it.
+    parameter.yml switches it on in PROD with the deployed IDs and the connection's secret."""
+    activities = _pipeline()["properties"]["activities"]
+    refresh = activities[2]
+    assert refresh["name"] == "refresh"
+    assert refresh["type"] == "PBISemanticModelRefresh"
+    assert refresh["dependsOn"] == [{"activity": "load", "dependencyConditions": ["Succeeded"]}]
+    assert refresh["policy"]["timeout"] == "0.01:00:00"
+    assert refresh["policy"]["retry"] == 2  # a refresh already running (an automatic one) answers 400
+    assert refresh["policy"]["retryIntervalInSeconds"] == 60
+    assert refresh["state"] == "Inactive"
+    assert refresh["onInactiveMarkAs"] == "Succeeded"
+    assert refresh["typeProperties"] == {
+        "method": "POST",
+        "operationType": "SemanticModelRefresh",
+        "groupId": EMPTY_GUID,
+        "datasetId": EMPTY_GUID,
+        "waitOnCompletion": True,
+        "commitMode": "Transactional",
+    }
+    assert refresh["externalReferences"] == {"connection": EMPTY_GUID}
 
 
 def test_schedule_is_daily_brisbane_and_disabled_in_git():
@@ -368,7 +404,12 @@ def test_parameter_file_repoints_lakehouse_and_keeps_prod_schedule_off(name):
 
     # The schedule stays as git has it (disabled) in PROD too: it ran 12-14 November 2026 and was
     # then switched off (plan 3, step 15), so no rule may turn it back on.
-    assert [r for r in params["key_value_replace"] if r["item_type"] == "DataPipeline"] == []
+    # The pipeline's only PROD rules switch on its model refresh (pipeline-content.json); none reaches
+    # .schedules.
+    for rule in [r for r in params["key_value_replace"] if r["item_type"] == "DataPipeline"]:
+        assert rule["item_name"] == "pl_daily_load"
+        assert rule["file_path"] == "**/pipeline-content.json"
+        assert rule["find_key"].startswith(REFRESH_ACTIVITY)
 
 
 # --- Real-time items (project 10) ----------------------------------------------------------------
@@ -783,12 +824,17 @@ EXPECTED_KEY_LEAVES = {
     ("kq_gateway", QUERYSET_KEY): lambda doc: [("queryset", "dataSources", 0, "clusterUri")],
     ("rtd_gateway", DASHBOARD_KEY): lambda doc: [("dataSources", 0, "clusterUri")],
     ("es_gateway", EVENTSTREAM_KEY): lambda doc: [("sources", 0, "properties", "dataConnectionId")],
+    **{
+        ("pl_daily_load", REFRESH_ACTIVITY + suffix): (lambda leaf: lambda doc: [("properties", "activities", 2, *leaf)])(leaf)
+        for suffix, leaf in REFRESH_LEAVES.items()
+    },
 }
 EXPECTED_KEY_MATCHES = {
     ("act_gateway", ACT_KEY): 2,
     ("kq_gateway", QUERYSET_KEY): 1,
     ("rtd_gateway", DASHBOARD_KEY): 1,
     ("es_gateway", EVENTSTREAM_KEY): 1,
+    **{("pl_daily_load", REFRESH_ACTIVITY + suffix): 1 for suffix in REFRESH_LEAVES},
 }
 
 
@@ -867,8 +913,22 @@ def test_parameter_file_only_targets_prod_and_known_environment_variables():
         for rule in params[section]:
             assert set(rule["replace_value"]) == {"PROD"}
     text = (FABRIC / "parameter.yml").read_text(encoding="utf-8")
-    assert set(re.findall(r"\$ENV:(\w+)", text)) == {"P10_EVENTHUB_CONNECTION_ID", "P11_MODEL_CONNECTION_ID"}
+    assert set(re.findall(r"\$ENV:(\w+)", text)) == {
+        "P10_EVENTHUB_CONNECTION_ID", "P11_MODEL_CONNECTION_ID", "P11_REFRESH_CONNECTION_ID",
+    }
     assert "enable_environment_variable_replacement" in text
+
+
+def test_parameter_file_switches_the_pipeline_refresh_on_in_prod_with_its_own_ids():
+    """PROD: the step runs, against the deployed workspace and sm_portfolio, through the refresh
+    connection whose ID comes from the environment (a GitHub environment secret)."""
+    rules = {r["find_key"]: r["replace_value"] for r in _key_rules("DataPipeline")}
+    assert rules == {
+        REFRESH_ACTIVITY + ".state": {"PROD": "Active"},
+        REFRESH_ACTIVITY + ".typeProperties.groupId": {"PROD": "$workspace.$id"},
+        REFRESH_ACTIVITY + ".typeProperties.datasetId": {"PROD": "$items.SemanticModel.sm_portfolio.$id"},
+        REFRESH_ACTIVITY + ".externalReferences.connection": {"PROD": "$ENV:P11_REFRESH_CONNECTION_ID"},
+    }
 
 
 # --- The semantic model (project 11): rebinding and the connection -------------------------------

@@ -238,7 +238,20 @@ def test_prod_publish_gets_the_model_connection_gate(deploy):
         "FABRIC_ENVIRONMENT": "PROD",
         GATE: GATE_SECRET,
         MODEL_GATE: MODEL_GATE_SECRET,
+        REFRESH_CONNECTION: REFRESH_CONNECTION_SECRET,
     }
+
+
+REFRESH_CONNECTION = "P11_REFRESH_CONNECTION_ID"
+REFRESH_CONNECTION_SECRET = "${{ secrets.P11_REFRESH_CONNECTION_ID }}"
+
+
+def test_only_prod_publish_takes_the_pipeline_refresh_connection(deploy):
+    """parameter.yml's $ENV:P11_REFRESH_CONNECTION_ID is read while publish builds the workspace."""
+    for job_name, step in all_steps(deploy):
+        if job_name == "prod" and "deploy.py publish" in str(step.get("run", "")):
+            continue
+        assert REFRESH_CONNECTION not in (step.get("env") or {}), (job_name, step.get("name"))
 
 
 def test_prod_refreshes_the_model_after_the_gateway_shortcut_with_its_gate_at_step_scope(deploy):

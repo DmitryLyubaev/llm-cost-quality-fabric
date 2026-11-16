@@ -82,6 +82,11 @@ REALTIME_GATE = "P10_EVENTHUB_CONNECTION_ID"
 # Project 11: the model and report deploy only when the model's Fabric connection exists. fabric-cicd
 # binds the model to it after publish (parameter.yml's semantic_model_binding), so refresh-model does not.
 MODEL_GATE = "P11_MODEL_CONNECTION_ID"
+# Project 11 step 9: the pipeline's model refresh reads its connection through parameter.yml's
+# $ENV:P11_REFRESH_CONNECTION_ID. It belongs to the model gate: required while that gate is open, and
+# stood in (EMPTY_GUID) with it while it is closed.
+REFRESH_CONNECTION = "P11_REFRESH_CONNECTION_ID"
+GATE_COMPANIONS = {MODEL_GATE: (REFRESH_CONNECTION,)}
 # What each closed gate leaves out of publish, and how publish names it when it skips them.
 GATED_ITEM_TYPES = (
     (REALTIME_GATE, REALTIME_ITEM_TYPES, "real-time items"),
@@ -438,9 +443,11 @@ def publish():
     closed = []
     for gate, gated_types, label in GATED_ITEM_TYPES:  # independent gates
         if _gate_open(gate):
+            for companion in GATE_COMPANIONS.get(gate, ()):
+                _env(companion)  # an open gate needs its companions: missing, publish stops naming it
             continue
         item_types = [t for t in item_types if t not in gated_types]
-        closed.append(gate)
+        closed += [gate, *GATE_COMPANIONS.get(gate, ())]
         print(f"publish: {label} skipped (no {gate})")
     _enable_feature_flag(ENV_REPLACEMENT_FLAG)  # imports fabric_cicd, which sets up its loggers
     # Never raise fabric-cicd to debug (change_log_level): it logs substituted $ENV values there. At

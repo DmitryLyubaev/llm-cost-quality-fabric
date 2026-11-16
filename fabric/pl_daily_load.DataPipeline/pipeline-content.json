@@ -65,6 +65,38 @@
             }
           }
         }
+      },
+      {
+        "name": "refresh",
+        "type": "PBISemanticModelRefresh",
+        "dependsOn": [
+          {
+            "activity": "load",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.01:00:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 60,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "state": "Inactive",
+        "onInactiveMarkAs": "Succeeded",
+        "typeProperties": {
+          "method": "POST",
+          "operationType": "SemanticModelRefresh",
+          "groupId": "00000000-0000-0000-0000-000000000000",
+          "datasetId": "00000000-0000-0000-0000-000000000000",
+          "waitOnCompletion": true,
+          "commitMode": "Transactional"
+        },
+        "externalReferences": {
+          "connection": "00000000-0000-0000-0000-000000000000"
+        }
       }
     ],
     "parameters": {
