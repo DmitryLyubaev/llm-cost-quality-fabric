@@ -1,0 +1,79 @@
+{
+  "q01": {
+    "currency": "AUD",
+    "rows": 1,
+    "value": 2.4331703255217607
+  },
+  "q02": {
+    "currency": "AUD",
+    "rows": 1,
+    "value": 0.0
+  },
+  "q03": {
+    "currency": "AUD",
+    "rows": 1,
+    "value": 4.5528433653465346
+  },
+  "q04": {
+    "currency": "AUD",
+    "rows": 1,
+    "value": [
+      "p1"
+    ]
+  },
+  "q05": {
+    "currency": null,
+    "rows": 1,
+    "value": 0.9833333333333333
+  },
+  "q06": {
+    "currency": null,
+    "rows": 1,
+    "value": 0.6462882096069869
+  },
+  "q07": {
+    "currency": null,
+    "rows": 1,
+    "value": 60
+  },
+  "q08": {
+    "currency": "AUD",
+    "rows": 1,
+    "value": 0.0013023638407161245
+  },
+  "q09": {
+    "currency": null,
+    "rows": 1,
+    "value": 6
+  },
+  "q10": {
+    "currency": null,
+    "rows": 1,
+    "value": 8
+  },
+  "q11": {
+    "currency": null,
+    "rows": 4,
+    "value": [
+      "p4",
+      "p6",
+      "p7",
+      "p8"
+    ]
+  },
+  "q12": {
+    "currency": "AUD",
+    "rows": 1,
+    "value": 107
+  },
+  "q13": {
+    "currency": null,
+    "rows": 1,
+    "value": 229
+  },
+  "q14": {
+    "currency": "AUD",
+    "rows": 1,
+    "value": 0.6254278509865374
+  }
+}
