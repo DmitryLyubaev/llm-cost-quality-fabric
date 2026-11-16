@@ -39,6 +39,7 @@ SKIP_REASON = "(no P10_EVENTHUB_CONNECTION_ID)"
 MODEL = "88888888-aaaa-bbbb-cccc-000000000008"
 OTHER_MODEL = "99999999-aaaa-bbbb-cccc-000000000009"
 MODEL_CONNECTION = "aaaaaaaa-aaaa-bbbb-cccc-00000000000a"
+REFRESH_CONNECTION = "eeeeeeee-aaaa-bbbb-cccc-00000000000e"  # the pipeline refresh's (step 9)
 REFRESH = "bbbbbbbb-aaaa-bbbb-cccc-00000000000b"
 MODEL_LIST_URL = f"https://api.fabric.microsoft.com/v1/workspaces/{WS}/semanticModels"
 POWERBI_SCOPE = "https://analysis.windows.net/powerbi/api/.default"
@@ -67,6 +68,9 @@ def no_model_gate(monkeypatch):
     """The same for project 11's gate, P11_MODEL_CONNECTION_ID."""
     monkeypatch.setenv("P11_MODEL_CONNECTION_ID", "unset-by-fixture")
     monkeypatch.delenv("P11_MODEL_CONNECTION_ID")
+    # and its companion, the pipeline refresh's connection (project 11 step 9)
+    monkeypatch.setenv("P11_REFRESH_CONNECTION_ID", "unset-by-fixture")
+    monkeypatch.delenv("P11_REFRESH_CONNECTION_ID")
 
 
 @pytest.fixture
@@ -175,6 +179,7 @@ def seams(deploy, monkeypatch):
         state.events.append("workspace")
         state.env_at_build = os.environ.get("P10_EVENTHUB_CONNECTION_ID")
         state.model_env_at_build = os.environ.get("P11_MODEL_CONNECTION_ID")
+        state.refresh_env_at_build = os.environ.get("P11_REFRESH_CONNECTION_ID")
         state.ws_kwargs = kwargs
         return "WS-OBJECT"
 
@@ -259,6 +264,7 @@ def model(monkeypatch, seams):
     when a test needs both: it adds to the routes."""
     # setenv before any delenv in a test, so monkeypatch restores the variable's absence afterwards.
     monkeypatch.setenv("P11_MODEL_CONNECTION_ID", MODEL_CONNECTION)
+    monkeypatch.setenv("P11_REFRESH_CONNECTION_ID", REFRESH_CONNECTION)
     seams.routes = {
         **(seams.routes or {}),
         MODEL_LIST_URL: model_list(
@@ -830,6 +836,8 @@ def test_publish_scope_follows_two_independent_gates(
     for name, value in (("P10_EVENTHUB_CONNECTION_ID", realtime_value), ("P11_MODEL_CONNECTION_ID", model_value)):
         if value is not None:
             monkeypatch.setenv(name, value)
+    if model_value:
+        monkeypatch.setenv("P11_REFRESH_CONNECTION_ID", REFRESH_CONNECTION)
 
     assert deploy.main(["publish"]) == 0
 
@@ -852,10 +860,28 @@ def test_publish_scope_follows_two_independent_gates(
     # GUID for the build; an open gate's value is passed through as it is.
     assert seams.env_at_build == (realtime_value or EMPTY_GUID)
     assert seams.model_env_at_build == (model_value or EMPTY_GUID)
+    # The pipeline refresh's connection follows the model gate: stood in while it is closed.
+    assert seams.refresh_env_at_build == (REFRESH_CONNECTION if model_value else EMPTY_GUID)
     assert seams.events == [("flag", "enable_environment_variable_replacement"), "workspace"]
     assert seams.published == ["WS-OBJECT"]
-    for value in (WS, EVENTHUB_CONNECTION, MODEL_CONNECTION, EMPTY_GUID):
+    for value in (WS, EVENTHUB_CONNECTION, MODEL_CONNECTION, REFRESH_CONNECTION, EMPTY_GUID):
         assert value not in out + err
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_publish_with_the_model_gate_open_needs_the_refresh_connection(deploy, env, seams, monkeypatch, capsys, value):
+    """Step 9: with the model in scope, parameter.yml switches the pipeline's refresh on through
+    P11_REFRESH_CONNECTION_ID. Missing (or empty, as Actions passes a missing secret), publish stops
+    before fabric-cicd is loaded, naming the variable only."""
+    monkeypatch.setenv("P11_MODEL_CONNECTION_ID", MODEL_CONNECTION)
+    if value is not None:
+        monkeypatch.setenv("P11_REFRESH_CONNECTION_ID", value)
+    assert deploy.main(["publish"]) == 2
+    out, err = capsys.readouterr()
+    assert err.strip() == "missing environment variable P11_REFRESH_CONNECTION_ID"
+    assert MODEL_CONNECTION not in out + err
+    assert seams.events == []
+    assert seams.published == []
 
 
 def test_all_item_types_are_in_scope_with_both_gates_open(deploy, env, realtime, model):
@@ -1114,6 +1140,7 @@ def test_publish_redacts_ids_and_urls_in_fabric_cicd_logs(
 
     if gates == "open":
         monkeypatch.setenv("P11_MODEL_CONNECTION_ID", MODEL_CONNECTION)
+        monkeypatch.setenv("P11_REFRESH_CONNECTION_ID", REFRESH_CONNECTION)
     original_workspace = deploy._fabric_workspace
 
     def workspace_that_logs(**kwargs):
@@ -1298,10 +1325,11 @@ def test_refresh_model_history_error_prints_status_and_code_only(deploy, env, mo
 @pytest.mark.parametrize("value", [None, "", "set"])
 @pytest.mark.parametrize("fails", [False, True], ids=["ok", "workspace_fails"])
 def test_publish_leaves_the_environment_as_it_found_it(deploy, env, seams, monkeypatch, value, fails):
-    for gate in ("P10_EVENTHUB_CONNECTION_ID", "P11_MODEL_CONNECTION_ID"):
+    names = ("P10_EVENTHUB_CONNECTION_ID", "P11_MODEL_CONNECTION_ID", "P11_REFRESH_CONNECTION_ID")
+    for gate in names:
         if value is not None:
             monkeypatch.setenv(gate, value if value != "set" else MODEL_CONNECTION)
-    before = {gate: os.environ.get(gate) for gate in ("P10_EVENTHUB_CONNECTION_ID", "P11_MODEL_CONNECTION_ID")}
+    before = {gate: os.environ.get(gate) for gate in names}
     seen = {}
     original_workspace = deploy._fabric_workspace
 

@@ -125,6 +125,8 @@ jobs:
           FABRIC_ENVIRONMENT: PROD
           P10_EVENTHUB_CONNECTION_ID: ${{ secrets.P10_EVENTHUB_CONNECTION_ID }}
           P11_MODEL_CONNECTION_ID: ${{ secrets.P11_MODEL_CONNECTION_ID }}
+          # The pipeline refresh's connection (project 11 step 9), read by parameter.yml's $ENV: token.
+          P11_REFRESH_CONNECTION_ID: ${{ secrets.P11_REFRESH_CONNECTION_ID }}
         run: python .deploy/deploy.py publish
       # The lakehouse lh_portfolio is looked up by name in the workspace.
       - name: Upload the wheel

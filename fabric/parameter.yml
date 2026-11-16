@@ -80,6 +80,36 @@ key_value_replace:
       item_type: "Eventstream"
       item_name: "es_gateway"
       file_path: "**/eventstream.json"
+    # Project 11 step 9: the pipeline refreshes the model after the load (Direct Lake's automatic updates
+    # did not reframe it after a prod load). Git holds the step deactivated with the empty GUID for its
+    # workspace, model and connection (the connection's ID is an identifier and never enters git), so dev
+    # skips it. PROD switches it on against the deployed workspace and sm_portfolio, through the
+    # workspace-identity Power BI connection whose ID is a GitHub environment secret. $items needs
+    # sm_portfolio already deployed in the target workspace (it is in prod since project 11 step 8).
+    - find_key: $.properties.activities[?(@.name=="refresh")].state
+      replace_value:
+        PROD: "Active"
+      item_type: "DataPipeline"
+      item_name: "pl_daily_load"
+      file_path: "**/pipeline-content.json"
+    - find_key: $.properties.activities[?(@.name=="refresh")].typeProperties.groupId
+      replace_value:
+        PROD: "$workspace.$id"
+      item_type: "DataPipeline"
+      item_name: "pl_daily_load"
+      file_path: "**/pipeline-content.json"
+    - find_key: $.properties.activities[?(@.name=="refresh")].typeProperties.datasetId
+      replace_value:
+        PROD: "$items.SemanticModel.sm_portfolio.$id"
+      item_type: "DataPipeline"
+      item_name: "pl_daily_load"
+      file_path: "**/pipeline-content.json"
+    - find_key: $.properties.activities[?(@.name=="refresh")].externalReferences.connection
+      replace_value:
+        PROD: "$ENV:P11_REFRESH_CONNECTION_ID"
+      item_type: "DataPipeline"
+      item_name: "pl_daily_load"
+      file_path: "**/pipeline-content.json"
 
 # The model's data source binds to a Fabric connection after publish (fabric-cicd 1.4.0,
 # _items/_semanticmodel.py: post_publish_all -> bindConnection). $ENV: tokens are replaced in the raw file
