@@ -28,9 +28,13 @@ EMPTY_GUID = "00000000-0000-0000-0000-000000000000"
 GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 ONELAKE = "https://onelake.dfs.fabric.microsoft.com/"
 EXPRESSION = "DirectLake - lh_portfolio"
-# Plan 2 commits dev's real workspace and lakehouse IDs; until then both are the empty GUID.
+# Dev's workspace and dev's lh_portfolio, committed in project 11 plan 2, step 4 (Fabric git does
+# not swap these for logicalIds, so the empty GUID left dev's copy unframed). Fabric IDs may be
+# committed; PROD's parameter.yml rules rewrite both, whatever they are.
+DEV_WORKSPACE = "c1f74f51-78f9-4cc7-b098-2bada9448793"
+DEV_LAKEHOUSE = "f4af17d8-f5b3-4b67-a113-50f079a5efe0"
 SOURCE = (
-    f'AzureStorage.DataLake("{ONELAKE}{EMPTY_GUID}/{EMPTY_GUID}", [HierarchicalNavigation=true])'
+    f'AzureStorage.DataLake("{ONELAKE}{DEV_WORKSPACE}/{DEV_LAKEHOUSE}", [HierarchicalNavigation=true])'
 )
 PBISM_SCHEMA = (
     "https://developer.microsoft.com/json-schemas/fabric/item/semanticModel/definitionProperties/1.0.0/schema.json"
@@ -438,7 +442,7 @@ def _logical_ids() -> set[str]:
 
 
 def test_no_identifiers_in_the_model():
-    allowed_ids = _logical_ids() | {EMPTY_GUID}
+    allowed_ids = _logical_ids() | {EMPTY_GUID, DEV_WORKSPACE, DEV_LAKEHOUSE}
     schema_value = re.compile(r'"\$schema"\s*:\s*"[^"]*"')
     for path in _model_files():
         text = path.read_text(encoding="utf-8")
