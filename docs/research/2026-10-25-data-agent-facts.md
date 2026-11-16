@@ -356,3 +356,15 @@ Main sources:
 - Prices: https://prices.azure.com/api/retail/prices (AUD, australiaeast, Microsoft Fabric)
 - Local: E:\Projects\foundry-workshop-agent\README.md, Directory.Packages.props, src/Workshop.Agent/Engines/Foundry/*.cs, reflection over bin/Release/net10.0/Azure.AI.Projects.Agents.dll and Azure.AI.Extensions.OpenAI.dll
 - Community: Fabric blog "Expanded data agent support for large data sources" (search snippet only; page returned 403)
+
+---------------------------------------------------------------------
+## Recheck, 15 Nov 2026 (before resuming project 12)
+
+The 31 sources above were fetched again. None of the changes alters the plan's approach. What moved:
+- [OFFICIAL] The Foundry "Microsoft Fabric data agent" tool: the data-agent-foundry page (updated 2026-10-14) now says it isn't supported from 6 Nov 2026, with Fabric IQ as the replacement. The Foundry tool page still says "scheduled". The plan's MCP path is unaffected.
+- [OFFICIAL] Capacity overage (https://learn.microsoft.com/en-us/fabric/enterprise/capacity-overage-overview, updated 2026-09-29): on by default for a new capacity; it bills usage that would otherwise be throttled at three times pay-as-you-go on its own meter, and its threshold isn't a hard cap. The runbook's step 5 now checks it.
+- [OFFICIAL] Foundry observability (https://learn.microsoft.com/en-us/fabric/data-science/fabric-data-agent-foundry-observability, updated 2026-09-29, preview): a tenant setting, on by default, sends operational metadata (no prompts or responses) to Foundry. Nothing to turn on; generated SQL still comes from the `_steps` table or the Diagnostics export.
+- [OFFICIAL] Packages: `fabric-data-agent-sdk` 0.1.36a0 (4 Nov; still alpha, Python 3.10 to 3.13); `Azure.AI.Projects` 3.0.0-beta.6 (31 Oct; whether it has the Fabric IQ tool is [NOT VERIFIED]); `azure-ai-projects` (Python) 2.11.0 (13 Nov), nothing Fabric-related. fabric-cicd is still v1.4.0.
+- [OFFICIAL] F2 in Australia East: AUD 0.2984 per CU-hour (Retail Prices API), about A$0.60 an hour.
+- [OFFICIAL] The definition page (updated 2026-02-11) marks a data source element's `id` as required, though its example has none. The runbook's step 6 checks it in the export diff.
+- Unchanged: the trial capacity still doesn't support the data agent; the same tenant settings; the definition format (`Files/Config`, `$schema`, `fewShots`); the MCP server page; Australia East availability; gpt-5.5 supports the Fabric data agent and MCP tools.

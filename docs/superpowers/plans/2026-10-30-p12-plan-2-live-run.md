@@ -131,6 +131,8 @@ Then publish the report and delete everything that bills.
   - show the plan, which must be one resource group plus the F2 `capstonef2`, SKU `F2`;
   - `apply tfplan` on the owner's yes;
   - **billing starts: record the UTC time.**
+- **Overage 👤:** right after the apply, open `capstonef2`'s settings in the Fabric admin portal and read its overage setting. Turn overage off if the portal allows it; otherwise set the lowest threshold. Record the before and after states.
+  - Why: overage is on by default for a new capacity. It bills usage that would otherwise be throttled at three times the pay-as-you-go rate, on its own meter, and its threshold isn't a hard spending cap (Learn, capacity overage overview, updated 29 Sep 2026; found by the 15 Nov recheck).
 - **Workspace**, as `fabric@` (`AZURE_CONFIG_DIR=$HOME/.azure-fabric`):
   - `terraform -chdir=infra/capstone/workspace init`, then `plan` and `apply`;
   - if the lookup's postcondition rejects the capacity, record the real `sku` and `state` values, fix the literals on a branch, and set `capacity_id` to proceed meanwhile.
@@ -145,6 +147,8 @@ Then publish the report and delete everything that bills.
   - **Stop** if any still holds the empty GUID or `lh_capstone`'s logicalId: steps 7 and 8 would fail as project 9's first dev run did. Fix `fabric-capstone/parameter.yml` on a branch with its tests, merge on a yes, and re-publish.
 - **Definition format:** export `da_portfolio`'s definition (Get Item Definition) to `private/live/p12/` and diff it against `fabric-capstone/da_portfolio.DataAgent/`. Resolve every format row in `fabric-capstone/VERIFY.md`: the folder casing, `$schema`, the `elements` shape and the `fewShots` key. Where Fabric differs, take Fabric's form on a branch, update the tests, open a PR, merge on a yes, and re-publish. The definition is hashed, so this must land before the freeze.
 - **Example SQL:** in a notebook in the capstone workspace, run `evaluate_few_shots` on the deployed agent 👤. Any example Fabric rejects is fixed on that same branch, with its Source test still passing.
+  - Record the `fabric-data-agent-sdk` version the notebook's `%pip` installs (`pip show`). It is an alpha that moves often (0.1.33a0 on 25 Oct, 0.1.36a0 on 4 Nov). If it has moved past 0.1.36a0 by the F2 day, pin 0.1.36a0 unless its changelog shows a fix the run needs.
+- **Element `id`:** in the definition diff, check whether Fabric's export carries an `id` on each data source element. Microsoft's definition table marks it required, while its own example and our folder have none.
 - **Record** the commit `publish-capstone` ran from (ruling R6: the published description sits outside the freeze).
 
 ### Step 7: The snapshot 🔒 (outside prod's daily-load window)
