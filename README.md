@@ -18,17 +18,18 @@ them as a star schema that answers three questions:
 work (PySpark and Delta, dimensional modelling with a Type 2 dimension, Fabric pipelines, git
 integration and CI/CD), done with every number measured, dated and reproducible.
 
-## Status, 16 November 2026
+## Status, 17 November 2026
 
 | Part | State |
 |---|---|
-| Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,567 tests** (projects 9–12); CI green on GitHub |
+| Code, tests, Fabric item definitions, deploy workflow, Terraform | **1,581 tests** (projects 9–12); CI green on GitHub |
 | Cost export (Azure Cost Management → storage) | **Live** since 22 October; daily month-to-date plus a one-time September run |
 | Dev workspace | Syncs from git; first passing pipeline run on 9 November, after the first run failed on the notebooks' lakehouse binding; each of the four quality checks shown failing on purpose on 10 November |
 | Prod workspace | Deployed by GitHub Actions on 10 November; its first run passed all four checks the same day; ran on a daily schedule at 06:00 Brisbane time on 12–14 November; the schedule was then switched off (14 November) so prod's gold stays as published here |
 | The three answers | **Measured** from prod's gold, load date 10 November 2026 |
 | Fabric capacity | Five prod runs measured (10–14 November, three of them scheduled), no throttling. Smallest paid size: F2 by capacity units; keeping the trial's Spark nodes needs F16, or a custom pool on F4 |
 | Real-time path (project 10) | **Measured** in one staged session on 15 November 2026, then torn down; [see below](#real-time-the-ai-gateways-calls-project-10). One manual prod load on 16 November took prod's gold past the answers' range |
+| Semantic model, report and row-level security (project 11) | **Live in prod** since 16 November 2026: a Direct Lake model and a three-page report, each lead seeing only their projects; the model matched gold as the owner and as both test leads; [see below](#semantic-model-report-and-row-level-security-project-11) |
 
 Every figure below is measured and dated. Nothing here is aspirational. The
 dated record of how it got here, failures included, is in [docs/live-report.md](docs/live-report.md).
@@ -188,6 +189,79 @@ occurred in the session.
 **Spec change (14 Nov):** Fabric read Event Hubs with a listen-only key for the session week, because
 the Eventstream source does not accept workspace identity; everything else stayed keyless.
 
+## Semantic model, report and row-level security (project 11)
+
+A Direct Lake semantic model over gold, `sm_portfolio`, with row-level security by project, and a
+three-page Power BI report on it, `rp_portfolio`. Both are text in git (TMDL and PBIR) and reach
+prod through the same deploy as everything else, on 16 November 2026. The dated record, failures
+included, is in [docs/live-report-p11.md](docs/live-report-p11.md).
+
+| Part | Status |
+|---|---|
+| `sm_portfolio` | Direct Lake on OneLake. In prod it reads gold through a fixed identity: prod's workspace identity, through a cloud connection with single sign-on off, bound by the deploy |
+| `rp_portfolio` | Three pages: spend, quality, gateway |
+| Row-level security | One role, `ProjectLead`. A lead sees only the projects listed for them in `security.user_project`. Two test leads (p3 and p4) have Read and Build on the model and no workspace role |
+| Refresh after the daily load | A third step in `pl_daily_load` refreshes the model in prod (proved by a manual load on 16 Nov); dev skips it |
+| Model-versus-gold check | Passed in prod on 16 Nov, as the owner and as both leads |
+
+**Row-level security, three ways.** Prod's report as the owner, and as each lead through "Test as
+role" (captured 17 November 2026, Brisbane time; each image is the report canvas only). The
+owner's spend total, 27.85 AUD, is above the answers' 26.63 because prod's gold has moved on
+([Limits](#limits)).
+
+| Page | Owner | p4 lead | p3 lead |
+|---|---|---|---|
+| Spend | [every project, 27.85 AUD](docs/live/p11/2026-11-17-p1-spend-owner.png) | [p4 only, 9.70](docs/live/p11/2026-11-17-p1-spend-p4-lead.png) | [p3 only, 4.55](docs/live/p11/2026-11-17-p1-spend-p3-lead.png) |
+| Quality | [three studies, 1,584 results](docs/live/p11/2026-11-17-p2-quality-owner.png) | [empty: p4 ran no study](docs/live/p11/2026-11-17-p2-quality-p4-lead.png) | [p3's study only, 120 results](docs/live/p11/2026-11-17-p2-quality-p3-lead.png) |
+| Gateway | [the session, 107 calls](docs/live/p11/2026-11-17-p3-gateway-owner.png) | [the whole page: the gateway is project 4](docs/live/p11/2026-11-17-p3-gateway-p4-lead.png) | [empty](docs/live/p11/2026-11-17-p3-gateway-p3-lead.png) |
+
+**The check.** `nb_model_check` runs DAX against the model and compares it with gold's answers,
+within 0.005. Run in prod as the owner on 16 November 2026 (07:08–07:10 UTC), it printed:
+
+> model_matches_gold passed: the model matches gold as the owner (cost_per_project,
+> quality_across_models, cost_per_result, cost_per_gateway_call, untagged_cost) and as 2 lead(s)
+> (the lead of p3: 3 row(s); the lead of p4: 1 row(s))
+
+The first run, about 20 minutes earlier, failed for the leads only, because no step had added them to the
+role. Adding a lead is a manual step: see below.
+
+**The measures**, each mirroring a gold answer, so the report invents no figure:
+
+| Page | Measures | Mirrors |
+|---|---|---|
+| Spend | `Cost (AUD)`, `Untagged cost` | `answers.cost_per_project` |
+| Quality | `Results (n)`, `Success rate`, `Latency (ms)`, `Groundedness (mean)`, `Citation recall`, `Citation precision`, `Must-contain rate`, `Top-1 rate`, `MRR`, `Tool-call accuracy`, `Task adherence`, `Intent resolution` | `answers.quality_across_models` |
+| Quality | `Estimated cost per result (USD)`, `Estimated cost per result (AUD)` | `answers.quality_across_models` and `answers.cost_per_result` |
+| Gateway | `Calls`, `Refused by gateway`, `Tokens (total)`, `Tokens per call`, `Cost per 1,000 calls` | `gateway.answers.cost_per_gateway_call` |
+
+There is no blended score and no share measure: under row-level security a lead's share would be
+100% of what they see.
+
+**Adding a lead takes three steps, one of them by hand.** The lead's sign-in name and project go in
+the git-ignored access file, which `nb_access_load` loads into `security.user_project`. The lead gets
+Read and Build on the model only, never a workspace role, because row-level security doesn't apply
+to Admin, Member or Contributor. And the lead is added to `ProjectLead` on the model's Security page.
+Role members live in the service, not in the model's definition, so sign-in names never reach
+git. A deploy keeps them (checked 16 November).
+
+**Direct Lake fallback: know, don't build.** A Direct Lake model on OneLake, like this one, never
+falls back to DirectQuery: a table it can't frame, or one over a guardrail, makes its queries
+fail instead. A Direct Lake model on the SQL analytics endpoint falls back to DirectQuery through
+the endpoint in several cases: a table with security at the endpoint (row-level security,
+for example), a non-materialised SQL view, a table over a guardrail, or a model not reframed after
+its tables changed. There, queries keep working, but through DirectQuery. The model's own row-level security causes
+no fallback in either kind. The only guardrail this data could hit is 1,000 Parquet files per
+table on F2 or F4.
+
+**Licence.** Authoring a model and report needs a Power BI licence, even on the trial capacity. The
+author used the Fabric trial's Power BI rights, which on 15 November had 54 days left (to about
+8 January 2027). The work was finished on 16 November. Viewing the screenshots needs no licence.
+
+**Capacity.** The model and report together used about 353 CU-seconds over their whole build,
+9–17 November (Brisbane days). The report has no line of its own in the metrics; its rendering
+counts as queries on the model. Their busiest day, 16 November, used 317 CU-seconds: about 0.2% of
+an F2's daily budget, with no operation rejected.
+
 ## Capacity
 
 Measured with Microsoft's Fabric Capacity Metrics app on the FTL64 trial capacity (64 capacity
@@ -253,8 +327,10 @@ Cost Management export ──► storage ─┘   via OneLake shortcut, read thr
 - **One Python package** (`src/lakehouse`), unit-tested with pytest against a local Spark with
   Delta. It ships as a wheel to `Files/wheels/`. Each notebook installs it and calls one entry
   point, so the logic is tested outside Fabric.
-- **A Fabric pipeline** (`pl_daily_load`): ingest, then load, with retries. It is parameterised
-  by date.
+- **A Fabric pipeline** (`pl_daily_load`): ingest, then load, with retries, then (in prod only) a
+  refresh of the semantic model. It is parameterised by date.
+- **A Direct Lake semantic model and a report** over gold (project 11), with row-level security by
+  project.
 
 ## Layers and grains
 
@@ -308,6 +384,11 @@ A failed check fails the notebook, so the pipeline run fails and nothing is logg
 - **Prod:** deployed only by GitHub Actions, as a service principal signed in through OIDC
   (`azure/login` plus `fabric-cicd`), behind the owner's approval. The service principal holds no
   secret and no Azure role. The first prod deploy took four minutes.
+- **The model's connections:** two Fabric cloud connections, both with prod's workspace identity as
+  their credential, so nothing holds a secret or expires. One is the model's fixed identity for
+  reading OneLake; the other lets the pipeline's refresh step refresh the model. The workspace
+  identity has Read and ReadAll on the lakehouse and the Contributor role on prod's workspace, which a refresh
+  needs. Their IDs reach the deploy as environment secrets.
 - **Infrastructure:** Terraform creates the workspaces and roles (`microsoft/fabric`) and the
   cost-export storage (`azurerm`).
 - **`main` is protected:** pull requests only, with the `test` check required.
@@ -339,6 +420,7 @@ The full reasoning, including the options rejected, is in the
 | Cost-export storage (all of project 9's Azure spend) | 0.0024 AUD, 22 October to 9 November 2026 |
 | Fabric trial capacity | Free for 60 days (from 9 November 2026); capacity used: see [Capacity](#capacity) |
 | Project 10's gateway session | About 1.22 AUD: Event Hubs 0.90 (about 20 hours), API Management 0.29 (one hour), model tokens 0.03 |
+| Project 11's model and report | Nothing new: they run on the trial capacity, and the two test users have no licence |
 | CI | GitHub-hosted runners, public repo |
 
 ## Limits
@@ -361,10 +443,24 @@ The full reasoning, including the options rejected, is in the
   first loaded the results on 9 November and prod on 10 November; the project 1 fix then moved
   the 36 project 1 results it changed to 10 November in dev. Apart from that date, the two
   workspaces' gold was identical after both re-ran with the fix on 10 November.
-- **Four project 10 and 11 items can't sync to dev from git yet** (the real-time dashboard, the
-  Activator, the Eventstream and the semantic model; each rejected with its own error). Dev
-  follows a branch that leaves them out. Prod's deploy published project 10's three for its
-  session; it skips them again now that the session's connection is gone.
+- **Three project 10 items can't sync to dev from git yet** (the real-time dashboard, the
+  Activator and the Eventstream; each rejected with its own error). Dev follows a branch that
+  leaves them out. Prod's deploy published them for project 10's session; it skips them again now
+  that the session's connection is gone. Project 11's model and report sync to dev.
+- **A lead's AUD estimate uses only the rate they can see.** `Estimated cost per result (AUD)`
+  converts at the cost export's USD-to-AUD rate, read from the cost lines. Row-level security still
+  filters those lines, so a lead's rate comes only from their own projects' lines, while gold uses
+  every line. The check compares this figure as the owner only.
+- **Leads see every model deployment.** `dim_model_deployment` has no project column, so
+  row-level security doesn't filter it. The pages show deployment names only beside a lead's own
+  results, but a lead with Build could query the whole table. It holds metadata, not figures.
+- **The model-versus-gold check allows 0.005.** Some figures are far smaller than that, such as
+  estimated cost per result in USD (about 0.0000009 to 0.03), so the check catches only gross
+  drift in them. They were compared by eye on 17 November instead: they match the published
+  figures.
+- **The gateway page has one demo session.** Its figures are project 10's 107 staged calls from
+  one caller, not production traffic. It has no per-minute charts: neither gold nor the model has a
+  minute column. Its banner points to project 10's Real-Time Dashboard for those.
 - **Prod's gold has moved past the answers' range.** One manual load on 16 November (for project
   10's cost answer) added 14 and 15 November's costs. The three answers above stay as measured on
   10 November.
@@ -372,10 +468,9 @@ The full reasoning, including the options rejected, is in the
 
 ## What this doesn't do yet
 
-The code for these is in the repo and tested offline; their live runs belong to their own
-projects, and prod leaves them out until then:
+The code for this is in the repo and tested offline; its live run belongs to its own project,
+and prod leaves it out until then:
 
-- **The semantic model, DAX measures, row-level security and the report:** project 11.
 - **The capstone data agent:** project 12.
 
 ## Run the tests
@@ -396,12 +491,13 @@ pytest -q
 |---|---|
 | `src/lakehouse/` | The package: extract, bronze, silver, gold, checks, answers, run, Fabric entry points |
 | `src/lakehouse/seeds/` | Hand-curated, evidence-cited seed data (deployments, attribution rules, live checks, figures) |
-| `fabric/` | Fabric item definitions (lakehouse, notebooks, pipeline) and `parameter.yml` |
+| `fabric/` | Fabric item definitions (lakehouse, notebooks, pipeline, real-time items, the semantic model as TMDL, the report as PBIR) and `parameter.yml` |
 | `fabric-capstone/` | The capstone data agent, deployed by hand (`publish-capstone`) |
 | `.deploy/deploy.py` | Wheel upload, `fabric-cicd` publish, shortcut |
 | `infra/` | Terraform: Fabric workspaces, cost-export storage, Event Hubs, the capstone F2 and workspace (`infra/capstone/`) |
 | `tools/` | Local tools: the hygiene check, the capacity report, the deployment-seed check, the gateway event replay, the capstone's helpers |
 | `docs/live-report.md` | The dated record of the live build, failures included |
 | `docs/live-report-p10.md`, `docs/live/p10/` | Project 10's live session: the record, the dashboard snapshot and the query results |
+| `docs/live-report-p11.md`, `docs/live/p11/` | Project 11's live run: the record and the report's screenshots, as the owner and as each lead |
 | `docs/superpowers/` | Design spec and implementation plans |
 | `docs/research/` | Dated Fabric research the design relies on |
