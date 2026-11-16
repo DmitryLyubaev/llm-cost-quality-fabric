@@ -18,7 +18,7 @@ come from `docs/research/2026-10-25-data-agent-facts.md`, sections 2 and 3. This
 | `draft/lakehouse-tables-lh_capstone/datasource.json` | `dataSourceInstructions`, `userDescription` | Check both show in the source's settings after deploy. |
 | `draft/lakehouse-tables-lh_capstone/fewshots.json` | `$schema`, `fewShots` | **Confirmed live (16 Nov 2026):** Fabric's export uses the top-level key `fewShots` with the 20 `{id, question, query}` examples unchanged; `$schema` is now Fabric's URL (`.../definition/fewShots/1.0.0/schema.json`). |
 | `draft/lakehouse-tables-lh_capstone/fewshots.json` | each `query` | Tested offline in Spark SQL (`tests/test_capstone_agent.py`), kept to what Spark SQL and T-SQL share (no `LIMIT`/`TOP`, no backticks or double quotes, bit columns only inside `CAST`, `CAST(... AS FLOAT)` for rates). **Checked live (16 Nov 2026):** the SDK's `evaluate_few_shots` (fabric-data-agent-sdk 0.1.36a0) on the deployed agent's draft passed 20 of 20 examples with 0 conflicts. |
-| `draft/lakehouse-tables-lh_capstone/fewshots.json` | gateway example | It names the session `gateway-demo`, which the fixture test adds; prod has `p10-session` (q12's session). The example teaches the shape, so it deliberately does not name q12's session. |
+| `draft/lakehouse-tables-lh_capstone/fewshots.json` | gateway example | It names the session `gateway-demo`, which the fixture test adds; prod has `p10-2026-11-15` (q12's session, set on the run branch at step 8). The example teaches the shape, so it deliberately does not name q12's session. |
 
 ## The lakehouse `lh_capstone.Lakehouse/`
 
