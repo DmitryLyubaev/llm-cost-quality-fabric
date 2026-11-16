@@ -1,0 +1,25 @@
+{
+  "rows": {
+    "dim_arm": 11,
+    "dim_date": 76,
+    "dim_model_deployment": 17,
+    "dim_project": 13,
+    "dim_study": 3,
+    "fact_daily_cost": 858,
+    "fact_eval_attempt": 1773,
+    "fact_gateway_call": 107,
+    "fact_live_check": 74
+  },
+  "snapshot_time": "2026-11-16T05:44:19Z",
+  "versions": {
+    "dim_arm": 6,
+    "dim_date": 6,
+    "dim_model_deployment": 6,
+    "dim_project": 6,
+    "dim_study": 6,
+    "fact_daily_cost": 6,
+    "fact_eval_attempt": 6,
+    "fact_gateway_call": 1,
+    "fact_live_check": 6
+  }
+}
