@@ -1,0 +1,43 @@
+relationship fact_daily_cost_cost_date
+	fromColumn: fact_daily_cost.cost_date
+	toColumn: dim_date.date
+
+relationship fact_daily_cost_project
+	fromColumn: fact_daily_cost.project
+	toColumn: dim_project.project
+
+relationship fact_eval_attempt_started_date
+	fromColumn: fact_eval_attempt.started_date
+	toColumn: dim_date.date
+
+relationship fact_eval_attempt_project
+	fromColumn: fact_eval_attempt.project
+	toColumn: dim_project.project
+
+relationship fact_live_check_session_date
+	fromColumn: fact_live_check.session_date
+	toColumn: dim_date.date
+
+relationship fact_live_check_project
+	fromColumn: fact_live_check.project
+	toColumn: dim_project.project
+
+relationship fact_gateway_call_call_date
+	fromColumn: fact_gateway_call.call_date
+	toColumn: dim_date.date
+
+relationship fact_gateway_call_project
+	fromColumn: fact_gateway_call.project
+	toColumn: dim_project.project
+
+relationship fact_eval_attempt_study_key
+	fromColumn: fact_eval_attempt.study_key
+	toColumn: dim_study.study_key
+
+relationship fact_eval_attempt_arm_key
+	fromColumn: fact_eval_attempt.arm_key
+	toColumn: dim_arm.arm_key
+
+relationship fact_eval_attempt_deployment_sk
+	fromColumn: fact_eval_attempt.deployment_sk
+	toColumn: dim_model_deployment.deployment_sk

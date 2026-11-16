@@ -1,0 +1,100 @@
+table fact_daily_cost
+	sourceLineageTag: [gold].[fact_daily_cost]
+
+	/// Mirrors lakehouse.answers.cost_per_project
+	measure 'Cost (AUD)' =
+			CALCULATE(
+			    SUM(fact_daily_cost[cost]),
+			    KEEPFILTERS(fact_daily_cost[billing_currency] = "AUD")
+			)
+		formatString: #,##0.00
+		displayFolder: Spend
+
+	/// Mirrors lakehouse.answers.cost_per_project
+	measure 'Untagged cost' =
+			CALCULATE(
+			    [Cost (AUD)],
+			    KEEPFILTERS(fact_daily_cost[project] = "untagged")
+			)
+		formatString: #,##0.00
+		displayFolder: Spend
+
+	column cost_date
+		dataType: dateTime
+		sourceColumn: cost_date
+		sourceLineageTag: cost_date
+		summarizeBy: none
+
+	column resource_key
+		dataType: string
+		isHidden
+		sourceColumn: resource_key
+		sourceLineageTag: resource_key
+		summarizeBy: none
+
+	column resource_group
+		dataType: string
+		sourceColumn: resource_group
+		sourceLineageTag: resource_group
+		summarizeBy: none
+
+	column meter_id
+		dataType: string
+		sourceColumn: meter_id
+		sourceLineageTag: meter_id
+		summarizeBy: none
+
+	column meter_name
+		dataType: string
+		sourceColumn: meter_name
+		sourceLineageTag: meter_name
+		summarizeBy: none
+
+	column cost
+		dataType: double
+		sourceColumn: cost
+		sourceLineageTag: cost
+		summarizeBy: none
+
+	column billing_currency
+		dataType: string
+		sourceColumn: billing_currency
+		sourceLineageTag: billing_currency
+		summarizeBy: none
+
+	column pricing_currency
+		dataType: string
+		sourceColumn: pricing_currency
+		sourceLineageTag: pricing_currency
+		summarizeBy: none
+
+	column fx_pricing_to_billing
+		dataType: double
+		sourceColumn: fx_pricing_to_billing
+		sourceLineageTag: fx_pricing_to_billing
+		summarizeBy: none
+
+	column project
+		dataType: string
+		sourceColumn: project
+		sourceLineageTag: project
+		summarizeBy: none
+
+	column attribution_rule
+		dataType: string
+		sourceColumn: attribution_rule
+		sourceLineageTag: attribution_rule
+		summarizeBy: none
+
+	column billing_month
+		dataType: string
+		sourceColumn: billing_month
+		sourceLineageTag: billing_month
+		summarizeBy: none
+
+	partition fact_daily_cost = entity
+		mode: directLake
+		source
+			entityName: fact_daily_cost
+			schemaName: gold
+			expressionSource: 'DirectLake - lh_portfolio'

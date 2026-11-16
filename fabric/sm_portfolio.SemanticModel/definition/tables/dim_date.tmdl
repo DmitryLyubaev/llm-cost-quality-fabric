@@ -1,0 +1,45 @@
+table dim_date
+	sourceLineageTag: [gold].[dim_date]
+
+	column date
+		dataType: dateTime
+		sourceColumn: date
+		sourceLineageTag: date
+		summarizeBy: none
+
+	column year
+		dataType: int64
+		sourceColumn: year
+		sourceLineageTag: year
+		summarizeBy: none
+
+	column month
+		dataType: int64
+		sourceColumn: month
+		sourceLineageTag: month
+		summarizeBy: none
+
+	column day
+		dataType: int64
+		sourceColumn: day
+		sourceLineageTag: day
+		summarizeBy: none
+
+	column year_month
+		dataType: string
+		sourceColumn: year_month
+		sourceLineageTag: year_month
+		summarizeBy: none
+
+	column iso_day_of_week
+		dataType: int64
+		sourceColumn: iso_day_of_week
+		sourceLineageTag: iso_day_of_week
+		summarizeBy: none
+
+	partition dim_date = entity
+		mode: directLake
+		source
+			entityName: dim_date
+			schemaName: gold
+			expressionSource: 'DirectLake - lh_portfolio'

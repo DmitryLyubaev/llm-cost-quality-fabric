@@ -1,0 +1,5 @@
+expression 'DirectLake - lh_portfolio' =
+		let
+		    Source = AzureStorage.DataLake("https://onelake.dfs.fabric.microsoft.com/c1f74f51-78f9-4cc7-b098-2bada9448793/f4af17d8-f5b3-4b67-a113-50f079a5efe0", [HierarchicalNavigation=true])
+		in
+		    Source

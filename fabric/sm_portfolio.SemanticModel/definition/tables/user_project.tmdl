@@ -1,0 +1,22 @@
+table user_project
+	isHidden
+	sourceLineageTag: [security].[user_project]
+
+	column upn
+		dataType: string
+		sourceColumn: upn
+		sourceLineageTag: upn
+		summarizeBy: none
+
+	column project
+		dataType: string
+		sourceColumn: project
+		sourceLineageTag: project
+		summarizeBy: none
+
+	partition user_project = entity
+		mode: directLake
+		source
+			entityName: user_project
+			schemaName: security
+			expressionSource: 'DirectLake - lh_portfolio'

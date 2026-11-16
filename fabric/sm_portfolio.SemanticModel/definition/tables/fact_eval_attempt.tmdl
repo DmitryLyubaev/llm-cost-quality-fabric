@@ -1,0 +1,389 @@
+table fact_eval_attempt
+	sourceLineageTag: [gold].[fact_eval_attempt]
+
+	/// Mirrors lakehouse.answers.quality_across_models
+	measure 'Results (n)' =
+			CALCULATE(
+			    COUNTROWS(fact_eval_attempt),
+			    KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			)
+		formatString: #,##0
+		displayFolder: Quality
+
+	/// Mirrors lakehouse.answers.quality_across_models
+	measure 'Success rate' =
+			CALCULATE(
+			    AVERAGEX(
+			        fact_eval_attempt,
+			        IF(NOT ISBLANK(fact_eval_attempt[success]), IF(fact_eval_attempt[success], 1, 0))
+			    ),
+			    KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			)
+		formatString: 0.0%
+		displayFolder: Quality
+
+	/// Mirrors lakehouse.answers.quality_across_models
+	measure 'Latency (ms)' =
+			CALCULATE(
+			    AVERAGE(fact_eval_attempt[latency_ms]),
+			    KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			)
+		formatString: #,##0.0
+		displayFolder: Quality
+
+	/// Mirrors lakehouse.answers.quality_across_models
+	measure 'Groundedness (mean)' =
+			CALCULATE(
+			    AVERAGE(fact_eval_attempt[groundedness]),
+			    KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			)
+		formatString: 0.000
+		displayFolder: Quality
+
+	/// Mirrors lakehouse.answers.quality_across_models
+	measure 'Citation recall' =
+			CALCULATE(
+			    AVERAGE(fact_eval_attempt[citation_recall]),
+			    KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			)
+		formatString: 0.000
+		displayFolder: Quality
+
+	/// Mirrors lakehouse.answers.quality_across_models
+	measure 'Citation precision' =
+			CALCULATE(
+			    AVERAGE(fact_eval_attempt[citation_precision]),
+			    KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			)
+		formatString: 0.000
+		displayFolder: Quality
+
+	/// Mirrors lakehouse.answers.quality_across_models
+	measure 'Must-contain rate' =
+			CALCULATE(
+			    AVERAGEX(
+			        fact_eval_attempt,
+			        IF(NOT ISBLANK(fact_eval_attempt[must_contain]), IF(fact_eval_attempt[must_contain], 1, 0))
+			    ),
+			    KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			)
+		formatString: 0.0%
+		displayFolder: Quality
+
+	/// Mirrors lakehouse.answers.quality_across_models
+	measure 'Top-1 rate' =
+			CALCULATE(
+			    AVERAGEX(
+			        fact_eval_attempt,
+			        IF(NOT ISBLANK(fact_eval_attempt[top1]), IF(fact_eval_attempt[top1], 1, 0))
+			    ),
+			    KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			)
+		formatString: 0.0%
+		displayFolder: Quality
+
+	/// Mirrors lakehouse.answers.quality_across_models
+	measure MRR =
+			CALCULATE(
+			    AVERAGE(fact_eval_attempt[reciprocal_rank]),
+			    KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			)
+		formatString: 0.000
+		displayFolder: Quality
+
+	/// Mirrors lakehouse.answers.quality_across_models
+	measure 'Tool-call accuracy' =
+			CALCULATE(
+			    AVERAGE(fact_eval_attempt[tool_call_accuracy]),
+			    KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			)
+		formatString: 0.000
+		displayFolder: Quality
+
+	/// Mirrors lakehouse.answers.quality_across_models
+	measure 'Task adherence' =
+			CALCULATE(
+			    AVERAGE(fact_eval_attempt[task_adherence]),
+			    KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			)
+		formatString: 0.000
+		displayFolder: Quality
+
+	/// Mirrors lakehouse.answers.quality_across_models
+	measure 'Intent resolution' =
+			CALCULATE(
+			    AVERAGE(fact_eval_attempt[intent_resolution]),
+			    KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			)
+		formatString: 0.000
+		displayFolder: Quality
+
+	/// Mirrors lakehouse.answers.cost_per_result
+	measure 'Estimated cost per result (USD)' =
+			VAR results = [Results (n)]
+			VAR unpriced =
+			    CALCULATE(
+			        COUNTROWS(fact_eval_attempt),
+			        KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored"),
+			        KEEPFILTERS(ISBLANK(fact_eval_attempt[cost_usd])),
+			        KEEPFILTERS(NOT ISBLANK(fact_eval_attempt[cost_basis]) && fact_eval_attempt[cost_basis] <> "no_model")
+			    )
+			VAR estimated =
+			    CALCULATE(
+			        SUM(fact_eval_attempt[cost_usd]),
+			        KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			    )
+			RETURN
+			    IF(ISBLANK(unpriced), DIVIDE(estimated, results))
+		formatString: #,##0.000000
+		displayFolder: Quality
+
+	/// Mirrors lakehouse.answers.cost_per_result
+	measure 'Estimated cost per result (AUD)' =
+			VAR perResultUsd = [Estimated cost per result (USD)]
+			VAR projects =
+			    CALCULATETABLE(
+			        VALUES(fact_eval_attempt[project]),
+			        KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			    )
+			VAR fxMonth =
+			    FORMAT(
+			        CALCULATE(
+			            MIN(fact_eval_attempt[started_at]),
+			            KEEPFILTERS(fact_eval_attempt[attempt_kind] = "scored")
+			        ),
+			        "yyyy-MM"
+			    )
+			VAR billedInAud =
+			    NOT ISEMPTY(
+			        CALCULATETABLE(
+			            fact_daily_cost,
+			            REMOVEFILTERS(fact_daily_cost),
+			            TREATAS(projects, fact_daily_cost[project]),
+			            fact_daily_cost[billing_currency] = "AUD"
+			        )
+			    )
+			VAR rateLines =
+			    CALCULATETABLE(
+			        fact_daily_cost,
+			        REMOVEFILTERS(fact_daily_cost),
+			        fact_daily_cost[billing_month] = fxMonth,
+			        fact_daily_cost[billing_currency] = "AUD",
+			        fact_daily_cost[pricing_currency] = "USD",
+			        NOT ISBLANK(fact_daily_cost[fx_pricing_to_billing])
+			    )
+			VAR lowRate = MINX(rateLines, fact_daily_cost[fx_pricing_to_billing])
+			VAR highRate = MAXX(rateLines, fact_daily_cost[fx_pricing_to_billing])
+			VAR usdToAud = IF(NOT ISBLANK(lowRate) && lowRate = highRate, lowRate)
+			RETURN
+			    IF(billedInAud && NOT ISBLANK(usdToAud) && NOT ISBLANK(perResultUsd), perResultUsd * usdToAud)
+		formatString: #,##0.000000
+		displayFolder: Quality
+
+	column study
+		dataType: string
+		sourceColumn: study
+		sourceLineageTag: study
+		summarizeBy: none
+
+	column item_id
+		dataType: string
+		sourceColumn: item_id
+		sourceLineageTag: item_id
+		summarizeBy: none
+
+	column arm
+		dataType: string
+		sourceColumn: arm
+		sourceLineageTag: arm
+		summarizeBy: none
+
+	column pass_index
+		dataType: int64
+		sourceColumn: pass_index
+		sourceLineageTag: pass_index
+		summarizeBy: none
+
+	column attempt_kind
+		dataType: string
+		sourceColumn: attempt_kind
+		sourceLineageTag: attempt_kind
+		summarizeBy: none
+
+	column run_id
+		dataType: string
+		sourceColumn: run_id
+		sourceLineageTag: run_id
+		summarizeBy: none
+
+	column started_at
+		dataType: dateTime
+		sourceColumn: started_at
+		sourceLineageTag: started_at
+		summarizeBy: none
+
+	column provider
+		dataType: string
+		sourceColumn: provider
+		sourceLineageTag: provider
+		summarizeBy: none
+
+	column model
+		dataType: string
+		sourceColumn: model
+		sourceLineageTag: model
+		summarizeBy: none
+
+	column model_version
+		dataType: string
+		sourceColumn: model_version
+		sourceLineageTag: model_version
+		summarizeBy: none
+
+	column success
+		dataType: boolean
+		sourceColumn: success
+		sourceLineageTag: success
+		summarizeBy: none
+
+	column latency_ms
+		dataType: double
+		sourceColumn: latency_ms
+		sourceLineageTag: latency_ms
+		summarizeBy: none
+
+	column tokens_in
+		dataType: int64
+		sourceColumn: tokens_in
+		sourceLineageTag: tokens_in
+		summarizeBy: none
+
+	column tokens_out
+		dataType: int64
+		sourceColumn: tokens_out
+		sourceLineageTag: tokens_out
+		summarizeBy: none
+
+	column cached_tokens
+		dataType: int64
+		sourceColumn: cached_tokens
+		sourceLineageTag: cached_tokens
+		summarizeBy: none
+
+	column cost_usd
+		dataType: double
+		sourceColumn: cost_usd
+		sourceLineageTag: cost_usd
+		summarizeBy: none
+
+	column cost_basis
+		dataType: string
+		sourceColumn: cost_basis
+		sourceLineageTag: cost_basis
+		summarizeBy: none
+
+	column groundedness
+		dataType: double
+		sourceColumn: groundedness
+		sourceLineageTag: groundedness
+		summarizeBy: none
+
+	column citation_recall
+		dataType: double
+		sourceColumn: citation_recall
+		sourceLineageTag: citation_recall
+		summarizeBy: none
+
+	column citation_precision
+		dataType: double
+		sourceColumn: citation_precision
+		sourceLineageTag: citation_precision
+		summarizeBy: none
+
+	column must_contain
+		dataType: boolean
+		sourceColumn: must_contain
+		sourceLineageTag: must_contain
+		summarizeBy: none
+
+	column top1
+		dataType: boolean
+		sourceColumn: top1
+		sourceLineageTag: top1
+		summarizeBy: none
+
+	column reciprocal_rank
+		dataType: double
+		sourceColumn: reciprocal_rank
+		sourceLineageTag: reciprocal_rank
+		summarizeBy: none
+
+	column target_rank
+		dataType: int64
+		sourceColumn: target_rank
+		sourceLineageTag: target_rank
+		summarizeBy: none
+
+	column tool_call_accuracy
+		dataType: double
+		sourceColumn: tool_call_accuracy
+		sourceLineageTag: tool_call_accuracy
+		summarizeBy: none
+
+	column task_adherence
+		dataType: double
+		sourceColumn: task_adherence
+		sourceLineageTag: task_adherence
+		summarizeBy: none
+
+	column intent_resolution
+		dataType: double
+		sourceColumn: intent_resolution
+		sourceLineageTag: intent_resolution
+		summarizeBy: none
+
+	column load_date
+		dataType: dateTime
+		sourceColumn: load_date
+		sourceLineageTag: load_date
+		summarizeBy: none
+
+	column deployment_sk
+		dataType: string
+		isHidden
+		sourceColumn: deployment_sk
+		sourceLineageTag: deployment_sk
+		summarizeBy: none
+
+	column started_date
+		dataType: dateTime
+		sourceColumn: started_date
+		sourceLineageTag: started_date
+		summarizeBy: none
+
+	column study_key
+		dataType: string
+		isHidden
+		sourceColumn: study_key
+		sourceLineageTag: study_key
+		summarizeBy: none
+
+	column arm_key
+		dataType: string
+		isHidden
+		sourceColumn: arm_key
+		sourceLineageTag: arm_key
+		summarizeBy: none
+
+	column project
+		dataType: string
+		sourceColumn: project
+		sourceLineageTag: project
+		summarizeBy: none
+
+	partition fact_eval_attempt = entity
+		mode: directLake
+		source
+			entityName: fact_eval_attempt
+			schemaName: gold
+			expressionSource: 'DirectLake - lh_portfolio'
