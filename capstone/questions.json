@@ -122,11 +122,11 @@
   },
   {
     "id": "q12",
-    "text": "How many calls went through the API Management gateway in the session p10-session?",
+    "text": "How many calls went through the API Management gateway in the session p10-2026-11-15?",
     "kind": "count",
     "source": {
       "function": "lakehouse.gateway.answers.cost_per_gateway_call",
-      "args": {"session": "p10-session"},
+      "args": {"session": "p10-2026-11-15"},
       "select": null,
       "column": "calls"
     },
