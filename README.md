@@ -464,7 +464,7 @@ The full reasoning, including the options rejected, is in the
 | Fabric trial capacity | Free for 60 days (from 9 November 2026); capacity used: see [Capacity](#capacity) |
 | Project 10's gateway session | About 1.22 AUD: Event Hubs 0.90 (about 20 hours), API Management 0.29 (one hour), model tokens 0.03 |
 | Project 11's model and report | Nothing new: they run on the trial capacity, and the two test users have no licence |
-| Project 12's capstone | The F2 ran about 14.7 hours over 16–17 November: about 8.80 AUD at its list price of 0.597 AUD an hour. The measured figure will come from gold once the cost export catches up. Foundry's tokens bill per use |
+| Project 12's capstone | The F2 ran about 14.7 hours over 16–17 November: about 8.80 AUD at its list price of 0.597 AUD an hour. That's an estimate, not reconciled against the cost export. Foundry's tokens bill per use |
 | CI | GitHub-hosted runners, public repo |
 
 ## Limits
