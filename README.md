@@ -30,6 +30,7 @@ integration and CI/CD), done with every number measured, dated and reproducible.
 | Fabric capacity | Five prod runs measured (10–14 November, three of them scheduled), no throttling. Smallest paid size: F2 by capacity units; keeping the trial's Spark nodes needs F16, or a custom pool on F4 |
 | Real-time path (project 10) | **Measured** in one staged session on 15 November 2026, then torn down; [see below](#real-time-the-ai-gateways-calls-project-10). One manual prod load on 16 November took prod's gold past the answers' range |
 | Semantic model, report and row-level security (project 11) | **Live in prod** since 16 November 2026: a Direct Lake model and a three-page report, each lead seeing only their projects; the model matched gold as the owner and as both test leads; [see below](#semantic-model-report-and-row-level-security-project-11) |
+| Capstone data agent (project 12) | **Measured** on 17 November 2026: a Fabric data agent asked 15 frozen questions, 3 passes directly and 3 through Foundry, then torn down; [see below](#the-capstone-a-fabric-data-agent-direct-and-through-foundry-project-12) |
 
 Every figure below is measured and dated. Nothing here is aspirational. The
 dated record of how it got here, failures included, is in [docs/live-report.md](docs/live-report.md).
@@ -262,6 +263,48 @@ author used the Fabric trial's Power BI rights, which on 15 November had 54 days
 counts as queries on the model. Their busiest day, 16 November, used 317 CU-seconds: about 0.2% of
 an F2's daily budget, with no operation rejected.
 
+## The capstone: a Fabric data agent, direct and through Foundry (project 12)
+
+A Fabric data agent, `da_portfolio`, answers plain-English questions about gold. Project 12 asked it
+15 frozen questions two ways. Directly: through its MCP endpoint. Through Foundry: through project 3's
+prompt agent `portfolio-analyst` (`gpt-5.5`), which calls the same endpoint as its one tool. Each
+route ran 3 passes, scored by rule against answers computed from a snapshot of prod's gold. Every
+answer and verdict is in [capstone/report.md](capstone/report.md).
+
+| Route | Correct per pass (of 15) | Mean | Right in all 3 | Right in none | Fabric CU |
+|---|---|---|---|---|---|
+| Direct | 14, 14, 14 | 14.00 | 14 | 1 | 15,961 CU-seconds |
+| Through Foundry | 14, 14, 12 | 13.33 | 12 | 1 | 13,304 CU-seconds |
+
+- **Dates.** The snapshot of prod's gold was taken on 16 November 2026 at 05:44 UTC. The direct
+  passes ran on 17 November, 01:02–01:10 UTC, and the Foundry passes 03:12–03:24 UTC.
+- **What was frozen.** Freeze `963eebbaf65d`, the only one: the 15 questions, their expected answers,
+  the scoring rules, the data agent's definition (published from dev `36b2076`), project 3's analyst
+  at `51bf705`, and the two model labels: `gpt-5.5`, and `fabric-data-agent` for the direct route,
+  because Fabric picks the data agent's model and doesn't expose it. Before the freeze, the agent's
+  instructions were tuned on 10 separate practice questions only.
+- **The misses.** q13 was wrong in every pass of both routes. Asked how many scored results used
+  `text-embedding-3-large` in the p2-retrieval study, the agent answered 0, not 229; one answer shows
+  it filtering on a model value that matches nothing. Through Foundry, pass 3 also missed q07 (0, not
+  60) and q11. The q11 answer named the right projects, but one project's title contains "project 2",
+  which the frozen scorer reads as an extra `p2`, so it stays a miss.
+- **CU.** Read from the Capacity Metrics app: every background operation on the capstone's items
+  that started inside a route's window, summed. That covers the data agent's AI queries (about 95% of
+  each figure), its SQL endpoint queries and its OneLake reads. Foundry's own `gpt-5.5` tokens
+  (57,599 in and 5,481 out over the 45 answers) bill in Azure, not as Fabric CU.
+- **A failed attempt.** The first Foundry run stopped in pass 3 on an HTTP 500 from Foundry. The
+  runner can't re-run a single pass, so that attempt was set aside unreported and all three passes
+  ran again.
+- **Torn down.** The F2 capacity (`capstonef2`, Australia East), the capstone workspace and project
+  3's Foundry resources existed only for the session, 16–17 November, and were destroyed on 17
+  November.
+
+**What it doesn't show.** 15 questions and 3 passes are too few to estimate a rate or rank the
+routes: the figures describe this run, nothing wider. The data agent isn't deterministic: a
+practice question it refused directly got an invented answer through Foundry 45 minutes later. The
+two routes share the data agent, so they differ only in what Foundry adds around it. The Fabric data
+agent and its MCP endpoint were in preview.
+
 ## Capacity
 
 Measured with Microsoft's Fabric Capacity Metrics app on the FTL64 trial capacity (64 capacity
@@ -421,6 +464,7 @@ The full reasoning, including the options rejected, is in the
 | Fabric trial capacity | Free for 60 days (from 9 November 2026); capacity used: see [Capacity](#capacity) |
 | Project 10's gateway session | About 1.22 AUD: Event Hubs 0.90 (about 20 hours), API Management 0.29 (one hour), model tokens 0.03 |
 | Project 11's model and report | Nothing new: they run on the trial capacity, and the two test users have no licence |
+| Project 12's capstone | The F2 ran about 14.7 hours over 16–17 November: about 8.80 AUD at its list price of 0.597 AUD an hour. The measured figure will come from gold once the cost export catches up. Foundry's tokens bill per use |
 | CI | GitHub-hosted runners, public repo |
 
 ## Limits
@@ -465,13 +509,6 @@ The full reasoning, including the options rejected, is in the
   10's cost answer) added 14 and 15 November's costs. The three answers above stay as measured on
   10 November.
 - **Small data.** Sample sizes are stated with every answer.
-
-## What this doesn't do yet
-
-The code for this is in the repo and tested offline; its live run belongs to its own project,
-and prod leaves it out until then:
-
-- **The capstone data agent:** project 12.
 
 ## Run the tests
 
